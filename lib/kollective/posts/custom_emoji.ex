@@ -1,0 +1,31 @@
+# Custom Emojis for your admins to upload, you need a dedicated schema for the emoji metadata and a
+# secure upload strategy (using Phoenix LiveView or a standard API) to send files to your Cloudflare R2 bucket.
+
+# Following the Mastodon standard, you store the shortcode (used in text like :elixir:) and the URLs
+# for both the animated and static versions.
+defmodule Kollective.Posts.CustomEmoji do
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  schema "custom_emojis" do
+    field :shortcode, :string        # e.g., "elixir"
+    field :url, :string             # URL to the image on R2
+
+    # Static preview image (the first frame) to show by
+    field :static_url, :string      # Static version (for accessibility/performance)
+
+    field :category, :string        # Grouping in the emoji picker
+    field :visible_in_picker, :boolean, default: true
+
+    timestamps()
+  end
+
+  def changeset(emoji, attrs) do
+    emoji
+
+    |> cast(attrs, [:shortcode, :url, :static_url, :category, :visible_in_picker])
+    |> validate_required([:shortcode, :url])
+    |> validate_format(:shortcode, ~r/^[a-z0-9_]+$/i) # Mastodon-style naming
+    |> unique_constraint(:shortcode)
+  end
+end
