@@ -2,9 +2,10 @@ defmodule Kollective.Posts.Post do
   use Kollective.Schemas.Schema
 
   alias Kollective.Notifications.Notification
+  alias Kollective.Posts.Posts
 
   @allowed_scopes [:local, :state, :country, :world]
-  @visibilities ["public", "private", "unlisted"]
+  @visibilities ["public", "private", "unlisted", "direct"]
 
   @regular_limit 280
   @voice_limit 1000
@@ -15,7 +16,7 @@ defmodule Kollective.Posts.Post do
     belongs_to(:author, Kollective.Accounts.User, foreign_key: :user_id)
 
     # If this is set, the post is an "Organization Post"
-    belongs_to(:organization, Kollective.Accounts.Organization)
+    belongs_to(:organization, Kollective.Accounts.Organization) #orhanization_id
 
     # 2. Cleanup for Discovery/Social Actions
     # This ensures that if a post is deleted, all related "liked", "reblogged",
@@ -76,11 +77,11 @@ defmodule Kollective.Posts.Post do
     field :origin_country, :string, default: "US"
 
     # federal_district
-    field :district_l1, :string
+    field :origin_district_l1, :string
     # state_senate_district
-    field :district_l2, :string
+    field :origin_district_l2, :string
     # state_district
-    field :district_l3, :string
+    field :origin_district_l3, :string
 
     # Discovery/Voting / Quora-style Ranking
     field :upvotes_count,   :integer, virtual: true, default: 0
@@ -113,7 +114,7 @@ defmodule Kollective.Posts.Post do
     #              column to look for in the database.
     has_many :children, __MODULE__, foreign_key: :root_post_id
     # Retrieves all posts that were sent as a direct reply to this one
-    has_many :all_direct_replies, __MODULE__, foreign_key: :in_reply_to_id
+    has_many :all_direct_replies, __MODULE__, foreign_key: :in_reply_to_id #parent ID
 
     # Virtual field to hold the nested reply tree when fetching a thread
     # With this, Elixir can hold the nested replies without trying to save them to a database column
@@ -203,11 +204,11 @@ defmodule Kollective.Posts.Post do
 
   def changesetX(post, attrs) do
     post
-    |> cast(attrs, [:content, :author_id, :parent_id, :in_reply_to_id, :language_override])
+    |> cast(attrs, [:content, :user_id, :root_post_id, :in_reply_to_id, :language_override])
     |> cast_assoc(:poll, with: &Kollective.Polls.Poll.changeset/2)
-    |> validate_required([:content, :author_id]) # author is usually mandatory
-    |> foreign_key_constraint(:author_id)
-    |> foreign_key_constraint(:parent_id)
+    |> validate_required([:content, :user_id]) # user is usually mandatory
+    |> foreign_key_constraint(:user_id)
+    |> foreign_key_constraint(:root_post_id)
     |> foreign_key_constraint(:in_reply_to_id)
     |> validate_mastodon_length(:content, 500)
     # Call the extractor here
@@ -222,11 +223,11 @@ defmodule Kollective.Posts.Post do
       nil -> changeset
       content ->
         # 1. Get the strings: ["elixir", "phoenix"]
-        tag_names = Kollective.Posts.Posts.extract_hashtags(content)
+        tag_names = Posts.extract_hashtags(content)
 
         # 2. Convert strings into Hashtag structs
         tags = Enum.map(tag_names, fn name ->
-          Kollective.Posts.Posts.get_or_create_hashtag(name)
+          Posts.get_or_create_hashtag(name)
         end)
 
         # 3. Associate them with the post
@@ -335,7 +336,7 @@ defmodule Kollective.Posts.Post do
       # Content
       :content, :text, :spoiler_text, :summary, :language, :content_type, :urgency_level,
       # Threading & Relations
-      :parent_id, :in_reply_to_id, :in_reply_to_username,
+      :root_post_id, :in_reply_to_id, :in_reply_to_username,
       :quote_id, :quote_url, :reblog_id, :context, :direct_conversation_id,
       # Engagement & Counters (Usually updated via context, but castable for migrations/sync)
       :replies_count, :quotes_count, :likes_count, :reblogs_count,
@@ -358,7 +359,8 @@ defmodule Kollective.Posts.Post do
     |> validate_attachment_limit(4)
     # --- Relations ---
     |> foreign_key_constraint(:user_id)
-    |> foreign_key_constraint(:parent_id)
+    |> foreign_key_constraint(:root_post_id)
+    |> foreign_key_constraint(:in_reply_to_id)
     |> validate_length(:content, max: 2000)
     |> cast_assoc(:hashtags)
   end

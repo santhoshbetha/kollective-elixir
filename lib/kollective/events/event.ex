@@ -17,9 +17,10 @@ defmodule Kollective.Events.Event do
     field(:description, :string)
     field(:start_time, :utc_datetime)
     field(:end_time, :utc_datetime)
+
     # e.g., "America/New_York"
     field :timezone, :string
-    field(:join_mode, :string, default: "free")
+    field(:join_mode, :string, default: "free") #Free, Restricted, Invite Only
 
     field(:banner_url, :string)
     field(:logo_url, :string)
@@ -79,7 +80,7 @@ defmodule Kollective.Events.Event do
     event
     |> cast(attrs, [
       :post_id,
-      :user_id,
+      :created_by, # Swapped from :user_id to match schema foreign key
       :name,
       :description,
       :start_time,
@@ -99,12 +100,19 @@ defmodule Kollective.Events.Event do
       :metadata,
       :banner_url,
       :logo_url,
-      :show_banner
+      :show_banner,
+      :target_scope,
+      :origin_state,
+      :origin_country,
+      :origin_district_l1,
+      :origin_district_l2,
+      :origin_district_l3,
+      :origin_city_id
     ])
     # 1. New: Extract capacity and put it into the metadata map
     |> put_capacity_metadata(attrs)
     # 2. Existing validations
-    |> validate_required([:name, :start_time]) # Added start_time as required for modern apps
+    |> validate_required([:name, :start_time, :created_by]) # Added start_time as required for modern apps
     |> validate_inclusion(:join_mode, @join_modes)
     |> validate_length(:name, min: 1, max: 255)
     |> validate_length(:description, max: 5000)
@@ -113,20 +121,40 @@ defmodule Kollective.Events.Event do
     |> validate_times()
     |> validate_location()
     |> foreign_key_constraint(:post_id)
-    |> foreign_key_constraint(:user_id)
+    |> foreign_key_constraint(:created_by)# Maps correctly to user profile table constraints
+    |> foreign_key_constraint(:origin_city_id)
     # You can add URL format validation here if you want to be strict
     |> validate_url(:banner_url)
     |> validate_url(:logo_url)
   end
 
   # --- Helper Functions ---
-  defp put_capacity_metadata(changeset, %{"max_participants" => max}) do
-    # Merges max_participants into the existing metadata map
-    metadata = get_field(changeset, :metadata) || %{}
-    put_change(changeset, :metadata, Map.put(metadata, "max_participants", max))
-  end
+  defp put_capacity_metadata(changeset, attrs) do
+    # Extract the parameter supporting both string and atom parameter keys safely
+    max_value = attrs["max_participants"] || attrs[:max_participants]
 
-  defp put_capacity_metadata(changeset, _), do: changeset
+    cond do
+      is_nil(max_value) or max_value == "" ->
+        changeset
+
+      is_integer(max_value) ->
+        metadata = get_field(changeset, :metadata) || %{}
+        put_change(changeset, :metadata, Map.put(metadata, "max_participants", max_value))
+
+      is_binary(max_value) ->
+        # SAFELY PARSE STRINGS: Forms pass numbers as strings (e.g., "50")
+        case Integer.parse(max_value) do
+          {parsed_int, ""} ->
+            metadata = get_field(changeset, :metadata) || %{}
+            put_change(changeset, :metadata, Map.put(metadata, "max_participants", parsed_int))
+          _ ->
+            # If the string contains junk text, inject a malformed string value
+            # so that validate_capacity handles the error tuple cleanly
+            metadata = get_field(changeset, :metadata) || %{}
+            put_change(changeset, :metadata, Map.put(metadata, "max_participants", :invalid))
+        end
+    end
+  end
 
   defp validate_capacity(changeset) do
     metadata = get_field(changeset, :metadata) || %{}
@@ -136,6 +164,16 @@ defmodule Kollective.Events.Event do
       val when is_integer(val) and val > 0 -> changeset
       _ -> add_error(changeset, :metadata, "max_participants must be a positive integer")
     end
+  end
+
+  defp validate_url(changeset, field) do
+    validate_change(changeset, field, fn _, value ->
+      if is_nil(value) or value == "" or String.starts_with?(value, ["http://", "https://"]) do
+        []
+      else
+        [{field, "must be a valid URL"}]
+      end
+    end)
   end
 
   defp validate_times(changeset) do
@@ -161,8 +199,10 @@ defmodule Kollective.Events.Event do
   end
 
   defp validate_location(changeset) do
-    latitude = get_change(changeset, :latitude)
-    longitude = get_change(changeset, :longitude)
+    # FIX: Using get_field instead of get_change ensures validations run
+    # during both initial creation and subsequent profile edits.
+    latitude = get_field(changeset, :latitude)
+    longitude = get_field(changeset, :longitude)
 
     changeset
     |> validate_latitude(latitude)
@@ -188,15 +228,4 @@ defmodule Kollective.Events.Event do
       add_error(changeset, :longitude, "must be between -180 and 180")
     end
   end
-
-  defp validate_url(changeset, field) do
-    validate_change(changeset, field, fn _, value ->
-      if String.starts_with?(value, ["http://", "https://"]) do
-        []
-      else
-        [{field, "must be a valid URL"}]
-      end
-    end)
-  end
-
 end

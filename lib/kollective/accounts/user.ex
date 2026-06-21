@@ -13,6 +13,9 @@ defmodule Kollective.Accounts.User do
 
     # --- IDENTITY ---
     field :username, :string
+    field :display_name, :string
+    field :alias_name, :string # For pseudonyms or pen names or to hide caste/religion guessing in India
+
     field :locale, :string, default: "en" # ISO 639-1 code #preferred language
     field :first_name, :string
     field :last_name, :string
@@ -38,6 +41,7 @@ defmodule Kollective.Accounts.User do
     field :location, :string
     field :language, :string, default: "en"
     field :is_discoverable, :boolean, default: true
+    field :invisible, :boolean, default: false
     field :is_suggested, :boolean, default: false
     field :last_active_at, :utc_datetime
 
@@ -98,15 +102,17 @@ defmodule Kollective.Accounts.User do
     field :following_count, :integer, default: 0
 
     # --- PERMISSIONS & ROLES ---
-    # field :is_admin, :boolean, default: false
+    field :is_admin, :boolean, default: false
     field :role, Ecto.Enum, values: [:user, :moderator, :admin], default: :user
     field :is_moderator, :boolean, default: false
 
     # --- PREFERENCES ---
     field :settings, :map, default: %{}
     field :email_notifications, :map, default: %{"digest" => false}
-    field :birthday, :date
-    field :show_birthday, :boolean, default: false
+    field :date_of_birth, :date, virtual: true
+    field :age, :integer
+    field :show_age, :boolean, default: false
+    field :birth_year, :integer
 
     # --- ASSOCIATIONS ---
     has_many :posts, Kollective.Posts.Post
@@ -181,8 +187,6 @@ defmodule Kollective.Accounts.User do
     many_to_many :followed_organizations, Kollective.Accounts.Organization,
       join_through: "user_organization_relationships"
 
-    field :is_admin, :boolean, default: false
-
     # shadow-ban for aggressive spammers
     field :is_shadow_banned, :boolean, default: false
 
@@ -240,6 +244,32 @@ defmodule Kollective.Accounts.User do
     timestamps(type: :utc_datetime)
   end
 
+  def changeset(user, attrs) do
+    user
+    |> cast(attrs, [:username, :display_name])
+    |> validate_required([:username])
+    |> validate_length(:username, min: 2, max: 20)
+    # FIX: Enforce Mastodon's default 30-character styling boundary constraint
+    |> validate_length(:display_name, max: 30)
+    |> unique_constraint(:username)
+    |> default_display_name()
+  end
+
+  # Fallback helper function to keep your data layer consistent
+  defp default_display_name(changeset) do
+    case get_change(changeset, :display_name) do
+      nil ->
+        # If no custom name was passed, mirror the username value automatically
+        if username = get_change(changeset, :username) do
+          put_change(changeset, :display_name, username)
+        else
+          changeset
+        end
+      _ ->
+        changeset
+    end
+  end
+
   def registration_changeset(user, attrs, opts \\ []) do
     user
     |> cast(attrs, [
@@ -257,31 +287,52 @@ defmodule Kollective.Accounts.User do
     |> validate_length(:first_name, max: 100)
     |> validate_length(:last_name, max: 100)
     |> validate_inclusion(:country, ["US", "CA", "GB", "AU", "DE", "FR", "JP", "MX", "ES", "IN", "AR", "BO", "BR", "CL", "CO", "VE", "UY", "PE", "PY"]) # Example country codes
-    |> put_calculated_age()
+    |> normalize_registration_age_fields()
     |> put_change(:is_confirmed, false)
   end
 
-  defp put_calculated_age(changeset) do
-    case get_field(changeset, :date_of_birth) do
-      %Date{} = dob ->
-        age = calculate_age(dob)
-        put_change(changeset, :age, age)
-      _ ->
+  defp normalize_registration_age_fields(changeset) do
+    today = Date.utc_today()
+    birthday = get_change(changeset, :date_of_birth)
+    age = get_change(changeset, :age)
+
+    cond do
+      birthday ->
+        calculated_age = Date.diff(today, birthday) |> div(365)
+
+        changeset
+        |> put_change(:age, calculated_age)
+        |> put_change(:birth_year, birthday.year)
+
+      is_integer(age) and age >= 0 ->
+        put_change(changeset, :birth_year, today.year - age)
+
+      true ->
         changeset
     end
   end
 
-  defp calculate_age(dob) do
-    today = Date.utc_today()
-    age = today.year - dob.year
+  #defp put_calculated_age(changeset) do
+  #  case get_field(changeset, :date_of_birth) do
+  #    %Date{} = dob ->
+  #      age = calculate_age(dob)
+  #      put_change(changeset, :age, age)
+  #    _ ->
+  #      changeset
+  #  end
+  #end
 
-    # Adjust if the birthday hasn't happened yet this year
-    if Date.compare(today, %{dob | year: today.year}) == :lt do
-      age - 1
-    else
-      age
-    end
-  end
+  #defp calculate_age(dob) do
+  #  today = Date.utc_today()
+  #  age = today.year - dob.year
+  #
+  #  # Adjust if the birthday hasn't happened yet this year
+  #  if Date.compare(today, %{dob | year: today.year}) == :lt do
+  #    age - 1
+  #  else
+  #    age
+  #  end
+  #end
 
   @doc """
   A user changeset for registering or changing the email.
@@ -398,6 +449,14 @@ defmodule Kollective.Accounts.User do
     Pbkdf2.no_user_verify()
     false
   end
+
+  # Profile Updates
+  def profile_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:display_name, :alias_name, :bio, :avatar_url])
+    |> validate_length(:bio, max: 160) # Traditional "Twitter-style" bio limit
+  end
+
 
   def district_changeset(user, attrs) do
     user

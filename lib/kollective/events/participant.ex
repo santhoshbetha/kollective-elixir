@@ -7,7 +7,7 @@ defmodule Kollective.Events.Participant do
     belongs_to :user, Kollective.Accounts.User
     #field :status, :string, default: "accepted"
 
-    # Statuses: "going", "maybe", "no", "pending", "waitlisted"
+    # Statuses: "going", "maybe", "no", "pending", "waitlisted" , "accepted", "rejected"
     field :status, :string, default: "going"
 
     timestamps(type: :utc_datetime)

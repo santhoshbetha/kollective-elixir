@@ -5,14 +5,13 @@ defmodule Kollective.Accounts.Organization do
     field :name, :string
     field :slug, :string
     field :bio, :string
-    field :is_verified, :boolean, default: false
+    field :is_verified, :boolean, default: false # General verified status
 
     has_many :memberships, Kollective.Accounts.OrganizationMember
     has_many :members, through: [:memberships, :user]
     has_many :posts, Kollective.Posts.Post
 
-    many_to_many :followers, Kollective.Accounts.User,
-      join_through: "user_organization_relationships"
+    many_to_many :followers, Kollective.Accounts.User, join_through: "user_organization_relationships"
 
     # Organization Badges (e.g., "Local Verified Partner") provides visual trust and helps users
     # distinguish between standard news groups and official community partners. You can manage

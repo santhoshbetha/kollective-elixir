@@ -11,34 +11,6 @@ defmodule KollectiveWeb.PostJSON do
     %{data: Enum.map(posts, &data2/1)}
   end
 
-  def show2(%{post: post}) do
-    %{data: data2(post)}
-  end
-
-  def data2(%{post: post, likes_count: count, has_liked: liked}) do
-    is_deleted = !is_nil(post.deleted_at) #For Soft delete behavior (show "deleted" messsage in UI)
-    %{
-      id: post.id,
-      body: if(is_deleted, do: "[post deleted]", else: post.body),
-      author: if(is_deleted, do: nil, else: author_data(post.author)),
-      likes_count: count, # <--- Include the virtual field
-      has_liked: liked,
-      parent_id: post.parent_id,
-      in_reply_to_id: post.in_reply_to_id,
-      # Recursively serialize replies if they exist
-      replies: Enum.map(post.replies, &data2/1)
-    }
-  end
-
-  defp author_data(%User{} = user) do
-    %{
-      id: user.id,
-      username: user.username,
-      avatar_url: user.avatar
-    }
-  end
-  defp author_data(_), do: nil
-
   def show(%{post: post, current_user: current_user}) do
     %{data: data(post, current_user)}
   end
@@ -82,6 +54,37 @@ defmodule KollectiveWeb.PostJSON do
       }
     }
   end
+
+  def show2(%{post: post}) do
+    %{data: data2(post)}
+  end
+
+  def data2(%{post: post, likes_count: count, has_liked: liked}) do
+    is_deleted = !is_nil(post.deleted_at) #For Soft delete behavior (show "deleted" messsage in UI)
+    %{
+      id: post.id,
+      body: if(is_deleted, do: "[post deleted]", else: post.body),
+      author: if(is_deleted, do: nil, else: author_data(post.author)),
+      likes_count: count, # <--- Include the virtual field
+      has_liked: liked,
+      root_post_id: post.root_post_id,
+      in_reply_to_id: post.in_reply_to_id,
+      # Recursively serialize replies if they exist
+      replies: Enum.map(post.replies, &data2/1)
+    }
+  end
+
+  defp author_data(%User{} = user) do
+    %{
+      id: user.id,
+      username: user.username,
+      avatar_url: user.avatar
+    }
+  end
+  defp author_data(_), do: nil
+
+
+
 
   # Helper to check if the current user is in the preloaded reposts list
   defp user_reposted?(post, %{id: user_id}) do

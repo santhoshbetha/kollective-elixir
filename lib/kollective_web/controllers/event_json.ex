@@ -18,6 +18,7 @@ defmodule KollectiveWeb.EventJSON do
       start_time: event.start_time,
       end_time: event.end_time,
       timezone: event.timezone,
+
       status: event.event_status,
 
       # Visuals
@@ -32,6 +33,7 @@ defmodule KollectiveWeb.EventJSON do
       location: %{
         name: event.location_name,
         city: event.origin_city.name,
+        address: event.street,
         state: event.origin_state,
         country: event.origin_country,
         # Recursive District Stack (National > State > Local)
@@ -50,4 +52,6 @@ defmodule KollectiveWeb.EventJSON do
   end
 
   defp default_banner, do: "https://media.kollective.app"
+
+
 end

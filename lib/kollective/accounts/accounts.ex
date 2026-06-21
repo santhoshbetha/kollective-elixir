@@ -8,8 +8,18 @@ defmodule Kollective.Accounts.Accounts do
 
   alias Kollective.Accounts.{User, UserToken, UserNotifier}
   alias Kollective.Chats.Participant
+  alias Kollective.Accounts.UserRelationship
+  alias Kollective.Accounts.UserOrganizationRelationship
 
   ## Database getters
+
+  @doc """
+  Gets a single user by ID.
+  Returns nil if the User does not exist.
+  """
+  def get_user(id) when is_binary(id) or is_integer(id) do
+    Repo.get(User, id)
+  end
 
   @doc """
   Gets a user by email.
@@ -60,6 +70,13 @@ defmodule Kollective.Accounts.Accounts do
 
   """
   def get_user!(id), do: Repo.get!(User, id)
+
+  # Helper to resolve the @strings into actual User structs:
+  def list_users_by_usernames(usernames) do
+    User
+    |> where([u], u.username in ^usernames)
+    |> Repo.all()
+  end
 
   ## User registration
 
@@ -315,5 +332,77 @@ defmodule Kollective.Accounts.Accounts do
     from(u in User, where: u.id == ^user_id)
     |> Repo.update_all(set: [last_seen_at: timestamp])
   end
+
+  def get_profile_card(target_id, current_user_id \\ nil) do
+    user = Repo.get!(User, target_id)
+
+    # Determine if the active viewer is already following this profile
+    is_following =
+      if current_user_id do
+        Repo.exists?(from r in UserRelationship,
+          where: r.source_id == ^current_user_id and r.target_id == ^target_id and r.type == "follow")
+      else
+        false
+      end
+
+    %{
+      id: user.id,
+      username: user.username,
+      avatar_url: user.avatar_url,
+      followers_count: user.followers_count, # Direct column read (under 0.5ms)
+      following_count: user.following_count, # Direct column read (under 0.5ms)
+      is_following: is_following
+    }
+  end
+
+  @doc """
+  Fetches a flat list of user IDs that the given user_id is currently following.
+  Optimized to extract raw integers straight from the database index.
+  """
+  def get_following_ids(user_id) do
+    UserRelationship
+    |> where([r], r.source_id == ^user_id and r.type == "follow")
+    |> select([r], r.target_id)
+    |> Repo.all()
+  end
+
+  @doc """
+  Fetches a flat list of Organization IDs that the given user_id is currently following.
+  Optimized to extract raw integers straight from the database index.
+  """
+  def get_followed_org_ids(user_id) do
+    UserOrganizationRelationship
+    |> where([r], r.user_id == ^user_id)
+    |> select([r], r.organization_id)
+    |> Repo.all()
+  end
+
+  @doc "Returns a quick boolean if user_a follows user_b"
+  def following?(user_a_id, user_b_id) do
+     Repo.exists?(
+      from r in UserRelationship,
+        where: r.source_id == ^user_a_id and r.target_id == ^user_b_id and r.type == "follow"
+    )
+  end
+
+  # shadow-ban for aggressive spammers
+  #Summary of the "Silent" Defense
+
+  #  Bot hits the API 50 times in 10 seconds.
+  #  RateLimiter (via Hammer.inspect_bucket) sees the count > 20.
+  #  Accounts sets is_shadow_banned: true on that user.
+  #  Bot thinks it succeeded (if you return 200) or just keeps trying, but none of its content ever hits the public timeline.
+  def flag_user_for_spam("user:" <> user_id) do
+    case Repo.get(User, user_id) do
+      nil -> {:error, :not_found}
+      user ->
+        user
+        |> User.changeset(%{is_shadow_banned: true})
+        |> Repo.update()
+    end
+  end
+
+  def flag_user_for_spam("ip:" <> _ip), do: :ok # Log IP but can't "ban" a non-user record
+
 
 end

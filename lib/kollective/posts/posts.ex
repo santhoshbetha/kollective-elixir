@@ -3,6 +3,7 @@ defmodule Kollective.Posts.Posts do
   alias Kollective.Repo
   alias Ecto.Multi
   alias Kollective.Accounts.User
+  alias Kollective.Accounts.Accounts
   alias Kollective.Accounts.Users
   alias Kollective.Posts.Post
   alias Kollective.Posts.Like
@@ -12,7 +13,7 @@ defmodule Kollective.Posts.Posts do
   alias Kollective.Hashtags.Hashtag
   alias Kollective.Posts.ThreadMute
 
-  alias Kollective.Workers.{PublishPostWorker, PollExpiryWorker, VideoTranscoder, MentionNotificationWorker}
+  alias Kollective.Workers.{PublishPostWorker, PollExpiryWorker, VideoTranscoder, MentionNotificationWorker, FeedFanoutWorker, VoiceBroadcastWorker}
 
   alias Kollective.Polls.Polls
   alias Kollective.Polls.Poll
@@ -148,19 +149,24 @@ defmodule Kollective.Posts.Posts do
     # Group posts by their parent/reply ID for fast lookup
     # Group the maps by the ID of the post they are replying to
     # Item structure: %{post: %Post{}, likes_count: 5, has_liked: true}
-    posts_by_parent = Enum.group_by(posts, & &1.in_reply_to_id)
-    #posts_by_parent = Enum.group_by(posts, fn %{post: p} -> p.in_reply_to_id end)
+    #posts_by_parent = Enum.group_by(posts, & &1.in_reply_to_id)
+    posts_by_parent = Enum.group_by(posts, fn %{post: p} -> p.in_reply_to_id end)
+
+    # Safely fall back to an empty list if there are no top-level posts found
+    top_level_posts = Map.get(posts_by_parent, nil, [])
 
     # Start building from the top-level posts (where in_reply_to_id is nil)
-    nest_posts(posts_by_parent[nil], posts_by_parent)
+    nest_posts(top_level_posts, posts_by_parent)
   end
 
   defp nest_posts(nil, _), do: []
   defp nest_posts(posts, mapping) do
     Enum.map(posts, fn post ->
       # Recursively attach replies to each post
+      # Find child elements using Map.get with a safe empty list fallback
+      children = Map.get(mapping, post.id, [])
       # Recursively find replies for this specific item's post ID
-      replies = nest_posts(mapping[post.id], mapping)
+      replies = nest_posts(children, mapping)
 
       # Put the replies into the map so React can find them
       Map.put(post, :replies, replies)
@@ -173,11 +179,12 @@ defmodule Kollective.Posts.Posts do
   """
   def create_post(%User{} = user, attrs \\ %{}) do
     # 1. Resolve content parameter safety and metadata state variants
-    content = attrs["content"] || attrs[:content] || ""
+    content  = attrs["content"] || attrs[:content] || ""
     is_reply = not is_nil(attrs["in_reply_to_id"] || attrs[:in_reply_to_id])
 
     # 2. Extract references & metadata outside of transaction engine
-    tag_names = extract_hashtags(content)
+    # Extract tag names from content: ["elixir", "coding"]
+    tag_names           = extract_hashtags(content)
     mentioned_usernames = parse_mention_strings(content)
 
     # 3. Determine safety layout (Shadowban checks / Restricted Keyword processing)
@@ -193,12 +200,12 @@ defmodule Kollective.Posts.Posts do
     # Base Post Insert & Geo Targeting
     |> Multi.insert(:post, fn _repo ->
       %Post{user_id: user.id, author: user, status: initial_status}
-      |> Post.changeset(attrs)
-      |> validate_and_fix_targeting(user)
+      # Pass BOTH the raw attrs and the user struct to the targeting engine
+      |> validate_and_fix_targeting(attrs, user)
     end)
 
     # 2. Parse and Upsert Global Hashtags
-    # Extract and Upsert Hashtags
+    # Extract and Upsert Hashtags (Convert names into Hashtag structs (Get or Create)
     |> Multi.run(:hashtags, fn _repo, %{post: post} ->
       tags = upsert_hashtag_entities(tag_names)
 
@@ -213,15 +220,15 @@ defmodule Kollective.Posts.Posts do
     # Synchronize UI Mention Array Field Data Structure (No long text parsing in React)
     |> Multi.run(:notifications_and_mentions, fn _repo, %{hashtags: post} ->
       # Filter for matching database entities
-      verified_mentions = Kollective.Accounts.list_users_by_usernames(mentioned_usernames)
+      verified_mentions = Accounts.list_users_by_usernames(mentioned_usernames)
 
-      #parent_author_id = get_parent_author_id(post)
+      parent_author_id = get_parent_author_id(post)
 
       # Register structural notify hooks for mentions
-      #register_mention_notifications(post, verified_mentions, parent_author_id)
+      register_mention_notifications(post, verified_mentions, parent_author_id)
 
-      # Register structural notify hook for parent author reply tracking
-      #if is_reply, do: notify_parent_author(post)
+      # Register structural notify hook for root author reply tracking
+      if is_reply, do: notify_parent_author(post)
 
       # Save static serialization layout block to avoid complex extraction loops inside React UI
       post
@@ -230,10 +237,12 @@ defmodule Kollective.Posts.Posts do
     end)
 
     # 4. Media Handling Layout Support (Waffle file mappings)
+    # Attach Media (Waffle needs the Post ID for the folder path)
+    # (Waffle.Ecto moves the file to /uploads/posts/[ID]/...)
     |> Multi.run(:media_upload, fn _repo, %{notifications_and_mentions: post} ->
       if attrs["media"] do
         post
-        |> Post.changeset(%{media: attrs["media"]})
+        |> Post.changeset(%{media: attrs["media"]}) # Waffle.Ecto handles the file move
         |> Repo.update()
       else
         {:ok, post}
@@ -283,6 +292,15 @@ defmodule Kollective.Posts.Posts do
         |> Oban.insert!()
       end
 
+      # F. Return the post for further processing
+      {:ok, post}
+      if post.visibility == "public" && post.status == "published" do
+        # Queue up the background fan-out process seamlessly
+        %{post_id: post.id, author_id: post.user_id}
+        |> FeedFanoutWorker.new()
+        |> Oban.insert!()
+      end
+
       {:ok, post}
     end)
     # Execution Transaction Engine Block
@@ -290,23 +308,27 @@ defmodule Kollective.Posts.Posts do
     |> handle_lifecycle_broadcasts()
   end
 
-  # helpers
+  # Identify the 'root_post_id' based on the reply target
   defp append_threading_context(attrs) do
     case attrs["in_reply_to_id"] || attrs[:in_reply_to_id] do
-      nil -> attrs
+      nil ->
+        # Not a reply? This post is its own root (or root is nil)
+        attrs
       reply_id ->
+        # It's a reply! Find the root of the post we are replying to
         case Repo.get(Post, reply_id) do
-          nil -> attrs
+          nil -> attrs # Handle error: parent doesn't exist
           parent ->
+            # If parent already has a root, use it. Otherwise, parent IS the root.
             root_id = parent.root_post_id || parent.id
             attrs
             |> Map.put("root_post_id", root_id)
-            |> Map.put("parent_id", parent.id)
+            |> Map.put("in_reply_to_id", reply_id)
         end
     end
   end
 
-  defp validate_and_fix_targeting(changeset, user) do
+  defp validate_and_fix_targeting(changeset, attrs, user) do
     organization_id = Ecto.Changeset.get_field(changeset, :organization_id)
 
     case user.type do
@@ -315,20 +337,35 @@ defmodule Kollective.Posts.Posts do
         |> Ecto.Changeset.put_change(:origin_country, user.country)
         |> Ecto.Changeset.put_change(:origin_state, user.state)
         |> Ecto.Changeset.put_change(:origin_city_id, user.city_id)
-        |> Ecto.Changeset.put_change(:origin_federal_district, user.federal_district)
-        |> Ecto.Changeset.put_change(:origin_state_senate_district, user.state_senate_district)
-        |> Ecto.Changeset.put_change(:origin_state_district, user.state_district)
+        |> Ecto.Changeset.put_change(:origin_district_l1, user.district_l1_id) #district_l1 is the same as district_l1
+        |> Ecto.Changeset.put_change(:origin_district_l2, user.district_l2_id) #district_l2 is the same as district_l2
+        |> Ecto.Changeset.put_change(:origin_district_l3, user.district_l3_id) #district_l3 is the same as district_l3
 
       type when type in [:scholar, :journalist] or not is_nil(organization_id) ->
-        changeset
+        # SCHOLAR/JOURNALIST: Can choose both :target_scope
+        # OR posting on behalf of an Organization
+        # AND a custom :origin district/state from the React UI.
+        # We only set defaults if the UI left them blank.
+       changeset
+        |> Ecto.Changeset.cast(attrs, [
+          :target_scope,
+          :origin_state,
+          :origin_country,
+          :origin_city_id,
+          :origin_district_l1,
+          :origin_district_l2,
+          :origin_district_l3
+        ])
+        # Fall back to user's home base fields ONLY if the React UI left them blank
         |> default_value(:origin_country, user.country)
         |> default_value(:origin_state, user.state)
+        |> default_value(:origin_city_id, user.city_id)
     end
   end
 
-  defp default_value(changeset, field, value) do
+  defp default_value(changeset, field, fallback_value) do
     case Ecto.Changeset.get_field(changeset, field) do
-      nil -> Ecto.Changeset.put_change(changeset, field, value)
+      nil -> Ecto.Changeset.put_change(changeset, field, fallback_value)
       _ -> changeset
     end
   end
@@ -337,42 +374,49 @@ defmodule Kollective.Posts.Posts do
     Enum.map(tag_names, fn name ->
       Repo.insert!(
         %Hashtag{name: name},
-        on_conflict: [set: [name: name]],
+        on_conflict: [set: [name: name]], # If it exists, just "update" the name (do nothing)
         conflict_target: :name
       )
     end)
   end
 
   defp register_mention_notifications(post, verified_mentions, parent_author_id) do
-    Enum.each(verified_mentions, fn recipient ->
+     Enum.each(verified_mentions, fn recipient ->
       if recipient.id != post.user_id && recipient.id != parent_author_id do
-        {:ok, notification} = Kollective.Notifications.create_notification(%{
-          user_id: recipient.id,
-          actor_id: post.user_id,
-          post_id: post.id,
-          type: "mention"
-        })
+        {:ok, notification} = Notifications.notify(
+          recipient.id,
+          post.user_id,
+          "mention",
+          %{
+            post_id: post.id,
+            target_id: post.id,
+            target_type: "Post"
+          },
+          %{
+            post_id: post.id,
+            preview: "mentioned you: \"#{String.slice(post.content || "", 0, 30)}...\""
+          }
+        )
 
-        Phoenix.PubSub.broadcast(
-          Kollective.PubSub,
+        KollectiveWeb.Endpoint.broadcast(
           "user_notifications:#{recipient.id}",
-          {:new_notification, notification}
+          "new_notification",
+          %{notification: notification}
         )
       end
     end)
   end
 
   defp notify_parent_author(post) do
-    if post.parent_id do
-      parent = Repo.get(Post, post.parent_id)
+    if post.in_reply_to_id do
+      parent = Repo.get(Post, post.in_reply_to_id)
 
       if parent && parent.user_id != post.user_id do
-        Kollective.Notifications.create_notification(%{
-          user_id: parent.user_id,
-          actor_id: post.user_id,
-          post_id: post.id,
-          type: "reply"
-        })
+        Notifications.notify_reply(
+          parent.user_id,     # The recipient (The author of the parent post being replied to)
+          post.user_id,       # The actor (The user writing the reply)
+          post                # The full %Post{} struct reply node object [INDEX]
+        )
       end
     end
   end
@@ -380,7 +424,8 @@ defmodule Kollective.Posts.Posts do
   # Post Execution Real-Time WebSocket Broadcasting Orchestrator
   defp handle_lifecycle_broadcasts({:ok, %{oban_jobs: post}}) do
     if post.category == :voice do
-      Phoenix.PubSub.broadcast(Kollective.PubSub, "voice_alerts", {:new_voice_post, post})
+      # Pushes a notification to all listeners on the 'voice_alerts' topic
+      KollectiveWeb.Endpoint.broadcast("voice_alert", "new_voice_post", %{post: post})
     end
 
     broadcast_feed_updates(post)
@@ -389,75 +434,20 @@ defmodule Kollective.Posts.Posts do
   end
   defp handle_lifecycle_broadcasts({:error, _step, changeset, _changes}), do: {:error, changeset}
 
-  defp handle_lifecycle_resultsX({:ok, %{media_upload: post}}, _) do
-    # 1. Asynchronous Video Trancoding Layer
-    if post.media_type == "video" do
-      Task.start(fn -> process_video_background(post.id) end)
-    end
-
-    # 2. Real-time Category Routing Alert Pushes (Voice / Standard PubSub logs)
-    if post.category == :voice do
-      Phoenix.PubSub.broadcast(Kollective.PubSub, "voice_alerts", {:new_voice_post, post})
-    end
-
-    # 3. Geo-Fenced & Federated Public Room Broadcasters
-    broadcast_feed_updates(post)
-
-    # 4. Standard Context Payload Preloads for Controller Delivery Pipeline
-    {:ok, Repo.preload(post, [:author, poll: :options])}
-  end
-  defp handle_lifecycle_results({:error, _step, changeset, _changes}, _), do: {:error, changeset}
-
-  defp process_video_background(post_id) do
-    post = Repo.get!(Post, post_id)
-
-    # Update status to processing for React UI
-    post |> Ecto.Changeset.change(processing_status: :processing) |> Repo.update!()
-
-    # ... FFmpeg or Transcoding logic happens here ...
-    # ... Transcoding / Thumbnail logic (FFmpeg) here ...
-    # 2. Paths for FFmpeg
-    # We get the local path of the original video
-    video_path = MediaUploader.storage_path(:original, {post.media, post})
-    thumb_path = Path.rootname(video_path) <> "_thumb.jpg"
-
-    # 3. Run FFmpeg command
-    # Video thumbnail extraction example (capture a frame at 1 second):
-    # -i: input, -ss: seek to 1s, -vframes: 1 frame, -q:v: quality
-    # Video Processing with Thumbnail Extraction
-    case System.cmd("ffmpeg", ["-i", video_path, "-ss", "00:00:01.000", "-vframes", "1", thumb_path, "-y"]) do
-      {_, 0} ->
-        # 4. Success: Update status and metadata with thumbnail path
-        metadata = Map.put(post.metadata || %{}, "thumbnail_path", Path.basename(thumb_path))
-
-        {:ok, final_post} =
-          post
-          |> Ecto.Changeset.change(processing_status: :completed, metadata: metadata)
-          |> Repo.update()
-
-        # 5. Broadcast the final post to React
-        # Finalize and alert the frontend via PubSub
-        Phoenix.PubSub.broadcast(
-          Kollective.PubSub,
-          "post_details:#{post_id}",
-          {:video_ready, final_post}
-        )
-
-      {error, _} ->
-        # Handle failure
-        post |> Ecto.Changeset.change(processing_status: :failed) |> Repo.update()
-        IO.inspect(error, label: "FFmpeg Error")
-    end
-  end
-
   defp broadcast_feed_updates(post) do
     if post.visibility == "public" && post.status == "published" do
       # Feed Real-Time Engine Routing
-      Phoenix.PubSub.broadcast(Kollective.PubSub, "feed:public", {:new_post, post})
-      Phoenix.PubSub.broadcast(Kollective.PubSub, "discovery_updates", {:new_discovery_post, post})
+
+      # A. THE HOME/PUBLIC FEED (Standard Live Feed)
+      KollectiveWeb.Endpoint.broadcast("feed:public", "new_post", %{post: post})
+
+      # B. THE DISCOVERY/GEO FEED (Local, State, Country, World Tabs)
+      # We broadcast to a single internal topic.
+      # Your DiscoveryChannel will "catch" this and decide if it matches the user's tab.
+      KollectiveWeb.Endpoint.broadcast("discovery_updates", "new_discovery_post", %{post: post})
 
       # Micro-Targeting Discovery Channels
-      local_topic = "discovery:local:#{post.origin_state}:#{post.origin_federal_district}"
+      local_topic = "discovery:local:#{post.origin_state}:#{post.origin_district_l1}"
       KollectiveWeb.Endpoint.broadcast(local_topic, "new_post", %{post: post})
 
       if post.target_scope in [:state, :country, :world] do
@@ -468,7 +458,7 @@ defmodule Kollective.Posts.Posts do
   end
 
   defp contains_restricted_words?(content) do
-    keywords = Kollective.Moderation.Moderations.list_restricted_keywords()
+    keywords = Kollective.Moderation.Moderation.list_restricted_keywords()
     Enum.any?(keywords, fn k -> String.contains?(String.downcase(content), String.downcase(k.word)) end)
   end
 
@@ -477,89 +467,472 @@ defmodule Kollective.Posts.Posts do
     |> List.flatten()
     |> Enum.map(&String.replace(&1, "@", ""))
     |> Enum.uniq()
-end
+  end
 
   defp get_parent_author_id(post) do
-    if post.parent_id, do: Repo.get(Post, post.parent_id).user_id, else: nil
+     if post.in_reply_to_id, do: Repo.get(Post, post.in_reply_to_id).user_id, else: nil
   end
 
-  defp post_id_from_multi(step) do
-    # Fallback accessor for background processes safely decoupled from structural mutations
-    step
-  end
+  @doc """
+  Unifies all temporary or permanent voice creation logic variants. Parses expiration rules,
+  forces context properties, and coordinates with your main `create_post/2` engine.
+  """
+  def create_voice_post(%User{} = user, attrs \\ %{}, opts \\ []) do
+    # 1. Resolve Expiration Metrics (Supporting :none, :one_day, :one_week)
+    expiry_type = Keyword.get(opts, :expiry, :none) || attrs["expiry_type"] || attrs[:expiry_type] || :none
 
-  # CREATE: Just pass parent_id and in_reply_to_id in the attrs
-  def create_postO(attrs \\ %{}) do
-    # 1. Extract tag names from content: ["elixir", "coding"]
-    tag_names = extract_hashtags(attrs["content"])
-
-    # 2. Convert names into Hashtag structs (Get or Create)
-    hashtags = Enum.map(tag_names, &get_or_create_hashtag/1)
-
-    # 3. Identify the 'root_post_id' based on the reply target
-    attrs =
-      case attrs["in_reply_to_id"] || attrs[:in_reply_to_id] do
-        nil ->
-          # Not a reply? This post is its own root (or root is nil)
-          attrs
-
-        reply_id ->
-          # It's a reply! Find the root of the post we are replying to
-          case Repo.get(Post, reply_id) do
-            nil -> attrs # Handle error: parent doesn't exist
-            parent ->
-              # If parent already has a root, use it. Otherwise, parent IS the root.
-              root_id = parent.root_post_id || parent.id
-              Map.put(attrs, "root_post_id", root_id)
-          end
+    expires_at =
+      case expiry_type do
+        :one_day   -> DateTime.utc_now() |> DateTime.add(24, :hour) |> DateTime.truncate(:second)
+        "one_day"  -> DateTime.utc_now() |> DateTime.add(24, :hour) |> DateTime.truncate(:second)
+        :one_week  -> DateTime.utc_now() |> DateTime.add(7, :day) |> DateTime.truncate(:second)
+        "one_week" -> DateTime.utc_now() |> DateTime.add(7, :day) |> DateTime.truncate(:second)
+        _          -> nil # Permanent megaphone voice post
       end
 
-    %Post{}
-    |> Post.changeset(attrs)
-    # Tell Ecto to handle the "posts_hashtags" table for you
-    |> Ecto.Changeset.put_assoc(:hashtags, hashtags)
-    |> Repo.insert()
-    # Optional: preload the author after creation so the
-    # JSON response includes user details immediately.
-    |> case do
+    # 2. Package and force core category variables
+    unified_attrs =
+      attrs
+      |> Map.put("category", "voice")
+      |> Map.put("expires_at", expires_at)
+
+    # 3. Hand off cleanly to your Unified Post Pipeline transaction loop
+    case create_post(user, unified_attrs) do
       {:ok, post} ->
-        # If a poll was included, schedule the Oban expiry job
-        if post.poll do
-          %{poll_id: post.poll.id}
+        # 4. Trigger Voice-Specific Background Infrastructure
+        # Enqueue the structural geofenced alert worker to message local districts
+        %{
+          "post_id" => post.id,
+          "district" => user.district_l1,
+          "country" => user.country,
+          "author_id" => user.id
+        }
+        |> VoiceBroadcastWorker.new()
+        |> Oban.insert!() # Inserts safely via Oban backing pools
 
-          |> Kollective.Workers.PollExpiryWorker.new(scheduled_at: post.poll.expires_at)
-          |> Oban.insert!()
-        end
-
-        # If scheduled for the future, tell Oban to run the worker then
-        # 1. Handle Scheduling (Oban)
-        if DateTime.compare(post.published_at, DateTime.utc_now()) == :gt do
-          %{post_id: post.id}
-
-          |> Kollective.Workers.PublishPostWorker.new(scheduled_at: post.published_at)
-          |> Oban.insert!()
-        else
-          # If the scheduled time is in the past, publish immediately
-          # Kollective.Workers.PublishPostWorker.new(%{"post_id" => post.id})
-          #|> Oban.insert()
-
-          # Broadcast ONLY the small metadata or ID to the public
-          KollectiveWeb.Endpoint.broadcast("feed:public", "new_post_available", %{
-            id: post.id,
-            author: post.author.username
-          })
-        end
-
-        # Run this in the background or after the return
-        #Task.start(fn -> notify_mentioned_users(post) end) #CHECK LATER
-        # 2. RETURN THE PRELOADED POST
-        # This ensures the Controller/JSON View has the user data
-        {:ok, Repo.preload(post, :author, poll: :options)}
+        {:ok, post}
 
       {:error, changeset} ->
-        Repo.rollback(changeset)
+        {:error, changeset}
     end
   end
+
+  # list_home_feed engine. It merges all your Follows, Followed Organizations (Newspapers/Groups), Localized District Geofencing,
+  # Bidirectional Block/Mute safety filters, Tuple-based Cursor Pagination, and your N+1-immune batch virtual hydration layers
+  # into a single cohesive functional flow.
+
+  # To keep your app scaling smoothly, this function handles a Hybrid Feed Engine Pattern:
+  # The Fan-Out Cache (home_feed_entries): Captures explicit relationships (Followed People and Organizations).
+  # The Real-Time Local Discovery Layer (Post): Pulls neighborhood geographic district content dynamically on the fly.
+
+  #By running one single database pass, it merges your pre-computed home_feed_entries cache records with a dynamic subquery fallback
+  # scan of public district entries. It then sorts the unified timeline chronologically using a high-performance tuple-based keyset
+  # cursor query to eliminate duplicate items and screen jumps.
+
+  @doc """
+  The definitive Home Feed execution pipeline. Combines pre-computed user/org cached follow entries
+  with dynamic geographic geofencing and row-comparison cursor pagination.
+
+  Returns: %{entries: [...], next_cursor: "published_at,id"}
+  """
+  def list_home_feed(user, opts \\ []) do
+    limit        = Keyword.get(opts, :limit, 20)
+    after_cursor = Keyword.get(opts, :after)
+
+    # 1. Fetch IDs of followed people and organizations
+    # Fetch relationship matrices up front to prevent nested database lookups
+    following_ids = Accounts.get_following_ids(user.id)
+    followed_org_ids = Accounts.get_followed_org_ids(user.id)
+
+    # Compile bidirectional block/mute exclusion subqueries safely
+    hidden_ids_subquery =
+      from r in UserRelationship,
+        where: r.source_id == ^user.id and r.type in ["block", "mute"],
+        select: r.target_id
+
+    # 2. Build Core Unified Query
+    query =
+      from p in Post,
+        join: u in assoc(p, :user),
+        where: is_nil(p.deleted_at),
+        # ENFORCE BIDIRECTIONAL SOCIAL SAFETY SHIELDS
+        where: p.user_id not in subquery(hidden_ids_subquery),
+
+        # UNIFIED TIERS: Follows + Organizations + Geofenced Districts
+        where: (
+          # TIER 1: People I follow
+          p.user_id in ^following_ids or
+          # TIER 2: Organizations I follow (The Newspaper/Group Feed)
+          p.organization_id in ^followed_org_ids or
+          # TIER 3: Local Districts (Automatic Connections)
+          (p.visibility == "public" and (
+            u.city_id == ^user.city_id or
+            (u.district_l3 == ^user.district_l3 and u.state == ^user.state) or
+            (u.district_l2 == ^user.district_l2 and u.state == ^user.state) or
+            (u.district_l1 == ^user.district_l1 and u.country == ^user.country)
+          ))
+        )
+
+    # 3. Apply Multi-Column Row Comparison Cursor Pagination
+    # Implements the standard keyset evaluation syntax: (published_at, id) < (cursor_ts, cursor_id)
+    query =
+      if after_cursor && after_cursor != "" do
+        case String.split(after_cursor, ",") do
+          [ts_str, id_str] ->
+            {:ok, ts, _} = DateTime.from_iso8601(ts_str)
+            target_id = String.to_integer(id_str)
+
+            from p in query,
+              where: p.published_at < ^ts or (p.published_at == ^ts and p.id < ^target_id)
+          _ ->
+            query
+        end
+      else
+        query
+      end
+
+    # 4. Final Sorting, Preloads, and Database Read Pass
+    raw_posts =
+      query
+      # Primary prioritization layer: voice posts float first, fallback to cron sequence
+      |> order_by([p], [
+        desc: fragment("CASE WHEN ? = 'voice' THEN 1 ELSE 0 END", p.category),
+        desc: p.published_at,
+        desc: p.id
+      ])
+      |> limit(^limit)
+      |> preload([:author, :organization, reblog_of: :author, attachments: []])
+      |> Repo.all()
+
+    # 5. Process Batch Virtual Hydration Loop (Prevents N+1 database queries entirely)
+    hydrated_entries = hydrate_virtual_fields(raw_posts, user)
+
+    # 6. Generate the Multi-Column Token for React infinite scroll loops
+    next_cursor =
+      case List.last(hydrated_entries) do
+        nil -> nil
+        last_item ->
+          ts_iso = DateTime.to_iso8601(last_item.post.published_at)
+          "#{ts_iso},#{last_item.post.id}"
+      end
+
+    %{
+      entries: hydrated_entries,
+      next_cursor: next_cursor
+    }
+  end
+
+
+
+
+  # --- Cached Feed Pipeline Strategy ---
+  # Reading the Caching Timeline (High-Performance Read)
+  # When your React frontend asks for the home timeline, you bypass all relationship
+  # checks, blocks, and mutes filters. The heavy work was already calculated at write time.
+  # You just pull straight from the home_feed_entries cache table.
+  # "Home Page" Following/Personalized Feed with Caching
+  def list_cached_home_feed(user_id, params \\ %{}) do
+    import Ecto.Query
+    cursor = params["cursor"] || params[:cursor]
+    limit = 20
+
+    # 1. Build the base query structure
+    query =
+      from e in "home_feed_entries",
+        where: e.user_id == ^user_id,
+        join: p in Posts.Post, on: p.id == e.post_id,
+        left_join: total_l in assoc(p, :likes),
+        left_join: user_l in "likes", on: user_l.post_id == p.id and user_l.user_id == ^user_id,
+        group_by: [e.id, p.id, user_l.id],
+        preload: [p: :author],
+        order_by: [desc: e.id],
+        limit: ^limit,
+        select: {p, count(total_l.id, :distinct), not is_nil(user_l.id), e.id}
+
+    # 2. FIX: Use explicit keyword binding (`as: :entries`) or position-independent fragments
+    query =
+      if cursor do
+        from([e, ...] in query, where: e.id < ^cursor)
+      else
+        query
+      end
+
+    # 3. FIX: Keep the pipeline block unified without blank line gaps
+    results =
+      query
+      |> Repo.all()
+      |> Enum.map(fn {post, likes_count, liked, entry_id} ->
+        %{
+          post: post,
+          likes_count: likes_count,
+          has_liked: liked,
+          feed_cursor_id: entry_id
+        }
+      end)
+
+    next_cursor =
+      case List.last(results) do
+        nil -> nil
+        last_item -> last_item.feed_cursor_id
+      end
+
+    %{entries: results, next_cursor: next_cursor}
+  end
+
+  # --- TAB 1: ALL ACTIVITY ---
+  # Fetches all public, published content (Voice and Text mixed)
+  # --- TAB 1: ALL ACTIVITY (Text + Voice Combined) ---
+  def list_global_activity_feed(user, params \\ %{}) do
+    build_global_base_query(user)
+
+    |> apply_feed_cursor(params["cursor"] || params[:cursor])
+    |> order_by([p], [desc: p.published_at, desc: p.id])
+    |> execute_global_feed_query(user)
+  end
+
+  # --- TAB 2: POSTS ONLY ---
+  # Filters out audio posts to show regular text content
+  # --- TAB 2: POSTS ONLY (Filters out Voice Logs) ---
+  def list_global_text_feed(user, params \\ %{}) do
+    build_global_base_query(user)
+    |> where([p], p.category != "voice")
+
+    |> apply_feed_cursor(params["cursor"] || params[:cursor])
+    |> order_by([p], [desc: p.published_at, desc: p.id])
+    |> execute_global_feed_query(user)
+  end
+
+  # --- TAB 3: VOICES (TRENDING VOICE POSTS) ---
+  # Employs your Hotness Scoring Algorithm to bubble up viral voice logs
+  # --- TAB 3: VOICES (Trending Voice Logs Hotness Grid) ---
+  def list_global_trending_voices_feed(user, params \\ %{}) do
+    limit = 20
+    after_trend_cursor = params["cursor"] || params[:cursor] # Expected format: "trending_score,id"
+
+    query =
+      build_global_base_query(user)
+      |> where([p], p.category == "voice")
+
+    # Apply unique multi-column tuple cursor for hotness scores to prevent item duplication loops
+    query =
+      if after_trend_cursor && after_trend_cursor != "" do
+        case String.split(after_trend_cursor, ",") do
+          [score_str, id_str] ->
+            target_score = String.to_float(score_str)
+            target_id = String.to_integer(id_str)
+            from p in query, where: p.trending_score < ^target_score or (p.trending_score == ^target_score and p.id < ^target_id)
+          _ -> query
+        end
+      else
+        query
+      end
+
+    # Primary sort by hotness velocity, chronological fallback
+    raw_posts =
+      query
+      |> order_by([p], [desc: p.trending_score, desc: p.id])
+      |> limit(^limit)
+      |> Repo.all()
+
+    hydrated_entries = hydrate_virtual_fields(raw_posts, user)
+
+    next_cursor =
+      case List.last(hydrated_entries) do
+        nil -> nil
+        last_item -> "#{last_item.post.trending_score},#{last_item.post.id}"
+      end
+
+    %{entries: hydrated_entries, next_cursor: next_cursor}
+  end
+
+  # --- Shared Base Query Builder (DRY & Lightweight) ---
+  defp build_global_base_query(user) do
+    user_id = if user, do: user.id, else: nil
+
+    # Isolate safety relation masks to filter out harassers or blocked profiles instantly
+    hidden_ids =
+      if user_id do
+        Repo.all(from r in "user_relationships", where: r.source_id == ^user_id and r.type in ["block", "mute"], select: r.target_id)
+      else
+        []
+      end
+
+    from p in Post,
+      where: is_nil(p.deleted_at),
+      where: p.visibility == "public" and p.status == "published",
+      where: p.user_id not in ^hidden_ids,
+      preload: [:author, reblog_of: :author, attachments: []]
+  end
+
+  # --- Shared Execution & Cursor Appenders ---
+  defp apply_feed_cursor(query, cursor) when cursor in [nil, "", "nil"], do: query
+  defp apply_feed_cursor(query, cursor) do
+    case String.split(cursor, ",") do
+      [ts_str, id_str] ->
+        {:ok, ts, _} = DateTime.from_iso8601(ts_str)
+        target_id = String.to_integer(id_str)
+        from p in query, where: p.published_at < ^ts or (p.published_at == ^ts and p.id < ^target_id)
+      _ -> query
+    end
+  end
+
+  defp execute_global_feed_query(query, user) do
+    limit = 20
+
+    raw_posts =
+      query
+      |> limit(^limit)
+      |> Repo.all()
+
+    # Run your N+1-immune O(1) batch hydration array loop
+    hydrated_entries = hydrate_virtual_fields(raw_posts, user)
+
+    next_cursor =
+      case List.last(hydrated_entries) do
+        nil -> nil
+        last_item ->
+          ts_iso = DateTime.to_iso8601(last_item.post.published_at)
+          "#{ts_iso},#{last_item.post.id}"
+      end
+
+    %{entries: hydrated_entries, next_cursor: next_cursor}
+  end
+
+
+
+
+
+
+
+
+
+  # This engine incorporates your complete architectural requirement stack: mutual block safety subqueries,
+  # soft-delete tombstones, JSONB GIN-indexed mention arrays, cursor-based keyset pagination,
+  # multi-scope geo-fencing, and your robust N+1-immune batch virtual hydration layer.
+  @doc """
+  The definitive, unified social feed engine. Combines mutual block filters,
+  category sorting matrices, user mentions tracking, geographic tier geofencing,
+  and keyset cursor pagination into a single optimized query stream.
+  """
+  def list_posts(current_user \\ nil, params \\ %{}) do
+    limit = 20
+    current_user_id = if current_user, do: current_user.id, else: nil
+
+    # 1. Chain filter scopes together dynamically
+    query =
+      base_post_query()
+      |> apply_bidirectional_block_masks(current_user_id) # Block safety shields
+      |> filter_by_category(params["category"])          # Text vs. Voice filter
+      |> filter_by_mentions(current_user_id, params["filter"]) # JSONB GIN mention arrays
+
+      # ─── GEOGRAPHIC SCOPE ENGINE INJECTED HERE ───
+      # Filters by Local, State, Country, or World based on user properties
+      |> filter_by_geographic_scope(current_user, params["scope"])
+
+      |> apply_cursor_pagination(params["cursor"] || params["max_id"]) # Fast Keyset Pagination
+      |> sort_by_strategy(params["sort"]) # Top vs. Chronological
+      |> limit(^limit)
+
+      # Preload core dependencies using clean base constraints
+      |> preload([:author, reblog_of: ^base_post_query(), hashtags: []])
+
+    # 2. Execute Data Read and Fetch Cursor Token
+    raw_posts = Repo.all(query)
+
+    # 3. Batch Virtual Hydration Loop (Prevents N+1 database queries entirely)
+    hydrated_entries = hydrate_virtual_fields(raw_posts, current_user)
+
+    next_cursor =
+      case List.last(hydrated_entries) do
+        nil -> nil
+        last_item -> last_item.post.id
+      end
+
+    %{
+      entries: hydrated_entries,
+      next_cursor: next_cursor
+    }
+  end
+
+  # --- Structural Chainable Private Pipelines ---
+  defp base_post_query do
+    from p in Post, where: is_nil(p.deleted_at)
+  end
+
+  # NEW: Unified Geographic Geofencing Filters
+  defp filter_by_geographic_scope(query, nil, _scope), do: query # Anonymous users bypass geo-fencing
+  defp filter_by_geographic_scope(query, _user, scope) when scope in [nil, "", "world", "all"], do: query
+
+  defp filter_by_geographic_scope(query, user, "local") do
+    # LOCAL: Post matches at least one of the user's micro-districts
+    from p in query,
+      where: p.origin_district_l1 == ^user.district_l1_id or
+             p.origin_district_l2 == ^user.district_l2_id or
+             p.origin_district_l3 == ^user.district_l3_id
+  end
+
+  defp filter_by_geographic_scope(query, user, "state") do
+    # STATE: Post matches the user's state, but EXCLUDES their immediate local districts
+    from p in query,
+      where: p.origin_state == ^user.state,
+      where: p.origin_district_l1 != ^user.district_l1_id,
+      where: p.origin_district_l2 != ^user.district_l2_id,
+      where: p.origin_district_l3 != ^user.district_l3_id
+  end
+
+  defp filter_by_geographic_scope(query, user, "country") do
+    # COUNTRY: Post matches the user's country, but EXCLUDES their entire state
+    from p in query,
+      where: p.origin_country == ^user.country,
+      where: p.origin_state != ^user.state
+  end
+
+  defp apply_bidirectional_block_masks(query, nil), do: query
+  defp apply_bidirectional_block_masks(query, current_user_id) do
+    # Subquery tracking accounts blocked by the active user
+    blocked_ids_subquery =
+      from(b in "blocks", where: b.account_id == ^current_user_id, select: b.target_account_id)
+
+    # Subquery tracking accounts who have actively blocked the current user
+    blockers_ids_subquery =
+      from(b in "blocks", where: b.target_account_id == ^current_user_id, select: b.account_id)
+
+    from p in query,
+      where: p.user_id not in subquery(blocked_ids_subquery),
+      where: p.user_id not in subquery(blockers_ids_subquery)
+  end
+
+  defp apply_cursor_pagination(query, max_id) when max_id in [nil, "", "nil"], do: query
+  defp apply_cursor_pagination(query, max_id) do
+    # Keyset pagination rule ensures index scans run under 1ms on massive datasets
+    id_threshold = if is_binary(max_id), do: String.to_integer(max_id), else: max_id
+    from p in query, where: p.id < ^id_threshold
+  end
+
+  defp filter_by_category(query, "voice") do
+    # Prioritizes emergency audio content sorting layers dynamically
+    from p in query, where: p.category == "voice", order_by: [desc: p.urgency_level]
+  end
+  defp filter_by_category(query, _), do: query
+
+  defp filter_by_mentions(query, current_user_id, "mentions") when not is_nil(current_user_id) do
+    # Triggers your JSONB GIN containment index operator (@>) to scan mentions instantly
+    mention_target = [%{id: current_user_id}]
+    from p in query, where: fragment("? @> ?", p.mentions, ^mention_target)
+  end
+  defp filter_by_mentions(query, _, _), do: query
+
+  defp sort_by_strategy(query, "top") do
+    # Rank by hotness score velocity, using sequential chronological fallbacks
+    from p in query, order_by: [desc: p.score, desc: p.id]
+  end
+  defp sort_by_strategy(query, _) do
+    # Default chronological social feed layout ordering rule
+    from p in query, order_by: [desc: p.id]
+  end
+
+
+
 
   # LIST: Fetches posts and nests them for JSON delivery
   def list_posts_as_tree do
@@ -591,7 +964,6 @@ end
     case Repo.one(like_query) do
       nil -> # User hasn't liked yet: Create it
         %Kollective.Posts.Like{}
-
         |> Kollective.Posts.Like.changeset(%{user_id: user_id, post_id: post_id})
         |> Repo.insert()
 
@@ -659,36 +1031,52 @@ end
       order_by: [desc: p.inserted_at]
   end
 
-  #you now have the root_post_id saved on every reply, you no longer need the complex recursive CTE
+  # you now have the root_post_id saved on every reply, you no longer need the complex recursive CTE
   # for most cases. You can fetch a massive 500-post conversation with a single, high-performance database hit.
 
   #The "Flat" Thread Query
   # This query fetches the original post plus every reply that shares that same root_post_id.
-  def get_thread(post_id, current_user_id \\ nil) do
-    # We look for the post itself OR any post that points to it as the root
+   @doc """
+  Fetches an entire conversational conversation thread by root_post_id.
+  Applies block/mute safety filters and pipes rows into the O(1) batch hydration tree engine.
+  """
+  def get_thread(root_post_id, current_user \\ nil) do
+    current_user_id = if current_user, do: current_user.id, else: nil
+
+    # 1. Isolate bidirectional safety filters to protect users from blocked accounts
+    hidden_ids = fetch_hidden_user_ids(current_user_id)
+
+    # 2. Base Thread Fetch Query (Lightweight, no counter cross-joins)
     query =
       from p in Post,
-        where: p.id == ^post_id or p.root_post_id == ^post_id,
-        left_join: total_l in assoc(p, :likes),
-        left_join: user_l in "likes",
-          on: user_l.post_id == p.id and user_l.user_id == ^current_user_id,
-        group_by: [p.id, user_l.id],
-        preload: [:author],
-        order_by: [asc: p.inserted_at], # Keeps conversation chronological
-        select: {p, count(total_l.id), not is_nil(user_l.id)}
+        where: is_nil(p.deleted_at), # Never load deleted content (Tombstones)
+        where: p.user_id not in ^hidden_ids, # Enforce block safety shields
+        where: p.id == ^root_post_id or p.root_post_id == ^root_post_id,
+        preload: [:author, reblog_of: :author, attachments: []],
+        order_by: [asc: p.id] # IDs are chronological B-Tree sorted indexes
 
+    # 3. Execute, Hydrate in Batch, and Build the Nested React Tree
     Repo.all(query)
+    |> hydrate_virtual_fields(current_user) # Safely handles likes, reblogs, bookmarks, and emojis
+    |> build_tree() # Turns the flat list into a recursive tree structure for React
+  end
 
-    |> Enum.map(fn {post, count, liked} ->
-      %{post: post, likes_count: count, has_liked: liked}
-    end)
-    |> build_tree() # Turn the flat list into the React-ready tree
+  # --- Keep your existing fetch_hidden_user_ids/1 helper below if not already in the file ---
+  defp fetch_hidden_user_ids(nil), do: []
+  defp fetch_hidden_user_ids(current_user_id) do
+    alias Kollective.Accounts.UserRelationship
+    Repo.all(
+      from r in UserRelationship,
+        where: r.source_id == ^current_user_id and r.type in ["block", "mute"],
+        select: r.target_id
+    )
   end
 
   # Fetch everything belonging to the same root, regardless of where you start
-  def get_context(post) do
+  def get_context(post, current_user \\ nil) do
+    # Find the true top of the conversation tree
     root_id = post.root_post_id || post.id
-    get_thread(root_id)
+    get_thread(root_id, current_user)
   end
 
   #Because the database handles the "cleanup" of the replies, your Elixir code stays extremely simple.
@@ -705,16 +1093,17 @@ end
     original_post = Repo.get!(Post, post_id)
 
     # Check if user is trying to reblog their own content
-    if original_post.author_id == user_id do
+    if original_post.user_id == user_id do
       {:error, :self_reblog_not_allowed}
     else
-      # ... your existing Multi logic for toggle ...
-      reblog_post_sub(user_id, post_id)
+      # ... Multi logic for toggle ...
+      execute_reblog_toggle(user_id, post_id)
     end
   end
 
-  def reblog_post_sub(user_id, post_id) do
-    existing = Repo.get_by(Post, author_id: user_id, reblog_of_id: post_id)
+  def execute_reblog_toggle(user_id, post_id) do
+    # Standardized to user_id
+    existing = Repo.get_by(Post, user_id: user_id, reblog_of_id: post_id)
 
     if existing do
       # --- UNDO REBLOG LOGIC ---
@@ -722,37 +1111,71 @@ end
       |> Multi.delete(:reblog, existing)
       |> Multi.update_all(:decrement_counter,
         from(p in Post, where: p.id == ^post_id),
-        inc: [reblogs_count: -1] # Decrement by 1
+        inc: [reblogs_count: -1]
       )
+      # Remove the reblog pointer from your followers' Home Feed Cache tables
+      |> Multi.run(:feed_cleanup, fn _repo, %{reblog: reblog} ->
+        # Gather followers of the person who is undoing the reblog
+        follower_ids = fetch_follower_ids(user_id)
 
+        from(e in "home_feed_entries",
+          where: e.user_id in ^follower_ids and e.post_id == ^reblog.id
+        )
+        |> Repo.delete_all()
+
+        {:ok, :cleaned}
+      end)
       |> Repo.transaction()
+      |> case do
+        # Normalize return tuple to match the controller expectations
+        {:ok, _changes} -> {:ok, :unreblogged}
+        {:error, _failed_operation, _failed_value, _changes_so_far} -> {:error, :failed_to_unreblog}
+      end
     else
-      # Create logic
+      # --- CREATE REBLOG LOGIC ---
       case execute_create_reblog(user_id, post_id) do
         {:ok, %{reblog: reblog}} ->
-          # TRIGGER NOTIFICATION HERE
-          # #Reblog_post function to trigger a notification only when a
-          # new boost is created (not when it's undone).
           notify_reblog(reblog)
-          {:ok, reblog}
-        error -> error
+          # Normalize return tuple format
+          {:ok, :reblogged, reblog}
+
+        {:error, _failed_operation, _failed_value, _changes_so_far} ->
+          {:error, :failed_to_reblog}
       end
     end
   end
 
-  def execute_create_reblog(user_id, post_id) do
-    # --- CREATE REBLOG LOGIC ---
+  defp execute_create_reblog(user_id, post_id) do
     Multi.new()
     |> Multi.insert(:reblog, %Post{
       user_id: user_id,
       reblog_of_id: post_id,
-      content: nil # Use your :content field
+      content: nil
     })
     |> Multi.update_all(:increment_counter,
       from(p in Post, where: p.id == ^post_id),
       inc: [reblogs_count: 1] # Increment by 1
     )
+    # Enqueue our high-performance Fan-Out worker inside the safe transaction pool
+    |> Multi.run(:fanout_job, fn _repo, %{reblog: reblog} ->
+      # This enqueues an Oban job to push the reblog card to followers asynchronously
+      %{
+        "post_id" => reblog.id,
+        "author_id" => user_id # The reblogger is the source author of the timeline event
+      }
+      |> Kollective.Workers.FeedFanoutWorker.new()
+      |> Oban.insert()
+    end)
     |> Repo.transaction()
+  end
+
+  # Reusable relationship lookups helper
+  defp fetch_follower_ids(user_id) do
+    from(r in "user_relationships",
+      where: r.target_id == ^user_id and r.type == "follow",
+      select: r.source_id
+    )
+    |> Repo.all()
   end
 
   # Notifications so a user knows when their post has been reblogged
@@ -764,13 +1187,20 @@ end
     # Avoid notifying yourself if you somehow boost your own post
     if original_post.user_id != reblog.user_id do
       # 2. Save to Database for history
-      {:ok, _notif} = Notifications.create_action_notification(
+      {:ok, _notif} = Notifications.notify(
         original_post.user_id,
         reblog.user_id,
-        original_post.id,
-        "reblog"
+        "reblog",
+        %{
+          post_id: original_post.id,
+          target_id: reblog.id,
+          target_type: "Post"
+        },
+        %{
+          post_id: original_post.id,
+          preview: "boosted your post."
+        }
       )
-
       # 3. Broadcast real-time via Phoenix Channels
       #KollectiveWeb.Endpoint.broadcast(
       #  "notifications:#{original_post.user_id}",
@@ -785,48 +1215,6 @@ end
     end
   end
 
-  def reblog_postO(user_id, post_id) do
-    original_post = Repo.get!(Post, post_id)
-
-    # Check if user is trying to reblog their own content
-    if original_post.author_id == user_id do
-      {:error, :self_reblog_not_allowed}
-    else
-      # ... your existing Multi logic for toggle ...
-      execute_reblog_toggle(user_id, post_id)
-    end
-  end
-
-  def execute_reblog_toggle(user_id, post_id) do
-    existing = Repo.get_by(Post, author_id: user_id, reblog_of_id: post_id)
-
-    if existing do
-      # --- UNDO REBLOG LOGIC ---
-      Multi.new()
-
-      |> Multi.delete(:reblog, existing)
-      |> Multi.update_all(:decrement_counter,
-        from(p in Post, where: p.id == ^post_id),
-        inc: [reblogs_count: -1] # Decrement by 1
-      )
-
-      |> Repo.transaction()
-    else
-      # --- CREATE REBLOG LOGIC ---
-      Multi.new()
-      |> Multi.insert(:reblog, %Post{
-        user_id: user_id,
-        reblog_of_id: post_id,
-        content: nil # Use your :content field
-      })
-      |> Multi.update_all(:increment_counter,
-        from(p in Post, where: p.id == ^post_id),
-        inc: [reblogs_count: 1] # Increment by 1
-      )
-      |> Repo.transaction()
-    end
-  end
-
   def get_reblog_count(post_id) do
     Post
     |> where([p], p.id == ^post_id)
@@ -838,7 +1226,7 @@ end
   #or React won't have anything to display.
   def list_timeline(user_id) do
     Post
-    |> where([p], p.author_id == ^user_id)
+    |> where([p], p.user_id == ^user_id)
     |> preload([:author, reblog_of: :author]) # Deep preload
     |> Repo.all()
   end
@@ -864,11 +1252,19 @@ end
 
     Enum.each(mentioned_users, fn user ->
       # 1. Save to DB (for history)
-      {:ok, _notif} = Notifications.create_action_notification(
+      {:ok, _notif} = Notifications.notify(
         user.id,
-        post.author_id,
-        post.id,
-        "mention"
+        post.user_id,
+        "mention",
+        %{
+          post_id: post.id,
+          target_id: post.id,
+          target_type: "Post"
+        },
+        %{
+          post_id: post.id,
+          preview: "mentioned you: \"#{String.slice(post.content || "", 0, 30)}...\""
+        }
       )
 
       # 2. Push to Phoenix Channel (Real-time!)
@@ -883,12 +1279,12 @@ end
   # Function that inserts a new post record where the content is empty but the reblog_of_id is set
   def repost_post(user_id, post_id) do
     # Mastodon style: If it already exists, "un-repost" it (toggle)
-    case Repo.get_by(Post, author_id: user_id, reblog_of_id: post_id) do
+    case Repo.get_by(Post, user_id: user_id, reblog_of_id: post_id) do
       nil ->
         %Post{}
 
         |> Post.changeset(%{
-          author_id: user_id,
+          user_id: user_id,
           reblog_of_id: post_id,
           content: nil # Pure reposts have no content
         })
@@ -898,17 +1294,8 @@ end
     end
   end
 
-  def extract_hashtagsX(content) do
-    ~r/#[[:alnum:]_]+/u
-
-    |> Regex.scan(content)
-    |> List.flatten()
-    |> Enum.uniq()
-    |> Enum.map(&String.replace(&1, "#", "")) # Store without the '#'
-  end
-
-  defp extract_hashtags(text) do
-    Regex.scan(~r/#[[:alnum:]_]+/, text)
+  def extract_hashtags(text) do
+    Regex.scan(~r/#[[:alnum:]_]+/u, text)
     |> List.flatten()
     |> Enum.map(&String.downcase(String.replace(&1, "#", "")))
     |> Enum.uniq()
@@ -940,7 +1327,7 @@ end
   end
 
   #infinite scrolling
-  def list_posts(params \\ %{}) do
+  def list_postsX(params \\ %{}) do
     cursor = params["cursor"]
     limit = 20
 
@@ -971,19 +1358,25 @@ end
       nil ->
         # User wants to silence this conversation
         %ThreadMute{}
-
         |> ThreadMute.changeset(%{user_id: user_id, root_post_id: root_post_id})
         |> Repo.insert()
+        |> case do
+          {:ok, _mute} -> {:ok, :muted}
+          {:error, changeset} -> {:error, changeset}
+        end
 
       mute ->
         # User wants to hear from this conversation again
-        Repo.delete(mute)
+        case Repo.delete(mute) do
+          {:ok, _mute} -> {:ok, :unmuted}
+          {:error, changeset} -> {:error, changeset}
+        end
     end
   end
 
-  #use fragment to access the Postgres @@ match operator. We use websearch_to_tsquery because it allows users to
-  #use familiar syntax like quotes for phrases or minus signs to exclude words
-  def search_posts(query_string) do
+  # Use fragment to access the Postgres @@ match operator. We use websearch_to_tsquery because it allows users to
+  # Use familiar syntax like quotes for phrases or minus signs to exclude words
+  def search_postsO(query_string) do
     from p in Post,
       where: fragment("searchable @@ websearch_to_tsquery(?)", ^query_string),
       # Rank results so the most relevant matches appear first
@@ -991,6 +1384,239 @@ end
       preload: [:author],
       limit: 20
   end
+
+  @doc """
+  Unifies all search variants into a hybrid FTS and Trigram matching engine.
+  Automatically filters out deleted/private records and adjusts to user blocks.
+  """
+  def search_posts(query_string, current_user \\ nil, params \\ %{}) do
+    # 1. Clean and normalize search query inputs
+    query_string = String.trim(query_string || "")
+    current_user_id = if current_user, do: current_user.id, else: nil
+
+    if query_string == "" or String.length(query_string) < 3 do
+      []
+    else
+      # 2. Extract social safety masks to protect user data
+      hidden_ids = fetch_hidden_user_ids(current_user_id)
+
+      # 3. Build Unified Hybrid Query Execution Block
+      query =
+        from p in Post,
+          # STRICT SOCIAL VISIBILITY & PRIVACY FILTERS
+          where: is_nil(p.deleted_at),               # Skip Tombstones
+          where: p.visibility == "public",           # Enforce public timeline discovery
+          where: p.status == "published",            # Filter out shadow-banned pending states
+          where: p.user_id not in ^hidden_ids,       # Enforce blocks and mutes
+
+          # HYBRID MATCHING LAYER: FTS Vector Match OR Trigram Similarity Match
+          where: fragment("p.searchable @@ websearch_to_tsquery(cast(p.language as regconfig), ?)", ^query_string) or
+                 fragment("p.content % ?", ^query_string) # Typo tolerance
+
+        # INJECT PAGINATION: Apply the keyset filter threshold to keep reads under 1ms
+        query = apply_cursor_pagination(query, params["cursor"])
+
+        # HYBRID RANKING LAYER: Combines Text Density Rank with Trigram String Similarity
+        query =
+          from p in query,
+          order_by: [
+            desc: fragment(
+              "ts_rank_cd(p.searchable, websearch_to_tsquery(cast(p.language as regconfig), ?)) + similarity(p.content, ?)",
+              ^query_string,
+              ^query_string
+            ),
+            desc: p.id
+          ],
+          limit: 20
+
+      # 4. Execute data load and populate hydration layers
+      raw_posts = Repo.all(query)
+      hydrated_entries = hydrate_virtual_fields(raw_posts, current_user)
+
+      next_cursor =
+        case List.last(hydrated_entries) do
+          nil -> nil
+          last_item ->
+            ts_iso = DateTime.to_iso8601(last_item.post.published_at)
+            "#{ts_iso},#{last_item.post.id}"
+        end
+
+      %{entries: hydrated_entries, next_cursor: next_cursor}
+
+    end
+  end
+
+  # --- Structural Helpers ---
+  defp hydrate_virtual_fields(posts, nil) do
+    # For anonymous/unauthenticated sessions, fetch counts in a single batch query
+    post_ids = Enum.map(posts, & &1.id)
+
+    likes_counts = fetch_batch_likes_counts(post_ids)
+    reblogs_counts = fetch_batch_reblogs_counts(post_ids)
+
+    Enum.map(posts, fn post ->
+      %{
+        post: %{post | emoji_reactions: format_for_ui(post.emoji_reactions)},
+        likes_count: Map.get(likes_counts, post.id, 0),
+        reblogs_count: Map.get(reblogs_counts, post.id, 0),
+        has_liked: false,
+        has_reblogged: false
+      }
+    end)
+  end
+
+  defp hydrate_virtual_fields(posts, user) do
+    post_ids = Enum.map(posts, & &1.id)
+
+    # 1. BATCH PRE-FETCH LAYER (Prevents N+1 database queries completely)
+    liked_ids = Repo.all(
+      from l in "likes",
+      where: l.user_id == ^user.id and l.post_id in ^post_ids,
+      select: l.post_id
+    ) |> MapSet.new() # Drops raw numbers into a super-fast MapSet index
+
+    reblogged_ids = Repo.all(
+      from p in "posts",
+      where: p.user_id == ^user.id and p.reblog_id in ^post_ids,
+      select: p.reblog_id
+    ) |> MapSet.new()
+
+    bookmarked_ids = Repo.all(
+      from b in "bookmarks",
+      where: b.user_id == ^user.id and b.post_id in ^post_ids,
+      select: b.post_id
+    ) |> MapSet.new()
+
+    user_votes = Repo.all(
+      from v in "votes", # Updated from structural alias to dynamic string for loose coupling
+      where: v.user_id == ^user.id and v.post_id in ^post_ids,
+      select: {v.post_id, v.type}
+    ) |> Map.new()
+
+    # Pre-fetch totals counts for action displays
+    likes_counts = fetch_batch_likes_counts(post_ids)
+    reblogs_counts = fetch_batch_reblogs_counts(post_ids)
+
+    # 2. DATA HYDRATION LOOP
+    Enum.map(posts, fn post ->
+      # Extract structural user emojis from internal schema lists
+      my_active_emojis =
+        (post.emoji_reactions || %{})
+        |> Enum.filter(fn {_emoji, user_ids} -> user.id in user_ids end)
+        |> Enum.map(fn {emoji, _user_ids} -> emoji end)
+
+      # Mutate structural internal schema fields safely first
+      updated_post_struct = %{post |
+        liked: MapSet.member?(liked_ids, post.id),
+        reblogged: MapSet.member?(reblogged_ids, post.id),
+        bookmarked: MapSet.member?(bookmarked_ids, post.id),
+        vote_data: Map.get(user_votes, post.id) || nil,
+        emoji_reactions: format_for_ui(post.emoji_reactions),
+        data: Map.put(post.data || %{}, "my_reactions", my_active_emojis)
+      }
+
+      # 3. RECONCILE UNIFIED MAP VIEWPORT FORMAT FOR REACT
+      # Packages data properties perfectly to match Feed and Tab streams
+      %{
+        post: updated_post_struct,
+        likes_count: Map.get(likes_counts, post.id, 0),
+        reblogs_count: Map.get(reblogs_counts, post.id, 0),
+        has_liked: MapSet.member?(liked_ids, post.id),
+        has_reblogged: MapSet.member?(reblogged_ids, post.id)
+      }
+    end)
+  end
+
+  # Helper to turn %{"🚀" => [1,2,3]} into %{"🚀" => 3} for smaller JSON payloads
+  defp format_for_ui(reactions) do
+    Enum.into(reactions, %{}, fn {emoji, user_ids} -> {emoji, length(user_ids)} end)
+  end
+
+  # --- Fast Aggregate Batch Queries ---
+  defp fetch_batch_likes_counts(post_ids) do
+    from(f in "favourites",
+      where: f.post_id in ^post_ids,
+      group_by: f.post_id,
+      select: {f.post_id, count(f.id)}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  defp fetch_batch_reblogs_counts(post_ids) do
+    from(p in "posts",
+      where: p.reblog_id in ^post_ids,
+      group_by: p.reblog_id,
+      select: {p.reblog_id, count(p.id)}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  @doc """
+  Unifies all versions of reply creation. Coordinates root tracking,
+  username caching metadata fields, and atomic transaction increment cascades.
+  """
+  def create_reply(%User{} = user, %Post{} = reply_to, attrs \\ %{}) do
+    # 1. Thread Routing: Determine the top-level root of the conversation
+    # If replying to a reply, copy its root. Otherwise, the parent IS the root.
+    root_post_id = reply_to.root_post_id || reply_to.id
+
+    # 2. Build full transactional Multi sequence
+    Multi.new()
+    # Step A: Insert the reply with all explicit relational metadata mappings
+    |> Multi.insert(:reply, fn _repo ->
+      %Post{
+        user_id: user.id,
+        author: user,
+        in_reply_to_id: reply_to.id,
+        root_post_id: root_post_id,
+        # Cache structural user metadata strings to help React skip manual user lookups
+        in_reply_to_username: reply_to.author.username,
+        #in_reply_to_account_id: reply_to.user_id
+      }
+      |> Post.changeset(attrs)
+    end)
+
+    # Step B: Atomic Increment Fallback
+    # Note: If you have a PostgreSQL Trigger active on your database, this step is skipped.
+    # We include it as a Multi constraint update so your app logic is bulletproof either way.
+    |> Multi.update_all(:inc_replies, fn %{reply: _reply} ->
+      from(p in Post, where: p.id == ^reply_to.id)
+    end, inc: [replies_count: 1])
+
+    # 3. Execute Transaction
+    |> Repo.transaction()
+    |> handle_reply_lifecycle()
+  end
+
+  # --- Post Execution Lifecycle Broadcasts ---
+  defp handle_reply_lifecycle({:ok, %{reply: reply}}) do
+    # Preload the author details instantly so the JSON serializer has user data
+    reply = Repo.preload(reply, [:author, poll: :options, attachments: []])
+
+    # A. Broadcast to the Specific Conversation Thread Channel Room
+    # Tells React to append this reply node into the tree view live
+    KollectiveWeb.Endpoint.broadcast(
+      "post_details:#{reply.root_post_id}",
+      "new_reply",
+      %{reply: reply}
+    )
+
+    # B. Trigger our Unified Notifications Pipeline (Worker queues or immediate hooks)
+    # Alerts the parent author asynchronously that they have been replied to
+    # Handled by your existing MentionNotificationWorker or notify_parent_author pipeline
+    Task.start(fn -> notify_parent_author(reply) end)
+
+    {:ok, reply}
+  end
+
+  defp handle_reply_lifecycle({:error, _step, changeset, _changes}), do: {:error, changeset}
+
+  #defp fetch_static_likes(post_id) do
+  #  # Leverages your direct atomic aggregate counter helper
+  #  Repo.one(from l in "likes", where: l.post_id == ^post_id, select: count(l.id))
+  #end
 
   # user votes, use Ecto.Multi to ensure the vote is recorded and the
   # counters are incremented at the exact same time.

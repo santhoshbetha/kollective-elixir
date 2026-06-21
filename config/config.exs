@@ -33,7 +33,7 @@ config :kollective, Kollective.Repo,
 
 config :kollective, Oban,
   repo: Kollective.Repo,
-  queues: [default: 10, maintenance: 5],
+  queues: [default: 10, maintenance: 5, notifications: 10, media_processing: 10, discovery_updates: 15],
   plugins: [
     # 1. Essential: Cleans up Oban's own internal job history (keeping 24h of data)
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24}, # Recommended: cleans up Oban's own job table
@@ -46,6 +46,8 @@ config :kollective, Oban,
         # Sync official bot IPs daily at 01:00 AM
         {"0 1 * * *", Kollective.Workers.VideoTranscoder},
         #{"0 1 * * *", Kollective.Workers.BotIPSyncWorker}
+        # Runs at exactly 02:00 every single night
+        {"0 2 * * *", Kollective.Workers.ReconcileCountersWorker}
      ]}
   ]
 

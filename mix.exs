@@ -62,8 +62,13 @@ defmodule Kollective.MixProject do
       {:ex_aws, "~> 2.0"},
       {:ex_aws_s3, "~> 2.0"},
       {:geo_postgis, "~> 3.4"},
+      {:geospatial, "~> 0.3.4"},
+      {:hackney, "1.25.0", override: true},
       {:scrivener_ecto, "~> 2.0"},
+      {:hammer, "~> 6.1"},
+      {:inet_cidr, "~> 1.0.0"},
       {:lingua, "~> 0.3.0"},
+      {:cachex, "~> 3.2"},
       {:blurhash, "~> 2.0"}, # Pure Elixir implementation
       {:mogrify, "~> 0.9"}   # Optional: Helps convert images to raw pixels
     ]

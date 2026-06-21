@@ -28,17 +28,27 @@ defmodule Kollective.Accounts.Users do
   end
 
   # --- Follow / Unfollow ---
-
-  #Update your "Follow" Logic
-# First, modify your follow_user function to check if the target user is locked
-  # (using the is_locked boolean we added to the User schema earlier).
-  def follow_user(%User{} = source, %User{} = target) do
+  def follow_user1(%User{} = source, %User{} = target) do
     if target.is_locked do
       # 1. Create a follow_request instead of a follow
       case create_relationship(source.id, target.id, "follow_request") do
         {:ok, _} ->
           # TRIGGER NOTIFICATION HERE~
-          Notifications.create_action_notification(target.id, source.id, "follow_request")
+          # standalone app does not use federated follow_request tables [INDEX], a follow request on a private account is passed as an immediate,
+          # actionable transient notification over the WebSocket to trigger a live React UI toast pop-up
+          Notifications.notify(
+            target.id,          # The recipient (The private user receiving the request)
+            source.id,          # The actor (The user clicking follow)
+            "follow",           # Type maps to your verified registry string [INDEX]
+            %{
+              target_id: source.id,   # Links target_id to the sender for the follow button
+              target_type: "User"
+            },
+            %{
+              post_id: nil,
+              preview: "sent you a follow request." # Handled by your React toast notification listener
+            }
+          )
           {:ok, :requested}
         _ -> {:error, :failed}
       end
@@ -48,7 +58,19 @@ defmodule Kollective.Accounts.Users do
         case create_relationship(source.id, target.id, "follow") do
           {:ok, _rel} ->
             # After successful follow, you might want a "follow" notification too
-            Notifications.create_action_notification(target.id, source.id, "follow")
+            Notifications.notify(
+              target.id,          # recipient_id
+              source.id,          # actor_id
+              "follow",           # type
+              %{
+                target_id: target.id,
+                target_type: "User"
+              },
+              %{
+                post_id: nil,
+                preview: "started following you."
+              }
+            )
             # 2. Increment source's following count (+1)
             update_following_count(source.id, 1)
 
@@ -63,6 +85,107 @@ defmodule Kollective.Accounts.Users do
             {:ok, false}
         end
       end)
+    end
+  end
+
+  # Update your "Follow" Logic
+  # First, modify your follow_user function to check if the target user is locked
+  # (using the is_locked boolean we added to the User schema earlier).
+  def follow_user(%User{} = source, %User{} = target) do
+    # 1. Prevent users from following themselves (common social rule)
+    cond do
+      source.id == target.id ->
+        {:error, "You cannot follow yourself"}
+
+      # 2. Check if the target user is locked
+      target.is_locked ->
+        # 2a. Create a follow_request instead of a follow
+        case create_relationship(source.id, target.id, "follow_request") do
+          {:ok, _} ->
+            # TRIGGER NOTIFICATION HERE~
+            # standalone app does not use federated follow_request tables [INDEX], a follow request on a private account is passed as an immediate,
+            # actionable transient notification over the WebSocket to trigger a live React UI toast pop-up
+            Notifications.notify(
+              target.id,          # The recipient (The private user receiving the request)
+              source.id,          # The actor (The user clicking follow)
+              "follow",           # Type maps to your verified registry string [INDEX]
+              %{
+                target_id: source.id,   # Links target_id to the sender for the follow button
+                target_type: "User"
+              },
+              %{
+                post_id: nil,
+                preview: "sent you a follow request." # Handled by your React toast notification listener
+              }
+            )
+            {:ok, :requested}
+
+          _ ->
+            {:error, :failed}
+        end
+
+      true ->
+        # 3. Proceed with the normal follow + atomic counter update
+        # Look for an existing follow relationship
+        query = from r in UserRelationship,
+          where: r.source_id == ^source.id and
+                r.target_id == ^target.id and
+                r.type == "follow"
+
+        case Repo.one(query) do
+          # 1. Create the new follow
+          nil ->
+            # Create a new follow
+            Repo.transaction(fn ->
+              case create_relationship(source.id, target.id, "follow") do
+                {:ok, _rel} ->
+                  # After successful follow, you might want a "follow" notification too
+                  Notifications.notify(
+                    target.id,          # recipient_id
+                    source.id,          # actor_id
+                    "follow",           # type
+                    %{
+                      target_id: target.id,
+                      target_type: "User"
+                    },
+                    %{
+                      post_id: nil,
+                      preview: "started following you."
+                    }
+                  )
+                  # 3a. Increment source's following count (+1)
+                  update_following_count(source.id, 1)
+
+                  # 3b. Increment target's follower count (+1)
+                  update_follower_count(target.id, 1)
+
+                  {:ok, :followed}
+
+                {:error, _changeset} ->
+                  # If it failed (or was a conflict), don't update counts
+                  Repo.rollback(:failed_to_follow)
+                  {:ok, false}
+              end
+            end)
+
+          relationship ->
+            # Unfollow logic: Unfollow logic: delete record AND decrement counters
+            Repo.transaction(fn ->
+              case Repo.delete(relationship) do
+                {:ok, _} ->
+                  # Decrement source's following count (-1)
+                  update_following_count(source.id, -1)
+
+                  # Decrement target's follower count (-1)
+                  update_follower_count(target.id, -1)
+
+                  {:ok, :unfollowed}
+
+                {:error, _changeset} ->
+                  Repo.rollback(:failed_to_unfollow)
+              end
+            end)
+        end
     end
   end
 
@@ -322,12 +445,19 @@ defmodule Kollective.Accounts.Users do
     _follower = Repo.get!(User, relationship.source_id)
 
     # 1. Save to Database for the 'Notifications' tab
-    {:ok, _notif} = Notifications.create_action_notification(
-      relationship.target_id,  # The person being followed
-      relationship.source_id, # The person who clicked follow
-      "follow"
+    Notifications.notify(
+      relationship.target_id,          # recipient_id
+      relationship.source_id,          # actor_id
+      "follow",           # type
+      %{
+        target_id: relationship.target_id,
+        target_type: "User"
+      },
+      %{
+        post_id: nil,
+        preview: "started following you."
+      }
     )
-
     # 2. Real-time broadcast via Phoenix Channels
     #KollectiveWeb.Endpoint.broadcast(
     #  "notifications:#{relationship.target_id}",
