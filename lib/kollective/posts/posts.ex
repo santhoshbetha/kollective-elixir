@@ -12,21 +12,58 @@ defmodule Kollective.Posts.Posts do
   alias Kollective.Notifications.Notifications
   alias Kollective.Hashtags.Hashtag
   alias Kollective.Posts.ThreadMute
+  alias Kollective.Admins.Log, as: AdminLog
 
-  alias Kollective.Workers.{PublishPostWorker, PollExpiryWorker, VideoTranscoder, MentionNotificationWorker, FeedFanoutWorker, VoiceBroadcastWorker}
+  alias Kollective.Workers.{
+    PublishPostWorker,
+    PollExpiryWorker,
+    VideoTranscoder,
+    MentionNotificationWorker,
+    FeedFanoutWorker,
+    VoiceBroadcastWorker
+  }
+
+  alias Kollective.Posts.PostBookmark
 
   alias Kollective.Polls.Polls
   alias Kollective.Polls.Poll
   alias Kollective.Polls.PollVote
   alias Kollective.Polls.PollOption
   alias Kollective.Posts.CustomEmoji
+  alias Kollective.Posts.UserFilter
 
   alias Scrivener
 
+  @doc """
+  Safely fetches a single post by ID.
+  Preloads the author profile and media attachments in one single database pass.
+  Returns `{:ok, post}` or `{:error, :not_found}` to allow clean pattern matching.
+  """
+  def get_post(id) do
+    Post
+    |> preload([:author, :attachments])
+    |> Repo.get(id)
+    |> case do
+      nil -> {:error, :not_found}
+      post -> {:ok, post}
+    end
+  end
+
+  @doc """
+  Fetches a single post by ID, raising an Ecto.NoResultsError if not found.
+  Use this for internal system jobs or workers where a missing record means a hard failure.
+  """
+  def get_post!(id) do
+    Post
+    |> preload([:author, :attachments])
+    |> Repo.get!(id)
+  end
+
   def list_local_feed(user, params) do
     Post
-    |> where([p],
-        p.origin_district_l1 == ^user.district_l1_id or
+    |> where(
+      [p],
+      p.origin_district_l1 == ^user.district_l1_id or
         p.origin_district_l2 == ^user.district_l2_id or
         p.origin_district_l3 == ^user.district_l3_id
     )
@@ -64,37 +101,44 @@ defmodule Kollective.Posts.Posts do
     |> Scrivener.paginate(page: params["page"] || 1, repo: Repo)
     |> then(fn page ->
       # We preload ONLY for the entries on the current page
-      %{page | entries: Repo.preload(page.entries, [
-        :user,
-        :attachments,
-        # Only preload the current user's repost record to show "Active" state
-        reposts: from(r in Repost, where: r.user_id == ^user.id)
-      ])}
+      %{
+        page
+        | entries:
+            Repo.preload(page.entries, [
+              :user,
+              :attachments,
+              # Only preload the current user's repost record to show "Active" state
+              reposts: from(r in Repost, where: r.user_id == ^user.id)
+            ])
+      }
     end)
   end
 
   # Ring 1: Specific Local Districts (L1, L2, L3)
   defp base_local_query(user) do
     from p in Post,
-      where: p.origin_district_l1 == ^user.district_l1_id or
-             p.origin_district_l2 == ^user.district_l2_id or
-             p.origin_district_l3 == ^user.district_l3_id
+      where:
+        p.origin_district_l1 == ^user.district_l1_id or
+          p.origin_district_l2 == ^user.district_l2_id or
+          p.origin_district_l3 == ^user.district_l3_id
   end
 
   # Ring 2: Same State, but EXCLUDE Local Districts
   defp base_state_query(user) do
     from p in Post,
-      where: p.origin_state == ^user.state and
-             p.origin_district_l1 != ^user.district_l1_id and
-             p.origin_district_l2 != ^user.district_l2_id and
-             p.origin_district_l3 != ^user.district_l3_id
+      where:
+        p.origin_state == ^user.state and
+          p.origin_district_l1 != ^user.district_l1_id and
+          p.origin_district_l2 != ^user.district_l2_id and
+          p.origin_district_l3 != ^user.district_l3_id
   end
 
   # Ring 3: Same Country, but EXCLUDE State
   defp base_country_query(user) do
     from p in Post,
-      where: p.origin_country == ^user.country and
-             p.origin_state != ^user.state
+      where:
+        p.origin_country == ^user.country and
+          p.origin_state != ^user.state
   end
 
   # Ring 4: Outside Country
@@ -105,16 +149,18 @@ defmodule Kollective.Posts.Posts do
 
   @spec has_unread_posts?(any(), :country | :local | :state | :world) :: boolean()
   def has_unread_posts?(user, scope) do
-    query = case scope do
-      :local -> base_local_query(user)
-      :state -> base_state_query(user)
-      :country -> base_country_query(user)
-      :world -> base_world_query(user)
-    end
+    query =
+      case scope do
+        :local -> base_local_query(user)
+        :state -> base_state_query(user)
+        :country -> base_country_query(user)
+        :world -> base_world_query(user)
+      end
 
     query
     |> where([p], p.inserted_at > ^user.last_read_at)
-    |> Repo.exists?() # Efficiently returns true/false
+    # Efficiently returns true/false
+    |> Repo.exists?()
   end
 
   # Fetching a deep thread is tricky because a standard preload only goes one level deep.
@@ -137,7 +183,8 @@ defmodule Kollective.Posts.Posts do
     initial_query
     |> union_all(^recursion_query)
     |> recursive_ctes(true)
-    |> with_cte("thread", as: ^initial_query) # Simplification for example
+    # Simplification for example
+    |> with_cte("thread", as: ^initial_query)
     |> order_by([p], asc: p.inserted_at)
     |> Repo.all()
   end
@@ -149,7 +196,7 @@ defmodule Kollective.Posts.Posts do
     # Group posts by their parent/reply ID for fast lookup
     # Group the maps by the ID of the post they are replying to
     # Item structure: %{post: %Post{}, likes_count: 5, has_liked: true}
-    #posts_by_parent = Enum.group_by(posts, & &1.in_reply_to_id)
+    # posts_by_parent = Enum.group_by(posts, & &1.in_reply_to_id)
     posts_by_parent = Enum.group_by(posts, fn %{post: p} -> p.in_reply_to_id end)
 
     # Safely fall back to an empty list if there are no top-level posts found
@@ -160,6 +207,7 @@ defmodule Kollective.Posts.Posts do
   end
 
   defp nest_posts(nil, _), do: []
+
   defp nest_posts(posts, mapping) do
     Enum.map(posts, fn post ->
       # Recursively attach replies to each post
@@ -173,39 +221,190 @@ defmodule Kollective.Posts.Posts do
     end)
   end
 
+  # @doc """
+  # Unifies all pipeline variants for creating a post, including targeting overrides,
+  # content scrubbing, threading, atomic hashtag mappings, mention hooks, and media hooks.
+  # """
+  # def create_postX(%User{} = user, attrs \\ %{}) do
+  #   # 1. Resolve content parameter safety and metadata state variants
+  #   #    content_text = attrs["content"] || attrs[:content] || ""
+  #   #    is_reply = not is_nil(attrs["in_reply_to_id"] || attrs[:in_reply_to_id])
+
+  #   #    # 2. Extract references & metadata outside of transaction engine
+  #   #    # Extract tag names from content: ["elixir", "coding"]
+    #    tag_names = extract_hashtags(content_text)
+    #    mentioned_usernames = parse_mention_strings(content_text)
+
+    #    # 3. Determine safety layout (Shadowban checks / Restricted Keyword processing)
+    #    is_restricted = user.is_shadow_banned || contains_restricted_words?(content_text)
+    #    initial_status = if is_restricted, do: "pending", else: "published"
+
+    #    # 4. Thread routing: Identify immediate parent context & long-term root_post_id
+    #    attrs = append_threading_context(attrs)
+
+    #    # 5. Build full transactional Multi sequence
+    #    Multi.new()
+    #    # 1. Initial Schema Insertion with Core Properties & Geographic Targeting
+    #    # Base Post Insert & Geo Targeting
+    #    |> Multi.insert(:post, fn _repo ->
+    #      %Post{user_id: user.id, author: user, status: initial_status}
+    #      # Pass BOTH the raw attrs and the user struct to the targeting engine
+    #      |> validate_and_fix_targeting(attrs, user)
+    #    end)
+
+    # 2. Parse and Upsert Global Hashtags
+    # Extract and Upsert Hashtags (Convert names into Hashtag structs (Get or Create)
+    #    |> Multi.run(:hashtags, fn _repo, %{post: post} ->
+    #      tags = upsert_hashtag_entities(tag_names)
+
+    #      post
+    #      |> Repo.preload(:hashtags)
+    #      |> Post.changeset(%{})
+    #      |> Ecto.Changeset.put_assoc(:hashtags, tags)
+    #      |> Repo.update()
+    #    end)
+
+    # 3. Isolate Verified Mentions, Register Database Notifications, Link UI Fields
+    # Synchronize UI Mention Array Field Data Structure (No long text parsing in React)
+    # |> Multi.run(:notifications_and_mentions, fn _repo, %{hashtags: post} ->
+    #   # Filter for matching database entities
+    #   verified_mentions = Accounts.list_users_by_usernames(mentioned_usernames)
+    #
+    #   parent_author_id = get_parent_author_id(post)
+    #
+    #   # Register structural notify hooks for mentions
+    #   register_mention_notifications(post, verified_mentions, parent_author_id)
+    #
+    #   # Register structural notify hook for root author reply tracking
+    #   if is_reply, do: notify_parent_author(post)
+
+      # Save static serialization layout block to avoid complex extraction loops inside React UI
+    #  post
+    #  |> Ecto.Changeset.change(
+    #      mentions: Enum.map(verified_mentions, &%{id: &1.id, username: &1.username})
+    #    )
+    #    |> Repo.update()
+    #  end)
+
+    # 4. Media Handling Layout Support (Waffle file mappings)
+    # Attach Media (Waffle needs the Post ID for the folder path)
+    # (Waffle.Ecto moves the file to /uploads/posts/[ID]/...)
+    # |> Multi.run(:media_upload, fn _repo, %{notifications_and_mentions: post} ->
+    #  if attrs["media"] do
+    #    post
+    #    # Waffle.Ecto handles the file move
+    #  |> Post.changeset(%{media: attrs["media"]})
+    #  |> Repo.update()
+    #  else
+    #    {:ok, post}
+    #  end
+    #  end)
+
+    # 5. ASYNC LIFECYCLE SCHEDULING (Queue up Oban Jobs inside the Transaction)
+    # |> Multi.run(:oban_jobs, fn _repo, %{media_upload: post} ->
+    #   # Preload attachments to safely inspect content_types
+    #   post = Repo.preload(post, :attachments)
+    #
+    #   # A. Video Transcoding Worker Queue (Safer than Task.start)
+    #   post.attachments
+    #   |> Enum.filter(&String.starts_with?(&1.content_type || "", "video"))
+    #   |> Enum.each(fn att ->
+    #     %{attachment_id: att.id}
+    #     |> VideoTranscoder.new()
+    #     |> Oban.insert!()
+    #   end)
+    # end)
+    #    %{attachment_id: att.id}
+    #    |> VideoTranscoder.new()
+    #    |> Oban.insert!()
+    #  end)
+
+      # B. Mention Notification Worker Queue (Only if post is clear/published)
+    #  if post.status == "published" do
+    #    %{
+    #      "actor_id" => user.id,
+    #      "text" => post.content,
+    #      "post_id" => post.id,
+    #      "type" => "mention"
+    #    }
+    #    |> MentionNotificationWorker.new()
+    #    |> Oban.insert!()
+
+    # C. Send immediate reply tracking push if this is a chronological thread reply
+    #    if is_reply, do: notify_parent_author(post)
+    #  end
+
+    # D. Schedule Future Post Date Actions
+    #    if Map.has_key?(attrs, "published_at") &&
+    #           DateTime.compare(post.published_at, DateTime.utc_now()) == :gt do
+    #      %{post_id: post.id}
+    #      |> PublishPostWorker.new(scheduled_at: post.published_at)
+    #      |> Oban.insert!()
+    #    end
+
+    # E. Schedule Poll Expiry Closures
+    #    if post.poll do
+    #      %{poll_id: post.poll.id}
+    #      |> PollExpiryWorker.new(scheduled_at: post.poll.expires_at)
+    #      |> Oban.insert!()
+    #    end
+
+    # F. Return the post for further processing
+    #if post.visibility == "public" && post.status == "published" do
+    #  Queue up the background fan-out process seamlessly
+    #  %{post_id: post.id, author_id: post.user_id}
+    #  |> FeedFanoutWorker.new()
+    #  |> Oban.insert!()
+    #end
+
+  # {:ok, post}
+  #end)
+    # Execution Transaction Engine Block
+  #  |> Repo.transaction()
+  #  |> handle_lifecycle_broadcasts()
+  #end
+
   @doc """
-  Unifies all pipeline variants for creating a post, including targeting overrides,
-  content scrubbing, threading, atomic hashtag mappings, mention hooks, and media hooks.
+  The master standalone timeline post creator. Manages multi-tier parameters,
+  geographic targeting, hashtag upserts, asynchronous notifications, direct R2 image arrays,
+  and automated external OpenGraph web link crawling inside a single transaction sweep.
   """
-  def create_post(%User{} = user, attrs \\ %{}) do
+  def create_post(%Kollective.Accounts.User{} = user, attrs \\ %{}, uploaded_images \\ []) do
     # 1. Resolve content parameter safety and metadata state variants
-    content  = attrs["content"] || attrs[:content] || ""
+    content_text = attrs["content"] || attrs[:content] || ""
     is_reply = not is_nil(attrs["in_reply_to_id"] || attrs[:in_reply_to_id])
 
-    # 2. Extract references & metadata outside of transaction engine
-    # Extract tag names from content: ["elixir", "coding"]
-    tag_names           = extract_hashtags(content)
-    mentioned_usernames = parse_mention_strings(content)
+    # 2. Extract tags, mentions, and look for pasted external links outside the transaction window
+    tag_names = extract_hashtags(content_text)
+    mentioned_usernames = parse_mention_strings(content_text)
+    extracted_link = extract_first_url(content_text)
 
     # 3. Determine safety layout (Shadowban checks / Restricted Keyword processing)
-    is_restricted = user.is_shadow_banned || contains_restricted_words?(content)
+    is_restricted = user.is_shadow_banned || contains_restricted_words?(content_text)
     initial_status = if is_restricted, do: "pending", else: "published"
 
     # 4. Thread routing: Identify immediate parent context & long-term root_post_id
     attrs = append_threading_context(attrs)
 
+    # Base attributes merge containing your OpenGraph linkage hooks
+    final_attrs =
+      attrs
+      |> Map.put("user_id", user.id)
+      |> Map.put("link_url", extracted_link)
+
     # 5. Build full transactional Multi sequence
     Multi.new()
-    # 1. Initial Schema Insertion with Core Properties & Geographic Targeting
-    # Base Post Insert & Geo Targeting
+    # Step 1: Initial Schema Insertion with Core Properties & Geographic Targeting
     |> Multi.insert(:post, fn _repo ->
-      %Post{user_id: user.id, author: user, status: initial_status}
-      # Pass BOTH the raw attrs and the user struct to the targeting engine
-      |> validate_and_fix_targeting(attrs, user)
+      post_struct = %Post{user_id: user.id, author: user, status: initial_status}
+
+      # 🔄 FIX: Wrap the raw struct in a changeset before calling the targeting engine
+      post_struct
+      |> Post.changeset(final_attrs)
+      |> validate_and_fix_targeting(final_attrs, user)
     end)
 
-    # 2. Parse and Upsert Global Hashtags
-    # Extract and Upsert Hashtags (Convert names into Hashtag structs (Get or Create)
+    # Step 2: Parse and Upsert Global Hashtags
     |> Multi.run(:hashtags, fn _repo, %{post: post} ->
       tags = upsert_hashtag_entities(tag_names)
 
@@ -216,12 +415,9 @@ defmodule Kollective.Posts.Posts do
       |> Repo.update()
     end)
 
-    # 3. Isolate Verified Mentions, Register Database Notifications, Link UI Fields
-    # Synchronize UI Mention Array Field Data Structure (No long text parsing in React)
+    # Step 3: Isolate Verified Mentions, Register Database Notifications, Link UI Fields
     |> Multi.run(:notifications_and_mentions, fn _repo, %{hashtags: post} ->
-      # Filter for matching database entities
       verified_mentions = Accounts.list_users_by_usernames(mentioned_usernames)
-
       parent_author_id = get_parent_author_id(post)
 
       # Register structural notify hooks for mentions
@@ -232,31 +428,44 @@ defmodule Kollective.Posts.Posts do
 
       # Save static serialization layout block to avoid complex extraction loops inside React UI
       post
-      |> Ecto.Changeset.change(mentions: Enum.map(verified_mentions, & %{id: &1.id, username: &1.username}))
+      |> Ecto.Changeset.change(
+        mentions: Enum.map(verified_mentions, &%{id: &1.id, username: &1.username})
+      )
       |> Repo.update()
     end)
 
-    # 4. Media Handling Layout Support (Waffle file mappings)
-    # Attach Media (Waffle needs the Post ID for the folder path)
-    # (Waffle.Ecto moves the file to /uploads/posts/[ID]/...)
+    # Step 4: CLOUDFLARE R2 MULTI-IMAGE CAROUSEL ALLOCATION
+    # Connects direct frontend asset URLs directly to the post_attachments join table
     |> Multi.run(:media_upload, fn _repo, %{notifications_and_mentions: post} ->
-      if attrs["media"] do
-        post
-        |> Post.changeset(%{media: attrs["media"]}) # Waffle.Ecto handles the file move
-        |> Repo.update()
-      else
-        {:ok, post}
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      attachment_rows =
+        Enum.map(uploaded_images, fn img_url ->
+          %{
+            id: Kollective.Schemas.ULIDType.generate(),
+            post_id: post.id,
+            url: img_url,
+            media_type: "image/jpeg",
+            inserted_at: now,
+            updated_at: now
+          }
+        end)
+
+      if attachment_rows != [] do
+        Repo.insert_all("post_attachments", attachment_rows)
       end
+
+      {:ok, post}
     end)
 
-    # 5. ASYNC LIFECYCLE SCHEDULING (Queue up Oban Jobs inside the Transaction)
+    # Step 5: ASYNC LIFECYCLE SCHEDULING (Queue up Oban Jobs inside the Transaction)
     |> Multi.run(:oban_jobs, fn _repo, %{media_upload: post} ->
       # Preload attachments to safely inspect content_types
       post = Repo.preload(post, :attachments)
 
       # A. Video Transcoding Worker Queue (Safer than Task.start)
       post.attachments
-      |> Enum.filter(&String.starts_with?(&1.content_type || "", "video"))
+      |> Enum.filter(&String.starts_with?(&1.media_type || "", "video"))
       |> Enum.each(fn att ->
         %{attachment_id: att.id}
         |> VideoTranscoder.new()
@@ -273,29 +482,25 @@ defmodule Kollective.Posts.Posts do
         }
         |> MentionNotificationWorker.new()
         |> Oban.insert!()
-
-        # C. Send immediate reply tracking push if this is a chronological thread reply
-        if is_reply, do: notify_parent_author(post)
       end
 
-      # D. Schedule Future Post Date Actions
-      if Map.has_key?(attrs, "published_at") && DateTime.compare(post.published_at, DateTime.utc_now()) == :gt do
+      # C. Schedule Future Post Date Actions
+      if Map.has_key?(attrs, "published_at") &&
+           DateTime.compare(attrs["published_at"], DateTime.utc_now()) == :gt do
         %{post_id: post.id}
-        |> PublishPostWorker.new(scheduled_at: post.published_at)
+        |> PublishPostWorker.new(scheduled_at: attrs["published_at"])
         |> Oban.insert!()
       end
 
-      # E. Schedule Poll Expiry Closures
-      if post.poll do
+      # D. Schedule Poll Expiry Closures
+      if Map.has_key?(post, :poll) && post.poll do
         %{poll_id: post.poll.id}
         |> PollExpiryWorker.new(scheduled_at: post.poll.expires_at)
         |> Oban.insert!()
       end
 
-      # F. Return the post for further processing
-      {:ok, post}
-      if post.visibility == "public" && post.status == "published" do
-        # Queue up the background fan-out process seamlessly
+      # E. Queue up the background fan-out process seamlessly
+      if Map.get(post, :visibility) == "public" and post.status == "published" do
         %{post_id: post.id, author_id: post.user_id}
         |> FeedFanoutWorker.new()
         |> Oban.insert!()
@@ -305,7 +510,84 @@ defmodule Kollective.Posts.Posts do
     end)
     # Execution Transaction Engine Block
     |> Repo.transaction()
-    |> handle_lifecycle_broadcasts()
+    |> case do
+      {:ok, %{oban_jobs: final_post}} ->
+        # Step 6: O(1) ASYNC WEB CRAWLER INJECTION
+        # If an external link was pasted, trigger the background scraper task immediately
+        if extracted_link,
+          do: Task.start(fn -> crawl_and_populate_link_preview(final_post.id, extracted_link) end)
+
+        # Hydrate preloads for standard JSON response parsing
+        {:ok, Repo.preload(final_post, [:author, :attachments])}
+
+      {:error, _failed_step, changeset, _changes} ->
+        {:error, changeset}
+    end
+  end
+
+  # ─── ASYNC OPENGRAPH WEB CRAWLER MODULE (THE EXTRACTOR MATRIX) ───
+
+  defp crawl_and_populate_link_preview(post_id, url) do
+    case Req.get(url, headers: [{"user-agent", "KollectiveBot/1.0"}], retry: false) do
+      {:ok, %Req.Response{status: 200, body: html_body}} ->
+        {:ok, document} = Floki.parse_document(html_body)
+
+        title =
+          extract_og_tag(document, "og:title") || extract_text_tag(document, "title") ||
+            "Link Overview"
+
+        description =
+          extract_og_tag(document, "og:description") || extract_meta_description(document) || ""
+
+        preview_image = extract_og_tag(document, "og:image") || ""
+
+        # Update the main row caches natively
+        from(p in Post, where: p.id == ^post_id)
+        |> Repo.update_all(
+          set: [
+            link_title: String.slice(title, 0, 255),
+            link_description: String.slice(description, 0, 500),
+            link_preview_image: preview_image
+          ]
+        )
+
+        # Push real-time link preview cards out over the websocket network channel
+        Phoenix.PubSub.broadcast(
+          Kollective.PubSub,
+          "feed:public",
+          {:link_preview_ready,
+           %{
+             post_id: post_id,
+             link_title: title,
+             link_description: description,
+             link_preview_image: preview_image
+           }}
+        )
+
+      _ ->
+        :ok
+    end
+  end
+
+  # --- Internal Geometry & Parsing Sub-Helpers ---
+  defp extract_first_url(text) do
+    case Regex.run(~r/https?:\/\/[^\s]+/, text) do
+      [url] -> url
+      _ -> nil
+    end
+  end
+
+  defp extract_og_tag(doc, property) do
+    doc
+    |> Floki.find("meta[property=\"#{property}\"]")
+    |> Floki.attribute("content")
+    |> List.first()
+  end
+
+  defp extract_text_tag(doc, selector), do: doc |> Floki.find(selector) |> Floki.text()
+
+  defp extract_meta_description(doc) do
+    doc |> Floki.find("meta[name=\"description\"]") |> Floki.attribute("content") |> List.first()
   end
 
   # Identify the 'root_post_id' based on the reply target
@@ -314,13 +596,18 @@ defmodule Kollective.Posts.Posts do
       nil ->
         # Not a reply? This post is its own root (or root is nil)
         attrs
+
       reply_id ->
         # It's a reply! Find the root of the post we are replying to
         case Repo.get(Post, reply_id) do
-          nil -> attrs # Handle error: parent doesn't exist
+          # Handle error: parent doesn't exist
+          nil ->
+            attrs
+
           parent ->
             # If parent already has a root, use it. Otherwise, parent IS the root.
             root_id = parent.root_post_id || parent.id
+
             attrs
             |> Map.put("root_post_id", root_id)
             |> Map.put("in_reply_to_id", reply_id)
@@ -332,21 +619,24 @@ defmodule Kollective.Posts.Posts do
     organization_id = Ecto.Changeset.get_field(changeset, :organization_id)
 
     case user.type do
-      :regular ->
+      :citizen ->
         changeset
         |> Ecto.Changeset.put_change(:origin_country, user.country)
         |> Ecto.Changeset.put_change(:origin_state, user.state)
         |> Ecto.Changeset.put_change(:origin_city_id, user.city_id)
-        |> Ecto.Changeset.put_change(:origin_district_l1, user.district_l1_id) #district_l1 is the same as district_l1
-        |> Ecto.Changeset.put_change(:origin_district_l2, user.district_l2_id) #district_l2 is the same as district_l2
-        |> Ecto.Changeset.put_change(:origin_district_l3, user.district_l3_id) #district_l3 is the same as district_l3
+        # district_l1 is the same as district_l1
+        |> Ecto.Changeset.put_change(:origin_district_l1, user.district_l1_id)
+        # district_l2 is the same as district_l2
+        |> Ecto.Changeset.put_change(:origin_district_l2, user.district_l2_id)
+        # district_l3 is the same as district_l3
+        |> Ecto.Changeset.put_change(:origin_district_l3, user.district_l3_id)
 
       type when type in [:scholar, :journalist] or not is_nil(organization_id) ->
         # SCHOLAR/JOURNALIST: Can choose both :target_scope
         # OR posting on behalf of an Organization
         # AND a custom :origin district/state from the React UI.
         # We only set defaults if the UI left them blank.
-       changeset
+        changeset
         |> Ecto.Changeset.cast(attrs, [
           :target_scope,
           :origin_state,
@@ -374,29 +664,31 @@ defmodule Kollective.Posts.Posts do
     Enum.map(tag_names, fn name ->
       Repo.insert!(
         %Hashtag{name: name},
-        on_conflict: [set: [name: name]], # If it exists, just "update" the name (do nothing)
+        # If it exists, just "update" the name (do nothing)
+        on_conflict: [set: [name: name]],
         conflict_target: :name
       )
     end)
   end
 
   defp register_mention_notifications(post, verified_mentions, parent_author_id) do
-     Enum.each(verified_mentions, fn recipient ->
+    Enum.each(verified_mentions, fn recipient ->
       if recipient.id != post.user_id && recipient.id != parent_author_id do
-        {:ok, notification} = Notifications.notify(
-          recipient.id,
-          post.user_id,
-          "mention",
-          %{
-            post_id: post.id,
-            target_id: post.id,
-            target_type: "Post"
-          },
-          %{
-            post_id: post.id,
-            preview: "mentioned you: \"#{String.slice(post.content || "", 0, 30)}...\""
-          }
-        )
+        {:ok, notification} =
+          Notifications.notify(
+            recipient.id,
+            post.user_id,
+            "mention",
+            %{
+              post_id: post.id,
+              target_id: post.id,
+              target_type: "Post"
+            },
+            %{
+              post_id: post.id,
+              preview: "mentioned you: \"#{String.slice(post.content || "", 0, 30)}...\""
+            }
+          )
 
         KollectiveWeb.Endpoint.broadcast(
           "user_notifications:#{recipient.id}",
@@ -413,53 +705,56 @@ defmodule Kollective.Posts.Posts do
 
       if parent && parent.user_id != post.user_id do
         Notifications.notify_reply(
-          parent.user_id,     # The recipient (The author of the parent post being replied to)
-          post.user_id,       # The actor (The user writing the reply)
-          post                # The full %Post{} struct reply node object [INDEX]
+          # The recipient (The author of the parent post being replied to)
+          parent.user_id,
+          # The actor (The user writing the reply)
+          post.user_id,
+          # The full %Post{} struct reply node object
+          post
         )
       end
     end
   end
 
   # Post Execution Real-Time WebSocket Broadcasting Orchestrator
-  defp handle_lifecycle_broadcasts({:ok, %{oban_jobs: post}}) do
-    if post.category == :voice do
-      # Pushes a notification to all listeners on the 'voice_alerts' topic
-      KollectiveWeb.Endpoint.broadcast("voice_alert", "new_voice_post", %{post: post})
-    end
+  #defp handle_lifecycle_broadcasts({:ok, %{oban_jobs: post}}) do
+  #  if post.category == :voice do
+  #    # Pushes a notification to all listeners on the 'voice_alerts' topic
+  #    KollectiveWeb.Endpoint.broadcast("voice_alert", "new_voice_post", %{post: post})
+  #  end
 
-    broadcast_feed_updates(post)
+  #  broadcast_feed_updates(post)
 
-    {:ok, Repo.preload(post, [:author, poll: :options, attachments: []])}
-  end
-  defp handle_lifecycle_broadcasts({:error, _step, changeset, _changes}), do: {:error, changeset}
+  #  {:ok, Repo.preload(post, [:author, poll: :options, attachments: []])}
+  #end
 
-  defp broadcast_feed_updates(post) do
-    if post.visibility == "public" && post.status == "published" do
+  #defp handle_lifecycle_broadcasts({:error, _step, changeset, _changes}), do: {:error, changeset}
+
+  #defp broadcast_feed_updates(post) do
+  #    if post.visibility == "public" && post.status == "published" do
       # Feed Real-Time Engine Routing
 
       # A. THE HOME/PUBLIC FEED (Standard Live Feed)
-      KollectiveWeb.Endpoint.broadcast("feed:public", "new_post", %{post: post})
+  #    KollectiveWeb.Endpoint.broadcast("feed:public", "new_post", %{post: post})
 
       # B. THE DISCOVERY/GEO FEED (Local, State, Country, World Tabs)
-      # We broadcast to a single internal topic.
-      # Your DiscoveryChannel will "catch" this and decide if it matches the user's tab.
-      KollectiveWeb.Endpoint.broadcast("discovery_updates", "new_discovery_post", %{post: post})
-
       # Micro-Targeting Discovery Channels
-      local_topic = "discovery:local:#{post.origin_state}:#{post.origin_district_l1}"
-      KollectiveWeb.Endpoint.broadcast(local_topic, "new_post", %{post: post})
+  #    local_topic = "discovery:local:#{post.origin_state}:#{post.origin_district_l1}"
+  #    KollectiveWeb.Endpoint.broadcast(local_topic, "new_post", %{post: post})
 
-      if post.target_scope in [:state, :country, :world] do
-        state_topic = "discovery:state:#{post.origin_state}"
-        KollectiveWeb.Endpoint.broadcast(state_topic, "new_post", %{post: post})
-      end
-    end
-  end
+  #    if post.target_scope in [:state, :country, :world] do
+  #      state_topic = "discovery:state:#{post.origin_state}"
+  #      KollectiveWeb.Endpoint.broadcast(state_topic, "new_post", %{post: post})
+  #    end
+  #  end
+  #end
 
   defp contains_restricted_words?(content) do
     keywords = Kollective.Moderation.Moderation.list_restricted_keywords()
-    Enum.any?(keywords, fn k -> String.contains?(String.downcase(content), String.downcase(k.word)) end)
+
+    Enum.any?(keywords, fn k ->
+      String.contains?(String.downcase(content), String.downcase(k.word))
+    end)
   end
 
   defp parse_mention_strings(text) do
@@ -470,7 +765,7 @@ defmodule Kollective.Posts.Posts do
   end
 
   defp get_parent_author_id(post) do
-     if post.in_reply_to_id, do: Repo.get(Post, post.in_reply_to_id).user_id, else: nil
+    if post.in_reply_to_id, do: Repo.get(Post, post.in_reply_to_id).user_id, else: nil
   end
 
   @doc """
@@ -479,15 +774,17 @@ defmodule Kollective.Posts.Posts do
   """
   def create_voice_post(%User{} = user, attrs \\ %{}, opts \\ []) do
     # 1. Resolve Expiration Metrics (Supporting :none, :one_day, :one_week)
-    expiry_type = Keyword.get(opts, :expiry, :none) || attrs["expiry_type"] || attrs[:expiry_type] || :none
+    expiry_type =
+      Keyword.get(opts, :expiry, :none) || attrs["expiry_type"] || attrs[:expiry_type] || :none
 
     expires_at =
       case expiry_type do
-        :one_day   -> DateTime.utc_now() |> DateTime.add(24, :hour) |> DateTime.truncate(:second)
-        "one_day"  -> DateTime.utc_now() |> DateTime.add(24, :hour) |> DateTime.truncate(:second)
-        :one_week  -> DateTime.utc_now() |> DateTime.add(7, :day) |> DateTime.truncate(:second)
+        :one_day -> DateTime.utc_now() |> DateTime.add(24, :hour) |> DateTime.truncate(:second)
+        "one_day" -> DateTime.utc_now() |> DateTime.add(24, :hour) |> DateTime.truncate(:second)
+        :one_week -> DateTime.utc_now() |> DateTime.add(7, :day) |> DateTime.truncate(:second)
         "one_week" -> DateTime.utc_now() |> DateTime.add(7, :day) |> DateTime.truncate(:second)
-        _          -> nil # Permanent megaphone voice post
+        # Permanent megaphone voice post
+        _ -> nil
       end
 
     # 2. Package and force core category variables
@@ -508,7 +805,8 @@ defmodule Kollective.Posts.Posts do
           "author_id" => user.id
         }
         |> VoiceBroadcastWorker.new()
-        |> Oban.insert!() # Inserts safely via Oban backing pools
+        # Inserts safely via Oban backing pools
+        |> Oban.insert!()
 
         {:ok, post}
 
@@ -525,7 +823,7 @@ defmodule Kollective.Posts.Posts do
   # The Fan-Out Cache (home_feed_entries): Captures explicit relationships (Followed People and Organizations).
   # The Real-Time Local Discovery Layer (Post): Pulls neighborhood geographic district content dynamically on the fly.
 
-  #By running one single database pass, it merges your pre-computed home_feed_entries cache records with a dynamic subquery fallback
+  # By running one single database pass, it merges your pre-computed home_feed_entries cache records with a dynamic subquery fallback
   # scan of public district entries. It then sorts the unified timeline chronologically using a high-performance tuple-based keyset
   # cursor query to eliminate duplicate items and screen jumps.
 
@@ -536,13 +834,16 @@ defmodule Kollective.Posts.Posts do
   Returns: %{entries: [...], next_cursor: "published_at,id"}
   """
   def list_home_feed(user, opts \\ []) do
-    limit        = Keyword.get(opts, :limit, 20)
+    limit = Keyword.get(opts, :limit, 20)
     after_cursor = Keyword.get(opts, :after)
 
     # 1. Fetch IDs of followed people and organizations
     # Fetch relationship matrices up front to prevent nested database lookups
     following_ids = Accounts.get_following_ids(user.id)
     followed_org_ids = Accounts.get_followed_org_ids(user.id)
+
+    # 2. Combine the IDs to build a comprehensive timeline pool
+    author_ids_pool = following_ids ++ followed_org_ids ++ [user.id]
 
     # Compile bidirectional block/mute exclusion subqueries safely
     hidden_ids_subquery =
@@ -559,19 +860,16 @@ defmodule Kollective.Posts.Posts do
         where: p.user_id not in subquery(hidden_ids_subquery),
 
         # UNIFIED TIERS: Follows + Organizations + Geofenced Districts
-        where: (
-          # TIER 1: People I follow
-          p.user_id in ^following_ids or
-          # TIER 2: Organizations I follow (The Newspaper/Group Feed)
-          p.organization_id in ^followed_org_ids or
-          # TIER 3: Local Districts (Automatic Connections)
-          (p.visibility == "public" and (
-            u.city_id == ^user.city_id or
-            (u.district_l3 == ^user.district_l3 and u.state == ^user.state) or
-            (u.district_l2 == ^user.district_l2 and u.state == ^user.state) or
-            (u.district_l1 == ^user.district_l1 and u.country == ^user.country)
-          ))
-        )
+        # TIER 1: People I follow
+        # TIER 2: Local Districts (Automatic Connections)
+        where:
+          p.user_id in ^author_ids_pool or
+            (p.visibility == "public" and
+               (u.city_id == ^user.city_id or
+                  (u.district_l3 == ^user.district_l3 and u.state == ^user.state) or
+                  (u.district_l2 == ^user.district_l2 and u.state == ^user.state) or
+                  (u.district_l1 == ^user.district_l1 and u.country == ^user.country)) and
+               p.status == "published")
 
     # 3. Apply Multi-Column Row Comparison Cursor Pagination
     # Implements the standard keyset evaluation syntax: (published_at, id) < (cursor_ts, cursor_id)
@@ -584,6 +882,7 @@ defmodule Kollective.Posts.Posts do
 
             from p in query,
               where: p.published_at < ^ts or (p.published_at == ^ts and p.id < ^target_id)
+
           _ ->
             query
         end
@@ -595,13 +894,13 @@ defmodule Kollective.Posts.Posts do
     raw_posts =
       query
       # Primary prioritization layer: voice posts float first, fallback to cron sequence
-      |> order_by([p], [
+      |> order_by([p],
         desc: fragment("CASE WHEN ? = 'voice' THEN 1 ELSE 0 END", p.category),
         desc: p.published_at,
         desc: p.id
-      ])
+      )
       |> limit(^limit)
-      |> preload([:author, :organization, reblog_of: :author, attachments: []])
+      |> preload([:author, :organization, reblog_of: :attachments])
       |> Repo.all()
 
     # 5. Process Batch Virtual Hydration Loop (Prevents N+1 database queries entirely)
@@ -610,7 +909,9 @@ defmodule Kollective.Posts.Posts do
     # 6. Generate the Multi-Column Token for React infinite scroll loops
     next_cursor =
       case List.last(hydrated_entries) do
-        nil -> nil
+        nil ->
+          nil
+
         last_item ->
           ts_iso = DateTime.to_iso8601(last_item.post.published_at)
           "#{ts_iso},#{last_item.post.id}"
@@ -621,9 +922,6 @@ defmodule Kollective.Posts.Posts do
       next_cursor: next_cursor
     }
   end
-
-
-
 
   # --- Cached Feed Pipeline Strategy ---
   # Reading the Caching Timeline (High-Performance Read)
@@ -640,9 +938,10 @@ defmodule Kollective.Posts.Posts do
     query =
       from e in "home_feed_entries",
         where: e.user_id == ^user_id,
-        join: p in Posts.Post, on: p.id == e.post_id,
+        join: p in Post, on: p.id == e.post_id,
         left_join: total_l in assoc(p, :likes),
-        left_join: user_l in "likes", on: user_l.post_id == p.id and user_l.user_id == ^user_id,
+        left_join: user_l in "likes",
+        on: user_l.post_id == p.id and user_l.user_id == ^user_id,
         group_by: [e.id, p.id, user_l.id],
         preload: [p: :author],
         order_by: [desc: e.id],
@@ -652,7 +951,7 @@ defmodule Kollective.Posts.Posts do
     # 2. FIX: Use explicit keyword binding (`as: :entries`) or position-independent fragments
     query =
       if cursor do
-        from([e, ...] in query, where: e.id < ^cursor)
+        from [entries: e] in query, where: e.id < ^cursor
       else
         query
       end
@@ -684,9 +983,8 @@ defmodule Kollective.Posts.Posts do
   # --- TAB 1: ALL ACTIVITY (Text + Voice Combined) ---
   def list_global_activity_feed(user, params \\ %{}) do
     build_global_base_query(user)
-
     |> apply_feed_cursor(params["cursor"] || params[:cursor])
-    |> order_by([p], [desc: p.published_at, desc: p.id])
+    |> order_by([p], desc: p.published_at, desc: p.id)
     |> execute_global_feed_query(user)
   end
 
@@ -696,9 +994,8 @@ defmodule Kollective.Posts.Posts do
   def list_global_text_feed(user, params \\ %{}) do
     build_global_base_query(user)
     |> where([p], p.category != "voice")
-
     |> apply_feed_cursor(params["cursor"] || params[:cursor])
-    |> order_by([p], [desc: p.published_at, desc: p.id])
+    |> order_by([p], desc: p.published_at, desc: p.id)
     |> execute_global_feed_query(user)
   end
 
@@ -707,7 +1004,8 @@ defmodule Kollective.Posts.Posts do
   # --- TAB 3: VOICES (Trending Voice Logs Hotness Grid) ---
   def list_global_trending_voices_feed(user, params \\ %{}) do
     limit = 20
-    after_trend_cursor = params["cursor"] || params[:cursor] # Expected format: "trending_score,id"
+    # Expected format: "trending_score,id"
+    after_trend_cursor = params["cursor"] || params[:cursor]
 
     query =
       build_global_base_query(user)
@@ -720,8 +1018,14 @@ defmodule Kollective.Posts.Posts do
           [score_str, id_str] ->
             target_score = String.to_float(score_str)
             target_id = String.to_integer(id_str)
-            from p in query, where: p.trending_score < ^target_score or (p.trending_score == ^target_score and p.id < ^target_id)
-          _ -> query
+
+            from p in query,
+              where:
+                p.trending_score < ^target_score or
+                  (p.trending_score == ^target_score and p.id < ^target_id)
+
+          _ ->
+            query
         end
       else
         query
@@ -730,7 +1034,7 @@ defmodule Kollective.Posts.Posts do
     # Primary sort by hotness velocity, chronological fallback
     raw_posts =
       query
-      |> order_by([p], [desc: p.trending_score, desc: p.id])
+      |> order_by([p], desc: p.trending_score, desc: p.id)
       |> limit(^limit)
       |> Repo.all()
 
@@ -752,7 +1056,11 @@ defmodule Kollective.Posts.Posts do
     # Isolate safety relation masks to filter out harassers or blocked profiles instantly
     hidden_ids =
       if user_id do
-        Repo.all(from r in "user_relationships", where: r.source_id == ^user_id and r.type in ["block", "mute"], select: r.target_id)
+        Repo.all(
+          from r in "user_relationships",
+            where: r.source_id == ^user_id and r.type in ["block", "mute"],
+            select: r.target_id
+        )
       else
         []
       end
@@ -766,13 +1074,18 @@ defmodule Kollective.Posts.Posts do
 
   # --- Shared Execution & Cursor Appenders ---
   defp apply_feed_cursor(query, cursor) when cursor in [nil, "", "nil"], do: query
+
   defp apply_feed_cursor(query, cursor) do
     case String.split(cursor, ",") do
       [ts_str, id_str] ->
         {:ok, ts, _} = DateTime.from_iso8601(ts_str)
         target_id = String.to_integer(id_str)
-        from p in query, where: p.published_at < ^ts or (p.published_at == ^ts and p.id < ^target_id)
-      _ -> query
+
+        from p in query,
+          where: p.published_at < ^ts or (p.published_at == ^ts and p.id < ^target_id)
+
+      _ ->
+        query
     end
   end
 
@@ -789,7 +1102,9 @@ defmodule Kollective.Posts.Posts do
 
     next_cursor =
       case List.last(hydrated_entries) do
-        nil -> nil
+        nil ->
+          nil
+
         last_item ->
           ts_iso = DateTime.to_iso8601(last_item.post.published_at)
           "#{ts_iso},#{last_item.post.id}"
@@ -797,14 +1112,6 @@ defmodule Kollective.Posts.Posts do
 
     %{entries: hydrated_entries, next_cursor: next_cursor}
   end
-
-
-
-
-
-
-
-
 
   # This engine incorporates your complete architectural requirement stack: mutual block safety subqueries,
   # soft-delete tombstones, JSONB GIN-indexed mention arrays, cursor-based keyset pagination,
@@ -814,33 +1121,62 @@ defmodule Kollective.Posts.Posts do
   category sorting matrices, user mentions tracking, geographic tier geofencing,
   and keyset cursor pagination into a single optimized query stream.
   """
-  def list_posts(current_user \\ nil, params \\ %{}) do
+  def list_posts_for_feed(current_user \\ nil, params \\ %{}) do
     limit = 20
     current_user_id = if current_user, do: current_user.id, else: nil
 
-    # 1. Chain filter scopes together dynamically
-    query =
+    # 1. Start the base query
+    base_query =
       base_post_query()
-      |> apply_bidirectional_block_masks(current_user_id) # Block safety shields
-      |> filter_by_category(params["category"])          # Text vs. Voice filter
-      |> filter_by_mentions(current_user_id, params["filter"]) # JSONB GIN mention arrays
+      # Block safety shields
+      |> apply_bidirectional_block_masks(current_user_id)
+      # Text vs. Voice filter
+      |> filter_by_category(params["category"])
+      # JSONB GIN mention arrays
+      |> filter_by_mentions(current_user_id, params["filter"])
 
-      # ─── GEOGRAPHIC SCOPE ENGINE INJECTED HERE ───
-      # Filters by Local, State, Country, or World based on user properties
-      |> filter_by_geographic_scope(current_user, params["scope"])
+    # 🔄 Only apply geographic geofencing if there is a logged-in user!
+    query =
+      if current_user do
+        # Filters by Local, State, Country, or World based on user properties
+        filter_by_geographic_scope(base_query, current_user, params["scope"])
+      else
+        # For anonymous guests, fall back to global content, or enforce a fallback scope
+        where(base_query, [p], p.visibility == "public" and p.status == "published")
+      end
 
-      |> apply_cursor_pagination(params["cursor"] || params["max_id"]) # Fast Keyset Pagination
-      |> sort_by_strategy(params["sort"]) # Top vs. Chronological
+    # Continue the rest of your dynamic query builder pipeline without interruption
+    query =
+      query
+      |> apply_cursor_pagination(params["cursor"] || params["max_id"])
+      |> sort_by_strategy(params["sort"])
       |> limit(^limit)
-
       # Preload core dependencies using clean base constraints
-      |> preload([:author, reblog_of: ^base_post_query(), hashtags: []])
+      |> preload([:author, reblog_of: ^base_post_query(), hashtags: [], attachments: []])
 
     # 2. Execute Data Read and Fetch Cursor Token
     raw_posts = Repo.all(query)
 
-    # 3. Batch Virtual Hydration Loop (Prevents N+1 database queries entirely)
-    hydrated_entries = hydrate_virtual_fields(raw_posts, current_user)
+    # 2. Fetch the user's compiled regex mute pattern from RAM
+    # 🔄 FIX: Only fetch and compile regex mute filters if a user is logged in
+    mute_regex =
+      if current_user do
+        active_filters = Kollective.Posts.UserFilter.list_active_filters(current_user)
+        Kollective.Posts.UserFilter.compile_regex_pattern(active_filters)
+      else
+        nil
+      end
+
+    # 3. Prune out posts that match the user's muted phrases
+    filtered_posts =
+      if mute_regex do
+        Enum.reject(raw_posts, fn item -> Regex.run(mute_regex, item.post.content || "") end)
+      else
+        raw_posts
+      end
+
+    # 4. Batch Virtual Hydration Loop (Prevents N+1 database queries entirely)
+    hydrated_entries = hydrate_virtual_fields(filtered_posts, current_user)
 
     next_cursor =
       case List.last(hydrated_entries) do
@@ -860,15 +1196,19 @@ defmodule Kollective.Posts.Posts do
   end
 
   # NEW: Unified Geographic Geofencing Filters
-  defp filter_by_geographic_scope(query, nil, _scope), do: query # Anonymous users bypass geo-fencing
-  defp filter_by_geographic_scope(query, _user, scope) when scope in [nil, "", "world", "all"], do: query
+  # Anonymous users bypass geo-fencing
+  defp filter_by_geographic_scope(query, nil, _scope), do: query
+
+  defp filter_by_geographic_scope(query, _user, scope) when scope in [nil, "", "world", "all"],
+    do: query
 
   defp filter_by_geographic_scope(query, user, "local") do
     # LOCAL: Post matches at least one of the user's micro-districts
     from p in query,
-      where: p.origin_district_l1 == ^user.district_l1_id or
-             p.origin_district_l2 == ^user.district_l2_id or
-             p.origin_district_l3 == ^user.district_l3_id
+      where:
+        p.origin_district_l1 == ^user.district_l1_id or
+          p.origin_district_l2 == ^user.district_l2_id or
+          p.origin_district_l3 == ^user.district_l3_id
   end
 
   defp filter_by_geographic_scope(query, user, "state") do
@@ -888,6 +1228,7 @@ defmodule Kollective.Posts.Posts do
   end
 
   defp apply_bidirectional_block_masks(query, nil), do: query
+
   defp apply_bidirectional_block_masks(query, current_user_id) do
     # Subquery tracking accounts blocked by the active user
     blocked_ids_subquery =
@@ -903,6 +1244,7 @@ defmodule Kollective.Posts.Posts do
   end
 
   defp apply_cursor_pagination(query, max_id) when max_id in [nil, "", "nil"], do: query
+
   defp apply_cursor_pagination(query, max_id) do
     # Keyset pagination rule ensures index scans run under 1ms on massive datasets
     id_threshold = if is_binary(max_id), do: String.to_integer(max_id), else: max_id
@@ -913,6 +1255,7 @@ defmodule Kollective.Posts.Posts do
     # Prioritizes emergency audio content sorting layers dynamically
     from p in query, where: p.category == "voice", order_by: [desc: p.urgency_level]
   end
+
   defp filter_by_category(query, _), do: query
 
   defp filter_by_mentions(query, current_user_id, "mentions") when not is_nil(current_user_id) do
@@ -920,27 +1263,29 @@ defmodule Kollective.Posts.Posts do
     mention_target = [%{id: current_user_id}]
     from p in query, where: fragment("? @> ?", p.mentions, ^mention_target)
   end
+
   defp filter_by_mentions(query, _, _), do: query
 
   defp sort_by_strategy(query, "top") do
     # Rank by hotness score velocity, using sequential chronological fallbacks
     from p in query, order_by: [desc: p.score, desc: p.id]
   end
+
   defp sort_by_strategy(query, _) do
     # Default chronological social feed layout ordering rule
     from p in query, order_by: [desc: p.id]
   end
 
-
-
-
   # LIST: Fetches posts and nests them for JSON delivery
   def list_posts_as_tree do
     Post
-    |> preload(:author) # <--- Fetch user data (username, avatar, etc.)
-    |> order_by(asc: :inserted_at) # Keeps conversation order
+    # <--- Fetch user data (username, avatar, etc.)
+    |> preload(:author)
+    # Keeps conversation order
+    |> order_by(asc: :inserted_at)
     |> Repo.all()
-    |> build_tree() # Uses the build_tree function from above
+    # Uses the build_tree function from above
+    |> build_tree()
   end
 
   def list_posts_with_likes do
@@ -948,21 +1293,24 @@ defmodule Kollective.Posts.Posts do
       left_join: l in assoc(p, :likes),
       group_by: p.id,
       # Use select_merge to fill the virtual field
-      select_merge: %{likes_count: count(l.id)} # Calculates total likes
+      # Calculates total likes
+      select_merge: %{likes_count: count(l.id)}
     )
-
     |> preload([:author, :root_post])
     |> Repo.all()
-    |> build_tree() # Your existing tree-building logic
+    # Your existing tree-building logic
+    |> build_tree()
   end
 
   # POST `/api/posts/${postId}/like`
   def toggle_like(user_id, post_id) do
     # Look for an existing like by this user for this post
-    like_query = from(l in Kollective.Posts.Like, where: l.user_id == ^user_id and l.post_id == ^post_id)
+    like_query =
+      from(l in Kollective.Posts.Like, where: l.user_id == ^user_id and l.post_id == ^post_id)
 
     case Repo.one(like_query) do
-      nil -> # User hasn't liked yet: Create it
+      # User hasn't liked yet: Create it
+      nil ->
         %Kollective.Posts.Like{}
         |> Kollective.Posts.Like.changeset(%{user_id: user_id, post_id: post_id})
         |> Repo.insert()
@@ -973,11 +1321,12 @@ defmodule Kollective.Posts.Posts do
     end
   end
 
-  #To get the like count immediately after a click without re-fetching the whole tree, use this helper
+  # To get the like count immediately after a click without re-fetching the whole tree, use this helper
   def get_like_count(post_id) do
-    query = from l in Like,
-      where: l.post_id == ^post_id,
-      select: count(l.id)
+    query =
+      from l in Like,
+        where: l.post_id == ^post_id,
+        select: count(l.id)
 
     Repo.one(query)
   end
@@ -1002,10 +1351,11 @@ defmodule Kollective.Posts.Posts do
     query =
       from p in Post,
         where: p.user_id in ^following_ids,
-        where: p.user_id not in ^hidden_ids, # Exclude blocked/muted users
+        # Exclude blocked/muted users
+        where: p.user_id not in ^hidden_ids,
         left_join: total_l in assoc(p, :likes),
         left_join: user_l in "likes",
-          on: user_l.post_id == p.id and user_l.user_id == ^current_user_id,
+        on: user_l.post_id == p.id and user_l.user_id == ^current_user_id,
         group_by: [p.id, user_l.id],
         # Critical: Preload author of the post AND author of the reblogged post
         preload: [:author, reblog_of: :author],
@@ -1034,9 +1384,9 @@ defmodule Kollective.Posts.Posts do
   # you now have the root_post_id saved on every reply, you no longer need the complex recursive CTE
   # for most cases. You can fetch a massive 500-post conversation with a single, high-performance database hit.
 
-  #The "Flat" Thread Query
+  # The "Flat" Thread Query
   # This query fetches the original post plus every reply that shares that same root_post_id.
-   @doc """
+  @doc """
   Fetches an entire conversational conversation thread by root_post_id.
   Applies block/mute safety filters and pipes rows into the O(1) batch hydration tree engine.
   """
@@ -1049,22 +1399,29 @@ defmodule Kollective.Posts.Posts do
     # 2. Base Thread Fetch Query (Lightweight, no counter cross-joins)
     query =
       from p in Post,
-        where: is_nil(p.deleted_at), # Never load deleted content (Tombstones)
-        where: p.user_id not in ^hidden_ids, # Enforce block safety shields
+        # Never load deleted content (Tombstones)
+        where: is_nil(p.deleted_at),
+        # Enforce block safety shields
+        where: p.user_id not in ^hidden_ids,
         where: p.id == ^root_post_id or p.root_post_id == ^root_post_id,
         preload: [:author, reblog_of: :author, attachments: []],
-        order_by: [asc: p.id] # IDs are chronological B-Tree sorted indexes
+        # IDs are chronological B-Tree sorted indexes
+        order_by: [asc: p.id]
 
     # 3. Execute, Hydrate in Batch, and Build the Nested React Tree
     Repo.all(query)
-    |> hydrate_virtual_fields(current_user) # Safely handles likes, reblogs, bookmarks, and emojis
-    |> build_tree() # Turns the flat list into a recursive tree structure for React
+    # Safely handles likes, reblogs, bookmarks, and emojis
+    |> hydrate_virtual_fields(current_user)
+    # Turns the flat list into a recursive tree structure for React
+    |> build_tree()
   end
 
   # --- Keep your existing fetch_hidden_user_ids/1 helper below if not already in the file ---
   defp fetch_hidden_user_ids(nil), do: []
+
   defp fetch_hidden_user_ids(current_user_id) do
     alias Kollective.Accounts.UserRelationship
+
     Repo.all(
       from r in UserRelationship,
         where: r.source_id == ^current_user_id and r.type in ["block", "mute"],
@@ -1079,15 +1436,15 @@ defmodule Kollective.Posts.Posts do
     get_thread(root_id, current_user)
   end
 
-  #Because the database handles the "cleanup" of the replies, your Elixir code stays extremely simple.
-  #You just delete the one post, and Postgres handles the rest in a single transaction.
+  # Because the database handles the "cleanup" of the replies, your Elixir code stays extremely simple.
+  # You just delete the one post, and Postgres handles the rest in a single transaction.
   def delete_post(%Post{} = post) do
     # This single call will trigger the database to wipe out
     # every reply and every nested reply automatically.
     Repo.delete(post)
   end
 
-  #Reblog:
+  # Reblog:
 
   def reblog_post(user_id, post_id) do
     original_post = Repo.get!(Post, post_id)
@@ -1109,7 +1466,8 @@ defmodule Kollective.Posts.Posts do
       # --- UNDO REBLOG LOGIC ---
       Multi.new()
       |> Multi.delete(:reblog, existing)
-      |> Multi.update_all(:decrement_counter,
+      |> Multi.update_all(
+        :decrement_counter,
         from(p in Post, where: p.id == ^post_id),
         inc: [reblogs_count: -1]
       )
@@ -1128,8 +1486,11 @@ defmodule Kollective.Posts.Posts do
       |> Repo.transaction()
       |> case do
         # Normalize return tuple to match the controller expectations
-        {:ok, _changes} -> {:ok, :unreblogged}
-        {:error, _failed_operation, _failed_value, _changes_so_far} -> {:error, :failed_to_unreblog}
+        {:ok, _changes} ->
+          {:ok, :unreblogged}
+
+        {:error, _failed_operation, _failed_value, _changes_so_far} ->
+          {:error, :failed_to_unreblog}
       end
     else
       # --- CREATE REBLOG LOGIC ---
@@ -1152,16 +1513,19 @@ defmodule Kollective.Posts.Posts do
       reblog_of_id: post_id,
       content: nil
     })
-    |> Multi.update_all(:increment_counter,
+    |> Multi.update_all(
+      :increment_counter,
       from(p in Post, where: p.id == ^post_id),
-      inc: [reblogs_count: 1] # Increment by 1
+      # Increment by 1
+      inc: [reblogs_count: 1]
     )
     # Enqueue our high-performance Fan-Out worker inside the safe transaction pool
     |> Multi.run(:fanout_job, fn _repo, %{reblog: reblog} ->
       # This enqueues an Oban job to push the reblog card to followers asynchronously
       %{
         "post_id" => reblog.id,
-        "author_id" => user_id # The reblogger is the source author of the timeline event
+        # The reblogger is the source author of the timeline event
+        "author_id" => user_id
       }
       |> Kollective.Workers.FeedFanoutWorker.new()
       |> Oban.insert()
@@ -1186,32 +1550,22 @@ defmodule Kollective.Posts.Posts do
 
     # Avoid notifying yourself if you somehow boost your own post
     if original_post.user_id != reblog.user_id do
-      # 2. Save to Database for history
-      {:ok, _notif} = Notifications.notify(
-        original_post.user_id,
-        reblog.user_id,
-        "reblog",
-        %{
-          post_id: original_post.id,
-          target_id: reblog.id,
-          target_type: "Post"
-        },
-        %{
-          post_id: original_post.id,
-          preview: "boosted your post."
-        }
-      )
-      # 3. Broadcast real-time via Phoenix Channels
-      #KollectiveWeb.Endpoint.broadcast(
-      #  "notifications:#{original_post.user_id}",
-      #  "new_reblog",
-      #  %{
-      #    who: reblog_author.username,
-      #    post_id: original_post.id,
-      #    content_preview: String.slice(original_post.content || "", 0, 30)
-      #  }
-      #)
-
+      # 2. Broadcast real-time via Phoenix Channels
+      {:ok, _notif} =
+        Notifications.notify(
+          original_post.user_id,
+          reblog.user_id,
+          "reblog",
+          %{
+            post_id: original_post.id,
+            target_id: reblog.id,
+            target_type: "Post"
+          },
+          %{
+            post_id: original_post.id,
+            preview: "boosted your post."
+          }
+        )
     end
   end
 
@@ -1223,21 +1577,21 @@ defmodule Kollective.Posts.Posts do
   end
 
   # When fetching a user's feed, you must preload the reblog_of post and its author,
-  #or React won't have anything to display.
+  # or React won't have anything to display.
   def list_timeline(user_id) do
     Post
     |> where([p], p.user_id == ^user_id)
-    |> preload([:author, reblog_of: :author]) # Deep preload
+    # Deep preload
+    |> preload([:author, reblog_of: :author])
     |> Repo.all()
   end
 
-  #Mentions
+  # Mentions
   def extract_mentions(content) do
     # Regex to find @username or @username@domain
     mention_regex = ~r/@[a-z0-9_]+(@[a-z0-9\.\-]+)?/i
 
     Regex.scan(mention_regex, content)
-
     |> List.flatten()
     |> Enum.uniq()
     # Optional: strip the '@' to get just the username for searching
@@ -1251,28 +1605,22 @@ defmodule Kollective.Posts.Posts do
     mentioned_users = Kollective.Repo.all(from u in User, where: u.username in ^usernames)
 
     Enum.each(mentioned_users, fn user ->
-      # 1. Save to DB (for history)
-      {:ok, _notif} = Notifications.notify(
-        user.id,
-        post.user_id,
-        "mention",
-        %{
-          post_id: post.id,
-          target_id: post.id,
-          target_type: "Post"
-        },
-        %{
-          post_id: post.id,
-          preview: "mentioned you: \"#{String.slice(post.content || "", 0, 30)}...\""
-        }
-      )
-
-      # 2. Push to Phoenix Channel (Real-time!)
-      #Endpoint.broadcast("notifications:#{user.id}", "new_mention", %{
-      #  from: post.author.username,
-      #  post_id: post.id,
-      #  excerpt: String.slice(post.content, 0, 50)
-      #})
+      # 1.Push to Phoenix Channel (Real-time!)
+      {:ok, _notif} =
+        Notifications.notify(
+          user.id,
+          post.user_id,
+          "mention",
+          %{
+            post_id: post.id,
+            target_id: post.id,
+            target_type: "Post"
+          },
+          %{
+            post_id: post.id,
+            preview: "mentioned you: \"#{String.slice(post.content || "", 0, 30)}...\""
+          }
+        )
     end)
   end
 
@@ -1282,13 +1630,14 @@ defmodule Kollective.Posts.Posts do
     case Repo.get_by(Post, user_id: user_id, reblog_of_id: post_id) do
       nil ->
         %Post{}
-
         |> Post.changeset(%{
           user_id: user_id,
           reblog_of_id: post_id,
-          content: nil # Pure reposts have no content
+          # Pure reposts have no content
+          content: nil
         })
         |> Repo.insert()
+
       existing ->
         Repo.delete(existing)
     end
@@ -1306,27 +1655,29 @@ defmodule Kollective.Posts.Posts do
     name = String.downcase(name)
 
     %Hashtag{name: name}
-
-    |> Hashtag.changeset(%{}) # Just to ensure it's valid
+    # Just to ensure it's valid
+    |> Hashtag.changeset(%{})
     |> Repo.insert(
-      on_conflict: [set: [name: name]], # If it exists, just "update" the name (do nothing)
+      # If it exists, just "update" the name (do nothing)
+      on_conflict: [set: [name: name]],
       conflict_target: :name,
       returning: true
     )
     |> case do
       {:ok, hashtag} -> hashtag
-      {:error, _} -> Repo.get_by!(Hashtag, name: name) # Fallback if insert fails
+      # Fallback if insert fails
+      {:error, _} -> Repo.get_by!(Hashtag, name: name)
     end
   end
 
   def list_posts_with_tags do
     Post
-
-    |> preload([:author, :hashtags]) # <--- Fetches the tags
+    # <--- Fetches the tags
+    |> preload([:author, :hashtags])
     |> Repo.all()
   end
 
-  #infinite scrolling
+  # infinite scrolling
   def list_postsX(params \\ %{}) do
     cursor = params["cursor"]
     limit = 20
@@ -1351,8 +1702,9 @@ defmodule Kollective.Posts.Posts do
 
   # Allows a user to "turn off" notifications for a specific thread.
   def toggle_thread_mute(user_id, root_post_id) do
-    query = from tm in ThreadMute,
-      where: tm.user_id == ^user_id and tm.root_post_id == ^root_post_id
+    query =
+      from tm in ThreadMute,
+        where: tm.user_id == ^user_id and tm.root_post_id == ^root_post_id
 
     case Repo.one(query) do
       nil ->
@@ -1404,27 +1756,37 @@ defmodule Kollective.Posts.Posts do
       query =
         from p in Post,
           # STRICT SOCIAL VISIBILITY & PRIVACY FILTERS
-          where: is_nil(p.deleted_at),               # Skip Tombstones
-          where: p.visibility == "public",           # Enforce public timeline discovery
-          where: p.status == "published",            # Filter out shadow-banned pending states
-          where: p.user_id not in ^hidden_ids,       # Enforce blocks and mutes
+          # Skip Tombstones
+          where: is_nil(p.deleted_at),
+          # Enforce public timeline discovery
+          where: p.visibility == "public",
+          # Filter out shadow-banned pending states
+          where: p.status == "published",
+          # Enforce blocks and mutes
+          where: p.user_id not in ^hidden_ids,
 
           # HYBRID MATCHING LAYER: FTS Vector Match OR Trigram Similarity Match
-          where: fragment("p.searchable @@ websearch_to_tsquery(cast(p.language as regconfig), ?)", ^query_string) or
-                 fragment("p.content % ?", ^query_string) # Typo tolerance
-
-        # INJECT PAGINATION: Apply the keyset filter threshold to keep reads under 1ms
-        query = apply_cursor_pagination(query, params["cursor"])
-
-        # HYBRID RANKING LAYER: Combines Text Density Rank with Trigram String Similarity
-        query =
-          from p in query,
-          order_by: [
-            desc: fragment(
-              "ts_rank_cd(p.searchable, websearch_to_tsquery(cast(p.language as regconfig), ?)) + similarity(p.content, ?)",
-              ^query_string,
+          # Typo tolerance
+          where:
+            fragment(
+              "p.searchable @@ websearch_to_tsquery(cast(p.language as regconfig), ?)",
               ^query_string
-            ),
+            ) or
+              fragment("p.content % ?", ^query_string)
+
+      # INJECT PAGINATION: Apply the keyset filter threshold to keep reads under 1ms
+      query = apply_cursor_pagination(query, params["cursor"])
+
+      # HYBRID RANKING LAYER: Combines Text Density Rank with Trigram String Similarity
+      query =
+        from p in query,
+          order_by: [
+            desc:
+              fragment(
+                "ts_rank_cd(p.searchable, websearch_to_tsquery(cast(p.language as regconfig), ?)) + similarity(p.content, ?)",
+                ^query_string,
+                ^query_string
+              ),
             desc: p.id
           ],
           limit: 20
@@ -1435,19 +1797,201 @@ defmodule Kollective.Posts.Posts do
 
       next_cursor =
         case List.last(hydrated_entries) do
-          nil -> nil
+          nil ->
+            nil
+
           last_item ->
             ts_iso = DateTime.to_iso8601(last_item.post.published_at)
             "#{ts_iso},#{last_item.post.id}"
         end
 
       %{entries: hydrated_entries, next_cursor: next_cursor}
+    end
+  end
 
+  @doc """
+  Rejects an active post for compliance reasons. Keeps the row in the DB,
+  notifies the author, and commands timelines to hide it.
+  """
+  def reject_post(admin, post_id, reason) do
+    post = Repo.get!(Post, post_id)
+
+    Multi.new()
+    # 1. Commute status strings and store metadata context fields
+    |> Multi.update(
+      :post,
+      Post.changeset(post, %{
+        status: "rejected",
+        rejection_reason: reason,
+        rejected_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        rejected_by_id: admin.id
+      })
+    )
+
+    # 2. File an administrative compliance trace
+    |> Multi.insert(:admin_log, %AdminLog{
+      action: "post_rejected",
+      target_id: post.id,
+      target_type: "Post",
+      user_id: admin.id,
+      metadata: %{reason: reason}
+    })
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{post: updated_post}} ->
+        # GLOBAL TIMELINE CLEANUP SCRUB
+        Phoenix.PubSub.broadcast(
+          Kollective.PubSub,
+          "feed:public",
+          {:post_rejected, updated_post.id}
+        )
+
+        # PRIVATE ALERT: Notify the author why their post was pulled
+        Notifications.notify(
+          updated_post.user_id,
+          admin.id,
+          # Matches your snake_case notification types registry
+          "report",
+          %{
+            post_id: updated_post.id,
+            target_id: updated_post.id,
+            target_type: "Post",
+            metadata: %{sub_type: "post_rejected"}
+          },
+          %{
+            post_id: updated_post.id,
+            preview: "✕ Your post was rejected by moderation. Reason: #{reason}"
+          }
+        )
+
+        {:ok, updated_post}
+
+      {:error, _step, changeset, _} ->
+        {:error, changeset}
+    end
+  end
+
+  @doc """
+  Allows the author of a rejected post to submit an appeal justification string.
+  """
+  def appeal_post(user, post_id, reason) do
+    post = Repo.get!(Post, post_id) |> Repo.preload(:author)
+
+    # Security Guard: Only allow an appeal if the post is rejected and belongs to the user
+    if post.status == "rejected" and post.user_id == user.id do
+      Multi.new()
+      # Update status to appealed
+      |> Multi.update(
+        :post,
+        Post.changeset(post, %{
+          status: "appealed",
+          appeal_reason: reason,
+          appealed_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+      )
+
+      # File compliance log entry
+      |> Multi.insert(:admin_log, %AdminLog{
+        action: "appeal_submitted",
+        target_id: post.id,
+        target_type: "Post",
+        user_id: user.id,
+        metadata: %{appeal_reason: reason}
+      })
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{post: appealed_post}} ->
+          # Push immediately to the Admin Panel real-time reports stream channel
+          Phoenix.PubSub.broadcast(
+            Kollective.PubSub,
+            "admin_notifications",
+            {:new_appeal,
+             %{
+               id: appealed_post.id,
+               content: appealed_post.content,
+               appeal_reason: appealed_post.appeal_reason,
+               username: user.username
+             }}
+          )
+
+          {:ok, appealed_post}
+
+        {:error, _step, changeset, _} ->
+          {:error, changeset}
+      end
+    else
+      {:error, :unauthorized}
+    end
+  end
+
+  @doc """
+  Reverses a rejection lock, bringing the post back to life.
+  Streams it back into users' active React timelines in real-time.
+  """
+  def restore_post(admin, post_id) do
+    post = Repo.get!(Post, post_id)
+
+    Multi.new()
+    # 1. Reset state strings and clear out old block metadata fields
+    |> Multi.update(
+      :post,
+      Post.changeset(post, %{
+        status: "published",
+        rejected_at: nil,
+        rejected_by_id: nil,
+        rejection_reason: nil,
+        appeal_reason: nil,
+        appealed_at: nil
+      })
+    )
+
+    # 2. File administrative restoration log
+    |> Multi.insert(:admin_log, %AdminLog{
+      action: "post_restored",
+      target_id: post.id,
+      target_type: "Post",
+      user_id: admin.id
+    })
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{post: restored_post}} ->
+        # Hydrate preloads to supply your exact uniform React payload format
+        # Employs our fast batch virtual fields hydration wrapper model
+        hydrated_posts =
+          Repo.preload(restored_post, [:author, reblog_of: :author, attachments: []])
+
+        # Hydrates likes count, has_liked map signatures
+        [payload] = hydrate_virtual_fields([hydrated_posts], nil)
+
+        # Stream the post back into everyone's active viewport feeds instantly
+        Phoenix.PubSub.broadcast(Kollective.PubSub, "feed:public", {:post_restored, payload})
+
+        # Send successful appeal alert to the author
+        Notifications.notify(
+          restored_post.user_id,
+          admin.id,
+          "participation_accepted",
+          %{
+            post_id: restored_post.id,
+            target_id: restored_post.id,
+            target_type: "Post",
+            metadata: %{sub_type: "appeal_approved"}
+          },
+          %{
+            post_id: restored_post.id,
+            preview: "🎉 Good news! Your appeal was successful. Your post is restored."
+          }
+        )
+
+        {:ok, restored_post}
+
+      {:error, _step, changeset, _} ->
+        {:error, changeset}
     end
   end
 
   # --- Structural Helpers ---
-  defp hydrate_virtual_fields(posts, nil) do
+  def hydrate_virtual_fields(posts, nil) do
     # For anonymous/unauthenticated sessions, fetch counts in a single batch query
     post_ids = Enum.map(posts, & &1.id)
 
@@ -1465,33 +2009,43 @@ defmodule Kollective.Posts.Posts do
     end)
   end
 
-  defp hydrate_virtual_fields(posts, user) do
+  def hydrate_virtual_fields(posts, user) do
     post_ids = Enum.map(posts, & &1.id)
 
     # 1. BATCH PRE-FETCH LAYER (Prevents N+1 database queries completely)
-    liked_ids = Repo.all(
-      from l in "likes",
-      where: l.user_id == ^user.id and l.post_id in ^post_ids,
-      select: l.post_id
-    ) |> MapSet.new() # Drops raw numbers into a super-fast MapSet index
+    liked_ids =
+      Repo.all(
+        from l in "likes",
+          where: l.user_id == ^user.id and l.post_id in ^post_ids,
+          select: l.post_id
+      )
+      # Drops raw numbers into a super-fast MapSet index
+      |> MapSet.new()
 
-    reblogged_ids = Repo.all(
-      from p in "posts",
-      where: p.user_id == ^user.id and p.reblog_id in ^post_ids,
-      select: p.reblog_id
-    ) |> MapSet.new()
+    reblogged_ids =
+      Repo.all(
+        from p in "posts",
+          where: p.user_id == ^user.id and p.reblog_id in ^post_ids,
+          select: p.reblog_id
+      )
+      |> MapSet.new()
 
-    bookmarked_ids = Repo.all(
-      from b in "bookmarks",
-      where: b.user_id == ^user.id and b.post_id in ^post_ids,
-      select: b.post_id
-    ) |> MapSet.new()
+    bookmarked_ids =
+      Repo.all(
+        from b in "bookmarks",
+          where: b.user_id == ^user.id and b.post_id in ^post_ids,
+          select: b.post_id
+      )
+      |> MapSet.new()
 
-    user_votes = Repo.all(
-      from v in "votes", # Updated from structural alias to dynamic string for loose coupling
-      where: v.user_id == ^user.id and v.post_id in ^post_ids,
-      select: {v.post_id, v.type}
-    ) |> Map.new()
+    user_votes =
+      Repo.all(
+        # Updated from structural alias to dynamic string for loose coupling
+        from v in "votes",
+          where: v.user_id == ^user.id and v.post_id in ^post_ids,
+          select: {v.post_id, v.type}
+      )
+      |> Map.new()
 
     # Pre-fetch totals counts for action displays
     likes_counts = fetch_batch_likes_counts(post_ids)
@@ -1499,6 +2053,11 @@ defmodule Kollective.Posts.Posts do
 
     # 2. DATA HYDRATION LOOP
     Enum.map(posts, fn post ->
+      # Calculate membership states exactly ONCE per iteration pass to save CPU cycles
+      is_liked? = MapSet.member?(liked_ids, post.id)
+      is_reblogged? = MapSet.member?(reblogged_ids, post.id)
+      is_bookmarked? = MapSet.member?(bookmarked_ids, post.id)
+
       # Extract structural user emojis from internal schema lists
       my_active_emojis =
         (post.emoji_reactions || %{})
@@ -1506,13 +2065,12 @@ defmodule Kollective.Posts.Posts do
         |> Enum.map(fn {emoji, _user_ids} -> emoji end)
 
       # Mutate structural internal schema fields safely first
-      updated_post_struct = %{post |
-        liked: MapSet.member?(liked_ids, post.id),
-        reblogged: MapSet.member?(reblogged_ids, post.id),
-        bookmarked: MapSet.member?(bookmarked_ids, post.id),
-        vote_data: Map.get(user_votes, post.id) || nil,
-        emoji_reactions: format_for_ui(post.emoji_reactions),
-        data: Map.put(post.data || %{}, "my_reactions", my_active_emojis)
+      updated_post_struct = %{
+        post
+        | bookmarked: is_bookmarked?,
+          vote_data: Map.get(user_votes, post.id) || nil,
+          emoji_reactions: format_for_ui(post.emoji_reactions),
+          data: Map.put(post.data || %{}, "my_reactions", my_active_emojis)
       }
 
       # 3. RECONCILE UNIFIED MAP VIEWPORT FORMAT FOR REACT
@@ -1521,8 +2079,9 @@ defmodule Kollective.Posts.Posts do
         post: updated_post_struct,
         likes_count: Map.get(likes_counts, post.id, 0),
         reblogs_count: Map.get(reblogs_counts, post.id, 0),
-        has_liked: MapSet.member?(liked_ids, post.id),
-        has_reblogged: MapSet.member?(reblogged_ids, post.id)
+        # Authoritative flat variables consumed directly by your React icons
+        has_liked: is_liked?,
+        has_reblogged: is_reblogged?
       }
     end)
   end
@@ -1534,10 +2093,10 @@ defmodule Kollective.Posts.Posts do
 
   # --- Fast Aggregate Batch Queries ---
   defp fetch_batch_likes_counts(post_ids) do
-    from(f in "favourites",
-      where: f.post_id in ^post_ids,
-      group_by: f.post_id,
-      select: {f.post_id, count(f.id)}
+    from(l in "likes",
+      where: l.post_id in ^post_ids,
+      group_by: l.post_id,
+      select: {l.post_id, count(l.id)}
     )
     |> Repo.all()
     |> Map.new()
@@ -1572,8 +2131,8 @@ defmodule Kollective.Posts.Posts do
         in_reply_to_id: reply_to.id,
         root_post_id: root_post_id,
         # Cache structural user metadata strings to help React skip manual user lookups
-        in_reply_to_username: reply_to.author.username,
-        #in_reply_to_account_id: reply_to.user_id
+        in_reply_to_username: reply_to.author.username
+        # in_reply_to_account_id: reply_to.user_id
       }
       |> Post.changeset(attrs)
     end)
@@ -1581,9 +2140,13 @@ defmodule Kollective.Posts.Posts do
     # Step B: Atomic Increment Fallback
     # Note: If you have a PostgreSQL Trigger active on your database, this step is skipped.
     # We include it as a Multi constraint update so your app logic is bulletproof either way.
-    |> Multi.update_all(:inc_replies, fn %{reply: _reply} ->
-      from(p in Post, where: p.id == ^reply_to.id)
-    end, inc: [replies_count: 1])
+    |> Multi.update_all(
+      :inc_replies,
+      fn %{reply: _reply} ->
+        from(p in Post, where: p.id == ^reply_to.id)
+      end,
+      inc: [replies_count: 1]
+    )
 
     # 3. Execute Transaction
     |> Repo.transaction()
@@ -1613,28 +2176,34 @@ defmodule Kollective.Posts.Posts do
 
   defp handle_reply_lifecycle({:error, _step, changeset, _changes}), do: {:error, changeset}
 
-  #defp fetch_static_likes(post_id) do
+  # defp fetch_static_likes(post_id) do
   #  # Leverages your direct atomic aggregate counter helper
   #  Repo.one(from l in "likes", where: l.post_id == ^post_id, select: count(l.id))
-  #end
+  # end
 
   # user votes, use Ecto.Multi to ensure the vote is recorded and the
   # counters are incremented at the exact same time.
   def cast_vote(user_id, poll_id, option_id) do
     Multi.new()
-
     |> Multi.insert(:vote, %PollVote{user_id: user_id, poll_id: poll_id, option_id: option_id})
-    |> Multi.update_all(:inc_option,
-        from(o in PollOption, where: o.id == ^option_id), inc: [votes_count: 1])
-
-    |> Multi.update_all(:inc_poll,
-        from(p in Poll, where: p.id == ^poll_id), inc: [votes_count: 1])
+    |> Multi.update_all(
+      :inc_option,
+      from(o in PollOption, where: o.id == ^option_id),
+      inc: [votes_count: 1]
+    )
+    |> Multi.update_all(
+      :inc_poll,
+      from(p in Poll, where: p.id == ^poll_id),
+      inc: [votes_count: 1]
+    )
     |> Repo.transaction()
     |> case do
       {:ok, _} ->
         broadcast_poll_update(poll_id)
         {:ok, Polls.get_poll_results(poll_id)}
-      error -> error
+
+      error ->
+        error
     end
   end
 
@@ -1650,11 +2219,10 @@ defmodule Kollective.Posts.Posts do
   def create_status_with_poll(attrs) do
     Repo.transaction(fn ->
       with {:ok, post} <- create_post(attrs) do
-         # {:ok, poll} <- create_poll(post, attrs["poll"]) do
+        # {:ok, poll} <- create_poll(post, attrs["poll"]) do
 
         # SCHEDULE THE CLOSURE
         %{poll_id: post.poll.id}
-
         |> Kollective.Workers.PollExpiryWorker.new(scheduled_at: post.poll.expires_at)
         |> Oban.insert!()
 
@@ -1679,13 +2247,12 @@ defmodule Kollective.Posts.Posts do
     else
       # Proceed with the normal update logic
       post
-
       |> Post.changeset(attrs)
       |> Repo.update()
     end
   end
 
-  #Custom Emojis in poll options,
+  # Custom Emojis in poll options,
   def preload_custom_emojis(post) do
     # 1. Collect all text that might contain emojis
     poll_text = if post.poll, do: Enum.map(post.poll.options, & &1.title), else: []
@@ -1694,16 +2261,14 @@ defmodule Kollective.Posts.Posts do
     # 2. Extract shortcodes like :elixir:
     shortcodes =
       Regex.scan(~r/:[a-z0-9_]+:/i, all_text)
-
       |> List.flatten()
       |> Enum.map(&String.replace(&1, ":", ""))
 
     # 3. Fetch from DB and set to virtual field
     emojis =
       from(e in CustomEmoji, where: e.shortcode in ^shortcodes)
-
       |> Repo.all()
-      |> Enum.map(& %{shortcode: &1.shortcode, url: &1.url})
+      |> Enum.map(&%{shortcode: &1.shortcode, url: &1.url})
 
     %{post | emojis: emojis}
   end
@@ -1713,7 +2278,6 @@ defmodule Kollective.Posts.Posts do
   # When the admin clicks "Save" in your dashboard, you finalize the record in the database.
   def create_emoji(attrs \\ %{}) do
     %CustomEmoji{}
-
     |> CustomEmoji.changeset(attrs)
     |> Repo.insert()
   end
@@ -1733,8 +2297,8 @@ defmodule Kollective.Posts.Posts do
     # 2. Extract first frame: convert 'input.gif[0]' output.png
     # The [0] is critical to avoid processing every frame
     import Mogrify
-    open("#{temp_path}[0]")
 
+    open("#{temp_path}[0]")
     |> format("png")
     |> save(path: static_path)
 
@@ -1748,16 +2312,17 @@ defmodule Kollective.Posts.Posts do
   # To handle large animated images (like GIF memes) in the main feed, we apply a "Three-State" logic:
   # Blurhash (Initial load) → Static Frame (First frame PNG) → Full Animation (GIF).
 
-  #When a large GIF is uploaded, you generate the blurhash for the
-  #initial load and the static_url for the "Paused" state.
+  # When a large GIF is uploaded, you generate the blurhash for the
+  # initial load and the static_url for the "Paused" state.
   def process_large_gif(temp_path, filename) do
     # 1. Extract first frame for static preview
     static_path = "/tmp/static_#{filename}.png"
 
     import Mogrify
-    open(temp_path)
 
-    |> custom("frames", "0") # Get the first frame
+    open(temp_path)
+    # Get the first frame
+    |> custom("frames", "0")
     |> format("png")
     |> save(path: static_path)
 
@@ -1765,8 +2330,10 @@ defmodule Kollective.Posts.Posts do
     blurhash = Kollective.Media.MediaAttachment.generate_hash(static_path)
 
     # 3. Upload both to R2
-     original_url = "http://temp/ss" #upload_to_r2(temp_path) TODO
-     static_url = "http://temp/ss" #upload_to_r2(static_path)  TODO
+    # upload_to_r2(temp_path) TODO
+    original_url = "http://temp/ss"
+    # upload_to_r2(static_path)  TODO
+    static_url = "http://temp/ss"
 
     {:ok, %{url: original_url, static_url: static_url, blurhash: blurhash}}
   end
@@ -1776,9 +2343,12 @@ defmodule Kollective.Posts.Posts do
 
     # Extract frame at 1-second mark
     System.cmd("ffmpeg", [
-      "-i", temp_path,
-      "-ss", "00:00:01.000",
-      "-vframes", "1",
+      "-i",
+      temp_path,
+      "-ss",
+      "00:00:01.000",
+      "-vframes",
+      "1",
       static_path
     ])
 
@@ -1787,5 +2357,140 @@ defmodule Kollective.Posts.Posts do
     # ... upload logic ...
   end
 
+  def create_attachment(attrs) do
+    %Kollective.Posts.PostAttachment{}
+    |> Kollective.Posts.PostAttachment.changeset(attrs)
+    |> Repo.insert()
+  end
 
+  def update_attachment_description(attachment, description) do
+    attachment
+    |> Ecto.Changeset.change(description: description)
+    |> Repo.update()
+  end
+
+  @doc """
+  Toggles a user's bookmark state on a specific post.
+  Returns {:ok, :inserted} or {:ok, :removed}
+  """
+  def toggle_bookmark_post(%Kollective.Accounts.User{} = user, post_id) do
+    case Repo.get_by(PostBookmark, user_id: user.id, post_id: post_id) do
+      nil ->
+        # First click: Insert bookmark row record
+        %PostBookmark{user_id: user.id, post_id: post_id}
+        |> Repo.insert()
+        |> case do
+          {:ok, _} -> {:ok, :inserted}
+          {:error, cs} -> {:error, cs}
+        end
+
+      existing_bookmark ->
+        # Second click: Remove bookmark row from database
+        Repo.delete!(existing_bookmark)
+        {:ok, :removed}
+    end
+  end
+
+  @doc """
+  Fetches a user's saved bookmarks timeline stream.
+  Applies keyset pagination and preloads post attachments and authors in a single pass.
+  """
+  def list_bookmarked_posts(%Kollective.Accounts.User{} = user, params \\ %{}) do
+    limit = Map.get(params, "limit", 20)
+    cursor = Map.get(params, "cursor")
+
+    base_query =
+      from(b in PostBookmark,
+        where: b.user_id == ^user.id,
+        # Join the core post records directly
+        join: p in assoc(b, :post),
+        # Preload the author and attached multi-image media carousels
+        preload: [post: [:author, :attachments]]
+      )
+
+    query =
+      if cursor,
+        do: from([b, p] in base_query, where: b.id < ^cursor),
+        else: base_query
+
+    bookmarks_list =
+      query
+      |> order_by([b, p], desc: b.id)
+      |> limit(^limit)
+      |> Repo.all()
+
+    # Transform rows flat to feed into your modern PostJSON serializer smoothly
+    Enum.map(bookmarks_list, fn b ->
+      # Stash the wrapper bookmark cursor ID into metadata so React can read page limits
+      Map.put(b.post, :bookmark_cursor_id, b.id)
+    end)
+  end
+
+  @doc """
+  The definitive hashtag timeline retrieval pass.
+  Queries posts containing the target tag token, respects regional category/scope sliders,
+  applies user-defined mute phrase filters in RAM, and extracts look-ahead cursors .
+  """
+  def list_hashtag_timeline(%Kollective.Accounts.User{} = user, tag_name, params \\ %{}) do
+    limit = Map.get(params, "limit", 20)
+    cursor = Map.get(params, "cursor")
+
+    # Normalize the incoming tag string to lower case to match indexing profiles
+    normalized_tag = String.downcase(tag_name)
+
+    # 1. Base query scanning the index join table directly
+    base_query =
+      from(p in Post,
+        # 1. Join directly on the Hashtag schema using a regular where clause
+        join: h in Hashtag,
+        on: h.name == ^normalized_tag,
+        # 2. Join the many-to-many table using its schema or the correct binding
+        join: ph in "post_hashtags",
+        on: ph.post_id == p.id and ph.hashtag_id == h.id,
+        where: p.status == "published",
+        preload: [:author, :attachments]
+      )
+
+    # Apply dynamic keyset pagination matching your primary index keys
+    query =
+      if cursor,
+        do: from(p in base_query, where: p.id < ^cursor),
+        else: base_query
+
+    # 2. OPTIMIZATION SLIDERS (Inject category or geo filters if passed from React tabs)
+    query =
+      case params["category"] || params[:category] do
+        nil -> query
+        cat_str -> from(p in query, where: p.category == ^to_string(cat_str))
+      end
+
+    raw_posts =
+      query
+      |> order_by([p], desc: p.id)
+      |> limit(^limit)
+      |> Repo.all()
+
+    # 3. USER CURATION FILTER INTERCEPTION MASK
+    active_filters = UserFilter.list_active_filters(user)
+    mute_regex = UserFilter.compile_regex_pattern(active_filters)
+
+    filtered_posts =
+      if mute_regex do
+        Enum.reject(raw_posts, fn post -> Regex.run(mute_regex, post.content || "") end)
+      else
+        raw_posts
+      end
+
+    # Wrap in your unified response contract shape expected by index controllers
+    next_cursor =
+      case List.last(filtered_posts) do
+        nil -> nil
+        last_item -> to_string(last_item.id)
+      end
+
+    %{
+      entries: filtered_posts,
+      next_cursor: next_cursor
+    }
+  end
 end

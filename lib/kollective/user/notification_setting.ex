@@ -1,12 +1,13 @@
 defmodule Kollective.User.NotificationSetting do
-  use Ecto.Schema
+  use Kollective.Schemas.Schema
   import Ecto.Changeset
 
   @derive Jason.Encoder
   @primary_key false
 
   embedded_schema do
-    field(:block_from_strangers, :boolean, default: false) #san this for "notification_setting_block_from_strangers": "Block notifications from users who you do not follow",
+    # san this for "notification_setting_block_from_strangers": "Block notifications from users who you do not follow",
+    field(:block_from_strangers, :boolean, default: false)
     field(:hide_notification_contents, :boolean, default: false)
   end
 

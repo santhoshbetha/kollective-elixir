@@ -47,6 +47,12 @@ defmodule KollectiveWeb do
     end
   end
 
+  def schema do
+    quote do
+      use Kollective.Schemas.Schema
+    end
+  end
+
   def verified_routes do
     quote do
       use Phoenix.VerifiedRoutes,

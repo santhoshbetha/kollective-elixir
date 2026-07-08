@@ -15,10 +15,11 @@ defmodule KollectiveWeb.UserPublicChannel do
   end
 
   def handle_info(:after_join, socket) do
-    {:ok, _} = Presence.track(socket, socket.assigns.user_id, %{
-      online_at: inspect(System.system_time(:second)),
-      username: socket.assigns.username
-    })
+    {:ok, _} =
+      Presence.track(socket, socket.assigns.user_id, %{
+        online_at: inspect(System.system_time(:second)),
+        username: socket.assigns.username
+      })
 
     # 2. Push the current list of everyone online to the new user
     push(socket, "presence_state", Presence.list(socket))

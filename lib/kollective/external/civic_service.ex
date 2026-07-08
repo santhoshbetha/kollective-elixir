@@ -3,7 +3,7 @@
 # specific OCD IDs which contain the district numbers.
 defmodule Kollective.External.CivicService do
   @api_key Application.compile_env(:kollective, :google_civic_api_key)
-  @base_url "https://www.googleapis.com"
+  @base_url "https://googleapis.com"
 
   def find_districts_by_address(address) do
     params = [

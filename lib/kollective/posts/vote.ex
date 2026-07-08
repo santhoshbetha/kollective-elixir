@@ -7,8 +7,9 @@ defmodule Kollective.Posts.Vote do
     belongs_to :user, Kollective.Accounts.User
     belongs_to :post, Kollective.Posts.Post
 
-    timestamps(type: :utc_datetime)
+    timestamps()
   end
+
   def changeset(vote, attrs) do
     vote
     |> cast(attrs, [:type, :user_id, :post_id])

@@ -1,4 +1,3 @@
-# lib/kollective/config.exs
 defmodule Kollective.Config do
   import Ecto.Query
   alias Kollective.Repo

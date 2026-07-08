@@ -6,7 +6,7 @@ defmodule KollectiveWeb.PoliticalDistrictJSON do
       data: %{
         scope: scope,
         # Pass current_user here so we can check 'has_reposted'
-        posts: for(post <- posts, do: KollectiveWeb.PostJSON.data(post, current_user)),
+        posts: for(post <- posts, do: KollectiveWeb.PostJSON.show(post)),
         pagination: %{
           current_page: meta.page_number,
           total_pages: meta.total_pages
@@ -25,6 +25,7 @@ defmodule KollectiveWeb.PoliticalDistrictJSON do
 
   # Recursive district formatter for breadcrumbs
   def data(nil), do: nil
+
   def data(district) do
     %{
       id: district.id,

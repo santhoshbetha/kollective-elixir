@@ -1,147 +1,216 @@
 defmodule Kollective.Events.Events do
   import Ecto.Query, warn: false
-  alias Kollective.Repo
-  alias Kollective.Events.Event
   alias Ecto.Multi
-  alias Kollective.Events.Participant, as: EventParticipant # Assumed join table name
-  alias Kollective.Workers.{EventStartWorker, OrganizerSummaryWorker, EventReminderWorker}
+  alias Kollective.Repo
+  alias Kollective.Accounts.User
+  alias Kollective.Events.Event
+  alias Kollective.Events.{Comment, CommentLike}
+  # Assumed join table name
+  alias Kollective.Events.Participant, as: EventParticipant
+
+  alias Kollective.Workers.{
+    EventStartWorker,
+    OrganizerSummaryWorker,
+    EventReminderWorker,
+    GeocodeWorker
+  }
+
   alias Kollective.Notifications.Notifications
   alias Kollective.Accounts.User
   alias Kollective.Accounts.Accounts
-  alias Ecto.Multi
+  alias Kollective.Admins.Log, as: AdminLog
+  alias Kollective.Locations.Locations
 
-  #alias Kollective.External.GeoapifyService
-  #alias Kollective.External.CivicService
+  @bucket_name "your-r2-events-bucket"
+  # Or your custom CDN domain
+  @cdn_domain "https://pub-xxxxxxxx.r2.dev"
+
+  # alias Kollective.External.GeoapifyService
+  # alias Kollective.External.CivicService
 
   @doc """
-  Unifies all event creation workflows. Performs atomic transaction inserts for
-  organizers, handles text mentions, and schedules all timeline-based Oban notification workers.
+  Registers a community event record inside the database.
+  Enforces administrative targeting rules based on user privileges and handles
+  asynchronous geocoding and notifications via Oban concurrently.
   """
-  def create_event(user, attrs \\ %{}) do
+  def create_event(%User{} = user, attrs \\ %{}) do
     now = DateTime.utc_now()
 
-    # 1. Cast attributes locally to inspect timestamps before entering the transaction pool
-    changeset = Event.changeset(%Event{}, attrs)
-    start_time = Ecto.Changeset.get_field(changeset, :start_time)
+    has_coordinates? =
+      not is_nil(attrs["latitude"] || attrs[:latitude]) and
+        not is_nil(attrs["longitude"] || attrs[:longitude])
+
+    address_text =
+      attrs["address"] || attrs[:address] || attrs["location_name"] || attrs[:location_name]
+
+    geoname_id = Map.get(attrs, "geoname_id") || Map.get(attrs, :geoname_id)
+
+    start_time =
+      case attrs["start_time"] || attrs[:start_time] do
+        %DateTime{} = dt ->
+          dt
+
+        binary_str when is_binary(binary_str) ->
+          case DateTime.from_iso8601(binary_str) do
+            {:ok, dt, _} -> dt
+            _ -> DateTime.add(now, 1, :hour)
+          end
+
+        _ ->
+          DateTime.add(now, 1, :hour)
+      end
 
     Multi.new()
-    # STEP A: Fetch location metrics from your Geospatial service if location_id is provided
-    |> Multi.run(:location_data, fn _repo, _changes ->
-       location_id = attrs["location_id"] || attrs[:location_id]
-       location_meta = get_location(%{location_id: location_id})
+    # Step 1: OPTIONAL CITY RESOLUTION (Never blocks rural or unincorporated areas)
+    |> Multi.run(:resolved_city, fn _repo, _changes ->
+      if is_nil(geoname_id) || String.trim(to_string(geoname_id)) == "" do
+        {:ok, nil}
+      else
+        case Locations.get_or_import_city(geoname_id) do
+          {:ok, city} -> {:ok, city}
+          {:error, _} -> {:ok, nil}
+        end
+      end
+    end)
 
-       # Merge the raw geospatial map results straight into your input attributes
-       updated_attrs =
-         if location_meta do
-           attrs
-           |> Map.put("location_name", location_meta.name || location_meta["name"])
-           |> Map.put("latitude", location_meta.latitude || location_meta["latitude"])
-           |> Map.put("longitude", location_meta.longitude || location_meta["longitude"])
-           |> Map.put("street", location_meta.street || location_meta["street"])
-           |> Map.put("postal_code", location_meta.postal_code || location_meta["postal_code"])
-           |> Map.put("locality", location_meta.locality || location_meta["locality"])
-           |> Map.put("region", location_meta.region || location_meta["region"])
-           |> Map.put("city_name", location_meta.city_name || location_meta["city_name"])
-         else
-           attrs
-         end
+    # Step 2: Insert the Event while explicitly verifying the author's privilege level
+    |> Multi.insert(:event, fn %{resolved_city: city} ->
+      base_attrs =
+        attrs
+        |> Map.put("user_id", user.id)
+        |> Map.put("event_status", "published")
+        |> Map.merge(
+          if city,
+            do: %{
+              "city_id" => city.id,
+              "city_name" => city.name,
+              "origin_state" => city.state,
+              "origin_country" => city.country
+            },
+            else: %{}
+        )
 
-       {:ok, updated_attrs}
-     end)
+      %Event{created_by: user.id}
+      |> Event.creation_changeset(base_attrs)
+      # TARGETING ENFORCEMENT: Enforces regional targeting constraints prior to schema writing
+      |> validate_and_fix_targeting(base_attrs, user)
+    end)
 
-     # STEP B: Insert the Event using the enriched location attributes
-    |> Multi.insert(:event, fn %{location_data: enriched_attrs} ->
-        %Event{created_by: user.id}
-        |> Event.changeset(enriched_attrs)
-        # Connects straight into your privileged scholar/journalist geofencing rules
-        |> validate_and_fix_targeting(enriched_attrs, user)
-      end)
-
-    # STEP C: Auto-Join Creator as the First Participant (Organizers are marked as attending)
+    # Step 3: Auto-Join Creator as the First Participant
     |> Multi.insert(:organizer_attendance, fn %{event: event} ->
-         %EventParticipant{
-           user_id: user.id,
-           event_id: event.id,
-           status: "accepted"
-         }
-       end)
+      %EventParticipant{
+        user_id: user.id,
+        event_id: event.id,
+        status: "accepted"
+      }
+    end)
 
-    # STEP D: Increment the Cache Counter Column
-    |> Multi.update_all(:inc_participants, fn %{event: event} ->
-         from(e in Event, where: e.id == ^event.id)
-       end, inc: [participants_count: 1])
+    # Step 4: Increment the Cache Counter Column atomically
+    |> Multi.update_all(
+      :inc_participants,
+      fn %{event: event} ->
+        from(e in Event, where: e.id == ^event.id)
+      end,
+      inc: [participants_count: 1]
+    )
 
-    # STEP E: SCHEDULE THE EVENT TIMELINE OMNI-QUERIES (Oban Background Workers)
+    # Step 5: SCHEDULE BACKGROUND LIFECYCLE ACTIONS IN THE OBAN QUEUE
     |> Multi.run(:schedule_workers, fn _repo, %{event: event} ->
-         # 1. "Starting Now" Notification Pushes
-         %{event_id: event.id}
-         |> EventStartWorker.new(scheduled_at: start_time)
-         |> Oban.insert!()
+      %{"event_id" => event.id}
+      |> EventStartWorker.new(scheduled_at: start_time)
+      |> Oban.insert!()
 
-         # 2. 1-Hour "Upcoming Event" Reminders
-         one_hour_before = DateTime.add(start_time, -1, :hour)
-         if DateTime.compare(one_hour_before, now) == :gt do
-           %{event_id: event.id}
-           |> EventReminderWorker.new(scheduled_at: one_hour_before)
-           |> Oban.insert!()
-         end
+      one_hour_before = DateTime.add(start_time, -1, :hour)
 
-         # 3. 24-Hour Organizer Metrics Summary Previews
-         twenty_four_hours_before = DateTime.add(start_time, -24, :hour)
-         if DateTime.compare(twenty_four_hours_before, now) == :gt do
-           %{event_id: event.id}
-           |> OrganizerSummaryWorker.new(scheduled_at: twenty_four_hours_before)
-           |> Oban.insert!()
-         end
+      if DateTime.compare(one_hour_before, now) == :gt do
+        %{"event_id" => event.id}
+        |> EventReminderWorker.new(scheduled_at: one_hour_before)
+        |> Oban.insert!()
+      end
 
-         {:ok, :workers_scheduled}
-       end)
+      {:ok, :workers_scheduled}
+    end)
 
-    # 2. Execute full Transaction Block
+    # Step 6: Conditionally Enqueue the Polymorphic Oban GeocodeWorker
+    |> Multi.run(:enqueue_geocode, fn _repo, %{event: event} ->
+      if (not has_coordinates? and address_text) && String.trim(address_text) != "" do
+        %{"target_id" => event.id, "schema_type" => "Event", "address_text" => address_text}
+        |> GeocodeWorker.new()
+        |> Oban.insert()
+      else
+        {:ok, :skipped}
+      end
+    end)
     |> Repo.transaction()
-    |> handle_event_lifecycle(user)
+    |> case do
+      {:ok, %{event: event}} ->
+        # If necessary, you can extend your custom handle_event_lifecycle tracker function here
+        handle_event_lifecycle({:ok, event}, user)
+
+      # Phoenix.PubSub.broadcast(Kollective.PubSub, "feed:public", {:new_event_registered, event.id})
+      # {:ok, Repo.preload(event, [:user])}
+
+      {:error, _failed_step, changeset, _changes} ->
+        {:error, changeset}
+    end
   end
 
-  # --- Post Execution Lifecycle Broadcasts ---
+  # ─── THE DEFINITIVE GEOGRAPHIC TARGETING VERIFIER ───
   defp validate_and_fix_targeting(changeset, attrs, user) do
+    # Determine if this action is authorized on behalf of a managed corporate profile
     organization_id = Ecto.Changeset.get_field(changeset, :organization_id)
+    is_managed_org? = not is_nil(organization_id) and organization_id != ""
 
     case user.type do
-      :regular ->
+      :citizen when not is_managed_org? ->
+        # ─── CITIZEN SECURITY SHIELD ───
+        # Strip custom parameter overrides; strictly force values to lock onto their physical home base
         changeset
-        |> Ecto.Changeset.put_change(:origin_country, user.country)
+        |> Ecto.Changeset.put_change(:origin_country, user.country || "US")
         |> Ecto.Changeset.put_change(:origin_state, user.state)
-        |> Ecto.Changeset.put_change(:origin_city_id, user.city_id)
-        |> Ecto.Changeset.put_change(:origin_district_l1, user.district_l1_id) #district_l1 is the same as district_l1
-        |> Ecto.Changeset.put_change(:origin_district_l2, user.district_l2_id) #district_l2 is the same as district_l2
-        |> Ecto.Changeset.put_change(:origin_district_l3, user.district_l3_id) #district_l3 is the same as district_l3
+        # Standard city relation foreign key matching your schema
+        |> Ecto.Changeset.put_change(:city_id, user.city_id)
+        |> Ecto.Changeset.put_change(:origin_district_l1, user.district_l1)
+        |> Ecto.Changeset.put_change(:origin_district_l2, user.district_l2)
+        |> Ecto.Changeset.put_change(:origin_district_l3, user.district_l3)
 
-      type when type in [:scholar, :journalist] or not is_nil(organization_id) ->
+      _privileged_or_org_actor ->
+        # ─── PRIVILEGED ACTOR DECORATOR ───
+        # Scholars, Journalists, Activists, or approved members acting as an Organization
         # SCHOLAR/JOURNALIST: Can choose both :target_scope
         # OR posting on behalf of an Organization
         # AND a custom :origin district/state from the React UI.
         # We only set defaults if the UI left them blank.
-       changeset
+        changeset
         |> Ecto.Changeset.cast(attrs, [
           :target_scope,
           :origin_state,
           :origin_country,
-          :origin_city_id,
+          :city_id,
           :origin_district_l1,
           :origin_district_l2,
           :origin_district_l3
         ])
-        # Fall back to user's home base fields ONLY if the React UI left them blank
-        |> default_value(:origin_country, user.country)
-        |> default_value(:origin_state, user.state)
-        |> default_value(:origin_city_id, user.city_id)
+        # Fall back to user's home parameters ONLY if the React UI fields are left blank
+
+        |> default_changeset_value(:origin_country, user.country || "US")
+        |> default_changeset_value(:origin_state, user.state)
+        |> default_changeset_value(:city_id, user.city_id)
+        |> default_changeset_value(:origin_district_l1, user.district_l1)
+        |> default_changeset_value(:origin_district_l2, user.district_l2)
+        |> default_changeset_value(:origin_district_l3, user.district_l3)
     end
   end
 
-  defp default_value(changeset, field, fallback_value) do
-    case Ecto.Changeset.get_field(changeset, field) do
-      nil -> Ecto.Changeset.put_change(changeset, field, fallback_value)
-      _ -> changeset
+  # ─── IN-MEMORY METADATA FALLBACK COMPILER ───
+  defp default_changeset_value(changeset, field, fallback_value) do
+    # Inspects changesets safely in RAM without forcing slow disk database query lookups
+    current_value = Ecto.Changeset.get_field(changeset, field)
+
+    if is_nil(current_value) || current_value == "" do
+      Ecto.Changeset.put_change(changeset, field, fallback_value)
+    else
+      changeset
     end
   end
 
@@ -170,38 +239,103 @@ defmodule Kollective.Events.Events do
     {:ok, hydrated_event}
   end
 
-  defp handle_event_lifecycle({:error, _step, changeset, _changes}, _user) do
-    {:error, changeset}
-  end
+  # defp handle_event_lifecycle({:error, _step, changeset, _changes}, _user) do
+  #  {:error, changeset}
+  # end
 
   defp trigger_event_notifications(_user, _event) do
     # Reuses your standard Post mention extraction regex and notification logic
     :ok
   end
 
-
   @doc """
-  Updates an existing event record.
-  If the start time has changed, it automatically voids old background reminders,
-  enqueues new Oban time triggers, and pushes real-time notification alerts to attendees.
+  The unified community event modifier engine.
+  Validates structural updates, enforces regional boundary targeting,
+  and manages background Oban reminder queues asynchronously upon scheduling modifications.
   """
-  def update_event(%Event{} = event, attrs) do
-    now = DateTime.utc_now()
+  def update_event(%User{} = user, event_id, attrs) do
+    # 1. Fetch the existing record with the standard city relation preloaded
+    event = Repo.get!(Event, event_id) |> Repo.preload([:city])
 
-    # Detect if a start time change parameter was explicitly transmitted by the UI
-    time_changed? = Map.has_key?(attrs, "start_time") or Map.has_key?(attrs, :start_time)
+    # Strict ownership guard pass: Protect against malicious cross-user alterations
+    if event.created_by != user.id and not (user.is_admin or user.is_moderator) do
+      {:error, :unauthorized}
+    else
+      now = DateTime.utc_now()
+      geoname_id = Map.get(attrs, "geoname_id") || Map.get(attrs, :geoname_id)
 
-    Multi.new()
-    # Step A: Execute the standard local database record modification query
-    |> Multi.update(:event, Event.changeset(event, attrs))
+      # 2. ACCURATE CHANGE DETECTION: Only trigger side-effects if values actually mutated
+      new_address =
+        attrs["address"] || attrs[:address] || attrs["location_name"] || attrs[:location_name]
 
-    # Step B: Dynamic Lifecycle Scheduling Matrix
-    |> Multi.run(:reschedule_lifecycle, fn _repo, %{event: updated_event} ->
+      has_new_coordinates? = not is_nil(attrs["latitude"] || attrs[:latitude])
+      address_changed? = new_address && new_address != event.location_name
+
+      # Parse and verify if the start time truly changed from its stored state
+      new_start_time =
+        case attrs["start_time"] || attrs[:start_time] do
+          nil ->
+            nil
+
+          %DateTime{} = dt ->
+            dt
+
+          binary_str ->
+            case DateTime.from_iso8601(to_string(binary_str)) do
+              {:ok, dt, _} -> dt
+              _ -> nil
+            end
+        end
+
+      time_changed? = new_start_time && DateTime.compare(new_start_time, event.start_time) != :eq
+
+      Multi.new()
+      # Step A: Conditional Location Resolution Node
+      |> Multi.run(:resolved_attrs, fn _repo, _changes ->
+        existing_external_id = if event.city, do: to_string(event.city.external_id), else: nil
+
+        if is_nil(geoname_id) || to_string(geoname_id) == "" ||
+             to_string(geoname_id) == existing_external_id do
+          {:ok, attrs}
+        else
+          # Location changed: Fetch or import the city schema row
+          case Locations.get_or_import_city(geoname_id) do
+            {:ok, city} ->
+              updated_attrs =
+                attrs
+                |> Map.put("city_id", city.id)
+                |> Map.put("city_name", city.name)
+                |> Map.put("origin_state", city.state)
+                |> Map.put("origin_country", city.country)
+
+              {:ok, updated_attrs}
+
+            {:error, reason} ->
+              {:error, {:city_resolution_failed, reason}}
+          end
+        end
+      end)
+
+      # Step B: Apply updates via your comprehensive creation_changeset
+      |> Multi.update(:event, fn %{resolved_attrs: final_attrs} ->
+        event
+        |> Event.creation_changeset(final_attrs)
+        # TARGETING ENFORCEMENT: Re-evaluates political district boundaries natively
+        |> validate_and_fix_targeting(final_attrs, user)
+      end)
+
+      # Step C: Dynamic Lifecycle Scheduling Matrix
+      |> Multi.run(:reschedule_lifecycle, fn _repo, %{event: updated_event} ->
         if time_changed? do
-          # 1. Purge all historical pending Oban reminders instantly [O(1) database prune]
-          cancel_pending_reminders(updated_event.id)
+          # 1. Purge all pending Oban reminder rows for this event instantly to prevent duplicates
+          from(j in Oban.Job,
+            where: j.queue == "notifications",
+            where: fragment("?->>'event_id' = ?", j.args, ^to_string(updated_event.id)),
+            where: j.state in ["available", "scheduled"]
+          )
+          |> Repo.delete_all()
 
-          # 2. Re-enqueue fresh background worker jobs targeted at the new start time
+          # 2. Re-enqueue fresh background workers targeted at the new start time
           start_time = updated_event.start_time
 
           %{"event_id" => updated_event.id}
@@ -209,6 +343,7 @@ defmodule Kollective.Events.Events do
           |> Oban.insert!()
 
           one_hour_before = DateTime.add(start_time, -1, :hour)
+
           if DateTime.compare(one_hour_before, now) == :gt do
             %{"event_id" => updated_event.id}
             |> EventReminderWorker.new(scheduled_at: one_hour_before)
@@ -216,67 +351,82 @@ defmodule Kollective.Events.Events do
           end
 
           twenty_four_hours_before = DateTime.add(start_time, -24, :hour)
+
           if DateTime.compare(twenty_four_hours_before, now) == :gt do
             %{"event_id" => updated_event.id}
             |> OrganizerSummaryWorker.new(scheduled_at: twenty_four_hours_before)
             |> Oban.insert!()
           end
 
-          # 3. Fire transient and persistent alerts to all registered attendees
-          Task.start(fn -> notify_time_change(updated_event) end)
+          # 3. Offload email alerts to attendees safely in a detached execution task
+          Task.start(fn -> notify_attendees_of_time_change(updated_event) end)
         end
 
         {:ok, :lifecycle_processed}
       end)
-    |> Repo.transaction()
-    |> case do
+
+      # Step D: Conditionally enqueue the polymorphic Oban GeocodeWorker
+      |> Multi.run(:enqueue_geocode, fn _repo, %{event: updated_event} ->
+        if address_changed? and not has_new_coordinates? do
+          %{
+            "target_id" => updated_event.id,
+            "schema_type" => "Event",
+            "address_text" => new_address
+          }
+          |> GeocodeWorker.new()
+          |> Oban.insert()
+        else
+          {:ok, :skipped}
+        end
+      end)
+      |> Repo.transaction()
+      |> case do
         {:ok, %{event: updated_event}} ->
-          # Re-hydrate full relational dependencies needed for serialization
-          hydrated_event =
-            updated_event
-            |> Repo.preload([
-              :user,
-              :origin_city,
-              origin_district: [parent: :parent]
-            ])
+          # 3. REAL-TIME MULTI-CHANNEL BROADCASTS
+          hydrated = Repo.preload(updated_event, [:user, :city])
 
-          # Global WebSockets push to update timeline scrollers instantly
-          Phoenix.PubSub.broadcast(Kollective.PubSub, "feed:public", {:event_updated, hydrated_event})
+          # Global feed timeline scroller updates
+          Phoenix.PubSub.broadcast(Kollective.PubSub, "feed:public", {:event_updated, hydrated})
+          # Dedicated event viewport page real-time refresh
+          Phoenix.PubSub.broadcast(
+            Kollective.PubSub,
+            "event:#{hydrated.id}",
+            {:event_details_updated, hydrated}
+          )
 
-          # Isolated room channel push to update the specific event page dashboard view live
-          Phoenix.PubSub.broadcast(Kollective.PubSub, "event:#{hydrated_event.id}", {:event_details_updated, hydrated_event})
+          {:ok, hydrated}
 
-          {:ok, hydrated_event}
+        {:error, :resolved_attrs, {:city_resolution_failed, reason}, _changes} ->
+          changeset =
+            Ecto.Changeset.add_error(
+              %Ecto.Changeset{data: event},
+              :city_id,
+              "Location update failed: #{inspect(reason)}"
+            )
+
+          {:error, changeset}
 
         {:error, _failed_step, changeset, _changes} ->
           {:error, changeset}
       end
+    end
   end
 
   # ─── SECTION 2: DISK CLEANUP & AUDIT NOTIFICATION PIPELINES ───
-
-  defp cancel_pending_reminders(event_id) do
-    import Ecto.Query
-    # Targeted query locating unexecuted Oban jobs linked to this event structure
-    # Forcing state in ["available", "scheduled"] prevents messing with running or dead workers
-    from(j in Oban.Job,
-      where: j.queue in ["notifications", "default"],
-      where: fragment("?->>'event_id' = ?", j.args, ^to_string(event_id)),
-      where: j.state in ["available", "scheduled"]
-    )
-    |> Repo.delete_all()
-  end
-
-  defp notify_time_change(event) do
+  defp notify_attendees_of_time_change(event) do
     participants = list_accepted_participants(event.id)
-    formatted_time = "10:00 AM IST" # Replace with your dynamic timezone helper: EventHelpers.local_time_string(event)
+    # Replace with your dynamic timezone helper: EventHelpers.local_time_string(event)
+    formatted_time = "10:00 AM IST"
 
     Enum.each(participants, fn p ->
       # Arguments layout contract: target_user_id, actor_id, type, database_attrs, websocket_payload
       Notifications.notify(
-        p.user_id,         # The recipient (The registered attendee)
-        event.created_by,  # The actor (The organizer who rescheduled the calendar)
-        "event_update",    # Type validated against your strict snake_case registry list
+        # The recipient (The registered attendee)
+        p.user_id,
+        # The actor (The organizer who rescheduled the calendar)
+        event.created_by,
+        # Type validated against your strict snake_case registry list
+        "event_update",
         %{
           event_id: event.id,
           target_id: event.id,
@@ -293,9 +443,6 @@ defmodule Kollective.Events.Events do
       )
     end)
   end
-
-
-
 
   @doc """
   The definitive event registration pipeline. Handles row-level booking locks,
@@ -319,7 +466,10 @@ defmodule Kollective.Events.Events do
 
       if Enum.any?(conflicts) do
         conflict_names = Enum.map(conflicts, & &1.name) |> Enum.join(", ")
-        Repo.rollback("Conflict: You are already attending overlapping event(s): #{conflict_names}")
+
+        Repo.rollback(
+          "Conflict: You are already attending overlapping event(s): #{conflict_names}"
+        )
       else
         # 3. IDENTIFY CAPACITY BOUNDARIES
         max_seats = Map.get(event.metadata || %{}, "max_participants") || 999_999
@@ -340,7 +490,11 @@ defmodule Kollective.Events.Events do
   # CASE A: TARGET EVENT IS FULL -> Append to waitlist instantly across all modes
   defp execute_join_state(user, event, _is_full = true) do
     Multi.new()
-    |> Multi.insert(:attendance, %EventParticipant{user_id: user.id, event_id: event.id, status: "waitlisted"})
+    |> Multi.insert(:attendance, %EventParticipant{
+      user_id: user.id,
+      event_id: event.id,
+      status: "waitlisted"
+    })
     |> Repo.transaction()
 
     # Dispatch persistent history rows and real-time alert toast popups
@@ -348,7 +502,12 @@ defmodule Kollective.Events.Events do
       user.id,
       event.created_by,
       "event_reminder",
-      %{event_id: event.id, target_id: event.id, target_type: "Event", metadata: %{sub_type: "event_waitlisted", event_title: event.name}},
+      %{
+        event_id: event.id,
+        target_id: event.id,
+        target_type: "Event",
+        metadata: %{sub_type: "event_waitlisted", event_title: event.name}
+      },
       %{post_id: nil, preview: "⚠️ You have been placed on the waitlist for '#{event.name}'."}
     )
 
@@ -358,8 +517,14 @@ defmodule Kollective.Events.Events do
   # CASE B: JOIN MODE IS FREE & SPACE IS AVAILABLE -> Instant acceptance allocation
   defp execute_join_state(user, event, _is_full = false) when event.join_mode == "free" do
     Multi.new()
-    |> Multi.insert(:attendance, %EventParticipant{user_id: user.id, event_id: event.id, status: "accepted"})
-    |> Multi.update_all(:inc_counter, from(e in Event, where: e.id == ^event.id), inc: [participants_count: 1])
+    |> Multi.insert(:attendance, %EventParticipant{
+      user_id: user.id,
+      event_id: event.id,
+      status: "accepted"
+    })
+    |> Multi.update_all(:inc_counter, from(e in Event, where: e.id == ^event.id),
+      inc: [participants_count: 1]
+    )
     |> Repo.transaction()
 
     # Live PubSub push to update timeline cards and attendee rosters across the UI natively
@@ -371,8 +536,14 @@ defmodule Kollective.Events.Events do
   # CASE C: JOIN MODE IS RESTRICTED & SPACE IS AVAILABLE -> Queue for review approval
   defp execute_join_state(user, event, _is_full = false) when event.join_mode == "restricted" do
     Multi.new()
-    |> Multi.insert(:attendance, %EventParticipant{user_id: user.id, event_id: event.id, status: "pending"})
-    |> Multi.update_all(:inc_counter, from(e in Event, where: e.id == ^event.id), inc: [participation_request_count: 1])
+    |> Multi.insert(:attendance, %EventParticipant{
+      user_id: user.id,
+      event_id: event.id,
+      status: "pending"
+    })
+    |> Multi.update_all(:inc_counter, from(e in Event, where: e.id == ^event.id),
+      inc: [participation_request_count: 1]
+    )
     |> Repo.transaction()
 
     # Notify the Event Creator/Organizer permanently that a new slot request is pending approval
@@ -380,8 +551,16 @@ defmodule Kollective.Events.Events do
       event.created_by,
       user.id,
       "participation_request",
-      %{event_id: event.id, target_id: event.id, target_type: "Event", metadata: %{event_title: event.name}},
-      %{post_id: nil, preview: "📥 @#{user.username} requested to join your event '#{event.name}'."}
+      %{
+        event_id: event.id,
+        target_id: event.id,
+        target_type: "Event",
+        metadata: %{event_title: event.name}
+      },
+      %{
+        post_id: nil,
+        preview: "📥 @#{user.username} requested to join your event '#{event.name}'."
+      }
     )
 
     :requested
@@ -393,7 +572,8 @@ defmodule Kollective.Events.Events do
     # Locate other events this user is attending that overlap with the target timeframe
     # Overlap Formula: (existing.start_time < new.end_time) AND (existing.end_time > new.start_time)
     from(e in Event,
-      join: p in EventParticipant, on: p.event_id == e.id,
+      join: p in EventParticipant,
+      on: p.event_id == e.id,
       where: p.user_id == ^user_id and p.status == "accepted",
       where: e.id != ^event.id,
       where: e.start_time < ^event.end_time and e.end_time > ^event.start_time,
@@ -415,7 +595,9 @@ defmodule Kollective.Events.Events do
 
         participant ->
           # 2. ROW LOCK GUARD: Obtain an exclusive write lock on the parent event to prevent overbooking
-          event = from(e in Event, where: e.id == ^participant.event_id, lock: "FOR UPDATE") |> Repo.one!()
+          event =
+            from(e in Event, where: e.id == ^participant.event_id, lock: "FOR UPDATE")
+            |> Repo.one!()
 
           # Verify the executing user is the absolute owner/organizer of the event
           if event.created_by != organizer.id do
@@ -427,7 +609,8 @@ defmodule Kollective.Events.Events do
                 {:ok, :already_approved}
 
               # Guard: Enforce strict capacity limits even during manual administrative approvals
-              event.participants_count >= (Map.get(event.metadata || %{}, "max_participants") || 999_999) ->
+              event.participants_count >=
+                  (Map.get(event.metadata || %{}, "max_participants") || 999_999) ->
                 Repo.rollback("Approval failed: This event is currently at maximum capacity.")
 
               true ->
@@ -443,9 +626,12 @@ defmodule Kollective.Events.Events do
                 # 5. DELIVER UNIFIED NOTIFICATIONS
                 # Combines permanent notification bell history with a transient real-time push payload
                 Notifications.notify(
-                  participant.user_id,   # The recipient (The attendee being approved)
-                  organizer.id,          # The actor (The organizer executing the trigger)
-                  "participation_accepted", # Validated snake_case registry string
+                  # The recipient (The attendee being approved)
+                  participant.user_id,
+                  # The actor (The organizer executing the trigger)
+                  organizer.id,
+                  # Validated snake_case registry string
+                  "participation_accepted",
                   %{
                     event_id: event.id,
                     target_id: event.id,
@@ -454,7 +640,8 @@ defmodule Kollective.Events.Events do
                   },
                   %{
                     post_id: nil,
-                    preview: "🎟️ Congratulations! Your request to join '#{event.name}' has been approved."
+                    preview:
+                      "🎟️ Congratulations! Your request to join '#{event.name}' has been approved."
                   }
                 )
 
@@ -472,7 +659,6 @@ defmodule Kollective.Events.Events do
     end
   end
 
-
   @doc """
   Rejects a pending attendance request for a restricted event.
   Atomic transaction deletes the request row and updates the queue metrics cache securely.
@@ -486,7 +672,9 @@ defmodule Kollective.Events.Events do
 
         participant ->
           # 2. ROW LOCK GUARD: Obtain an exclusive lock on the parent event to safely modify caches
-          event = from(e in Event, where: e.id == ^participant.event_id, lock: "FOR UPDATE") |> Repo.one!()
+          event =
+            from(e in Event, where: e.id == ^participant.event_id, lock: "FOR UPDATE")
+            |> Repo.one!()
 
           # Verify the executing user is the absolute owner/organizer of the event
           if event.created_by != organizer.id do
@@ -517,17 +705,19 @@ defmodule Kollective.Events.Events do
     end
   end
 
-
   defp broadcast_event_update(event_id) do
     # Re-fetch the freshly updated metrics count out of the locked transaction block
     updated_event = Repo.get!(Event, event_id) |> Repo.preload([:user, :origin_city])
 
     # Broadcast the data structural payload frame so React layers update counters live
     Phoenix.PubSub.broadcast(Kollective.PubSub, "feed:public", {:event_updated, updated_event})
-    Phoenix.PubSub.broadcast(Kollective.PubSub, "event:#{event_id}", {:event_details_updated, updated_event})
+
+    Phoenix.PubSub.broadcast(
+      Kollective.PubSub,
+      "event:#{event_id}",
+      {:event_details_updated, updated_event}
+    )
   end
-
-
 
   @doc """
   Inserts an explicit participant mapping record into the database join table.
@@ -546,7 +736,8 @@ defmodule Kollective.Events.Events do
     EventParticipant
     |> where([p], p.event_id == ^event_id and p.status == "accepted")
     |> preload([:user])
-    |> order_by([p], desc: p.id) # Replaces loose inserted_at checks with sequential index lookups
+    # Replaces loose inserted_at checks with sequential index lookups
+    |> order_by([p], desc: p.id)
     |> limit(^limit)
     |> Repo.all()
   end
@@ -556,7 +747,7 @@ defmodule Kollective.Events.Events do
   are currently attending the exact same event.
   """
   def list_friends_attending(user, event_id) do
-    # 1. Reuse our high-performance flat array integer extract helper (Zero RAM bloat) [INDEX]
+    # 1. Reuse our high-performance flat array integer extract helper (Zero RAM bloat)
     following_ids = Accounts.get_following_ids(user.id)
 
     # 2. Extract matching event attendance logs in a single fast query pass
@@ -566,7 +757,6 @@ defmodule Kollective.Events.Events do
     |> preload([:user])
     |> Repo.all()
   end
-
 
   @doc """
   Handles removing a user from an event. If space becomes available, the next user
@@ -597,7 +787,8 @@ defmodule Kollective.Events.Events do
             next_in_line_query =
               from(p in EventParticipant,
                 where: p.event_id == ^event.id and p.status == "waitlisted",
-                order_by: [asc: p.id], # Sorted cleanly by B-Tree primary key indexes
+                # Sorted cleanly by B-Tree primary key indexes
+                order_by: [asc: p.id],
                 limit: 1
               )
 
@@ -630,7 +821,8 @@ defmodule Kollective.Events.Events do
                   },
                   %{
                     post_id: nil,
-                    preview: "🎉 Good news! You've been moved off the waitlist and are now attending '#{event.name}'."
+                    preview:
+                      "🎉 Good news! You've been moved off the waitlist and are now attending '#{event.name}'."
                   }
                 )
 
@@ -655,7 +847,6 @@ defmodule Kollective.Events.Events do
     end
   end
 
-
   @doc """
   Geospatial Discovery Engine: Fetches events within a strict circular bounding box.
   Leverages the PostgreSQL earth_distance index extensions to calculate precise proximity metrics.
@@ -664,28 +855,46 @@ defmodule Kollective.Events.Events do
     # Convert incoming strings safely if they leak from UI parameter arrays
     lat = if is_binary(user_lat), do: String.to_float(user_lat), else: user_lat
     lng = if is_binary(user_lng), do: String.to_float(user_lng), else: user_lng
-    radius = if is_binary(radius_meters), do: String.to_integer(radius_meters), else: radius_meters
+
+    radius =
+      if is_binary(radius_meters), do: String.to_integer(radius_meters), else: radius_meters
 
     from e in Event,
-      where: e.event_status == "published" and (is_nil(e.end_time) or e.end_time > fragment("NOW()")),
+      where:
+        e.event_status == "published" and (is_nil(e.end_time) or e.end_time > fragment("NOW()")),
       # 1. Fast Indexed Pre-Filtering bounding box scan pass
-      where: fragment(
-        "earth_box(ll_to_earth(?, ?), ?) @> ll_to_earth(e.latitude, e.longitude)",
-        ^lat, ^lng, ^radius
-      ),
+      where:
+        fragment(
+          "earth_box(ll_to_earth(?, ?), ?) @> ll_to_earth(e.latitude, e.longitude)",
+          ^lat,
+          ^lng,
+          ^radius
+        ),
       # 2. Refine selection footprint to an exact radial circle calculation
-      where: fragment(
-        "earth_distance(ll_to_earth(?, ?), ll_to_earth(e.latitude, e.longitude)) < ?",
-        ^lat, ^lng, ^radius
-      ),
+      where:
+        fragment(
+          "earth_distance(ll_to_earth(?, ?), ll_to_earth(e.latitude, e.longitude)) < ?",
+          ^lat,
+          ^lng,
+          ^radius
+        ),
       # Calculate virtual distance meters property mapping on the fly
       select_merge: %{
-        metadata: fragment(
-          "jsonb_build_object('distance_meters', round(earth_distance(ll_to_earth(?, ?), ll_to_earth(e.latitude, e.longitude))::numeric, 0))",
-          ^lat, ^lng
-        )
+        metadata:
+          fragment(
+            "jsonb_build_object('distance_meters', round(earth_distance(ll_to_earth(?, ?), ll_to_earth(e.latitude, e.longitude))::numeric, 0))",
+            ^lat,
+            ^lng
+          )
       },
-      order_by: [asc: fragment("earth_distance(ll_to_earth(?, ?), ll_to_earth(e.latitude, e.longitude))", ^lat, ^lng)],
+      order_by: [
+        asc:
+          fragment(
+            "earth_distance(ll_to_earth(?, ?), ll_to_earth(e.latitude, e.longitude))",
+            ^lat,
+            ^lng
+          )
+      ],
       limit: 20,
       preload: [:user, :origin_city]
   end
@@ -694,19 +903,22 @@ defmodule Kollective.Events.Events do
   Dispatches a secure community event invitation. Evaluates mutual social filters,
   writes a persistent database audit alert, and pushes an immediate real-time socket toast popup.
   """
-  def send_event_invite(%Kollective.Accounts.User{} = inviter, event_id, target_user_id) do
+  def send_event_invite(%User{} = inviter, event_id, target_user_id) do
     event = Repo.get!(Event, event_id)
 
-    # Arguments layout contract: target_user_id, actor_id, type, database_attrs, websocket_payload [INDEX]
+    # Arguments layout contract: target_user_id, actor_id, type, database_attrs, websocket_payload
     Notifications.notify(
-      target_user_id,          # Who receives the invitation
-      inviter.id,              # Who initiated the action
-      "event_update",          # Safe, verified type from your @notification_types registry [INDEX]
+      # Who receives the invitation
+      target_user_id,
+      # Who initiated the action
+      inviter.id,
+      # Safe, verified type from your @notification_types registry
+      "event_update",
       %{
         event_id: event.id,
         target_id: event.id,
         target_type: "Event",
-        # Package the invite properties inside our flexible JSONB metadata column [INDEX]
+        # Package the invite properties inside our flexible JSONB metadata column
         metadata: %{
           event_title: event.name,
           sub_type: "event_invite"
@@ -719,38 +931,42 @@ defmodule Kollective.Events.Events do
     )
   end
 
-
   @doc """
   The definitive event RSVP pipeline. Handles state transitions across Going (accepted),
   Maybe, and No (rejected) counters while maintaining capacity boundaries and locks atomically.
   """
-  def rsvp_to_event(%Kollective.Accounts.User{} = user, event_id, input_status)
+  def rsvp_to_event(%User{} = user, event_id, input_status)
       when input_status in ["going", "maybe", "no"] do
-
     # Normalize input states to match our strict schema boundaries
-    target_status = case input_status do
-      "going" -> "accepted"
-      "no"    -> "rejected"
-      other   -> other
-    end
+    target_status =
+      case input_status do
+        "going" -> "accepted"
+        "no" -> "rejected"
+        other -> other
+      end
 
     Repo.transaction(fn ->
       # 1. ROW LOCK GUARD: Obtain an exclusive write lock on the target event row
       event = from(e in Event, where: e.id == ^event_id, lock: "FOR UPDATE") |> Repo.one!()
 
       # 2. RUN CONFLICT SECURITY CHECKS (Only if switching state into an active "going" slot)
-      conflicts = if target_status == "accepted", do: check_calendar_conflicts(user.id, event), else: []
+      conflicts =
+        if target_status == "accepted", do: check_calendar_conflicts(user.id, event), else: []
 
       if Enum.any?(conflicts) do
         conflict_names = Enum.map(conflicts, & &1.name) |> Enum.join(", ")
-        Repo.rollback("Conflict: You are already attending overlapping event(s): #{conflict_names}")
+
+        Repo.rollback(
+          "Conflict: You are already attending overlapping event(s): #{conflict_names}"
+        )
       else
         # 3. ENFORCE CAPACITY BOUNDARIES FOR ACTIVE SIGNUPS
         max_seats = Map.get(event.metadata || %{}, "max_participants") || 999_999
         is_full = event.participants_count >= max_seats
 
         # If the event is full and they chose "going", force route them to the waitlist queue instead
-        final_status = if target_status == "accepted" and is_full, do: "waitlisted", else: target_status
+        final_status =
+          if target_status == "accepted" and is_full, do: "waitlisted", else: target_status
 
         # 4. COMMUTE ATTENDANCE STORAGE STATE
         existing_rsvp = Repo.get_by(Participant, user_id: user.id, event_id: event.id)
@@ -801,19 +1017,329 @@ defmodule Kollective.Events.Events do
 
     # 3. Stream the raw granular counts directly across WebSockets to refresh UI widgets live
     # Standardizes UI vocabulary keys back to friendly "going / maybe / no" terms
-    Phoenix.PubSub.broadcast(Kollective.PubSub, "event:#{event_id}", {:update_rsvps, %{
-      going: going_count,
-      maybe: Map.get(counts, "maybe", 0),
-      no: Map.get(counts, "rejected", 0),
-      waitlisted: Map.get(counts, "waitlisted", 0)
-    }})
+    # Shouts to FeedChannel -> "event:EVENT_ID" -> passes the flat counts straight to handle_out fallback
+    Phoenix.PubSub.broadcast(
+      Kollective.PubSub,
+      "event:#{event_id}",
+      {:update_rsvps,
+       %{
+         going: going_count,
+         maybe: Map.get(counts, "maybe", 0),
+         no: Map.get(counts, "rejected", 0),
+         waitlisted: Map.get(counts, "waitlisted", 0)
+       }}
+    )
 
     # Fire a full dashboard model update pass to keep cards and rosters perfectly synchronized
     broadcast_event_update(event_id)
   end
 
+  # ─── WORKFLOW 1: ORGANIZER CANCELATION PIPELINE ───
 
+  @doc """
+  Handles an organizer canceling their own community event. Wipes all scheduled
+  Oban notifications from disk, notifies attendees, and scrubs public feeds.
+  """
+  def cancel_event(user, event_id) do
+    event = Repo.get!(Event, event_id)
 
+    if event.created_by != user.id do
+      {:error, :unauthorized}
+    else
+      # Fetch attendee IDs before executing the cascade deletion pass
+      attendee_ids =
+        from(p in EventParticipant,
+          where: p.event_id == ^event.id and p.status == "accepted",
+          select: p.user_id
+        )
+        |> Repo.all()
+
+      Multi.new()
+      # Step A: Atomically purge pending scheduled Oban reminder tasks from disk
+      |> Multi.run(:void_jobs, fn _repo, _changes ->
+        cancel_pending_reminders(event.id)
+        {:ok, :jobs_voided}
+      end)
+
+      # Step B: Perform Cascade Deletion on the main Event row
+      |> Multi.delete(:event, event)
+      |> Repo.transaction()
+      |> case do
+        {:ok, _changes} ->
+          # Mass notify attendees and push public WebSocket feed-scrubbing parameters
+          execute_cancellation_alerts(event, attendee_ids, user.id, "event_cancelled")
+          {:ok, :cancelled}
+
+        {:error, _failed_step, changeset, _changes} ->
+          {:error, changeset}
+      end
+    end
+  end
+
+  # ─── WORKFLOW 2: ADMINISTRATIVE OVERRIDE ENGINE (THE MODERATOR KILL-SWITCH) ───
+
+  @doc """
+  Administrative moderator override endpoint action. Resolves the associated Report,
+  deletes the offending Event, files a compliance audit log, and alerts attendees.
+  """
+  def admin_cancel_event(admin, report_id) do
+    # Fetch report alongside its preloaded event record securely
+    report =
+      Repo.get!(Kollective.Moderation.Report, report_id)
+      |> Repo.preload(:event)
+
+    event = report.event
+
+    if is_nil(event) do
+      {:error, :event_already_deleted}
+    else
+      # Gather all user IDs signed up for this event (attending, maybe, or waitlisted)
+      attendee_ids =
+        from(p in EventParticipant, where: p.event_id == ^event.id, select: p.user_id)
+        |> Repo.all()
+
+      Multi.new()
+      # 1. Update the compliance report status block to resolved
+      |> Multi.update(
+        :report,
+        Kollective.Moderation.Report.changeset(report, %{status: :resolved})
+      )
+
+      # 2. Cancel all outstanding pending Oban notification jobs instantly
+      |> Multi.run(:void_jobs, fn _repo, _changes ->
+        cancel_pending_reminders(event.id)
+        {:ok, :jobs_voided}
+      end)
+
+      # 3. Permanently delete the Event from public infrastructure
+      |> Multi.delete(:event, event)
+
+      # 4. Insert an immutable Admin Audit Log entry for governance tracking
+      |> Multi.insert(:admin_log, %AdminLog{
+        action: "event_cancelled",
+        target_id: event.id,
+        user_id: admin.id,
+        metadata: %{event_title: event.name}
+      })
+      |> Repo.transaction()
+      |> case do
+        {:ok, _changes} ->
+          # Dispatch alerts using "event_update" to signify a moderator action
+          execute_cancellation_alerts(event, attendee_ids, admin.id, "event_update")
+          {:ok, :admin_cancelled}
+
+        {:error, _failed_step, changeset, _changes} ->
+          {:error, changeset}
+      end
+    end
+  end
+
+  # ─── PRIVATE PIPELINE PROCESSING SUB-ROUTINES ───
+
+  defp cancel_pending_reminders(event_id) do
+    import Ecto.Query
+    # Targeted query locating unexecuted Oban jobs linked to this event structure
+    # Forcing state in ["available", "scheduled"] prevents messing with running or dead workers
+    # Locates available or scheduled jobs for this event_id and deletes them cleanly
+    from(j in Oban.Job,
+      where: j.queue in ["notifications", "default"],
+      where: fragment("?->>'event_id' = ?", j.args, ^to_string(event_id)),
+      where: j.state in ["available", "scheduled"]
+    )
+    |> Repo.delete_all()
+  end
+
+  defp execute_cancellation_alerts(event, attendee_ids, actor_id, type) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    # 1. BULK INSERT HISTORICAL NOTIFICATIONS (Prevents N+1 database insertion bottlenecks)
+    # Storing the title string directly inside metadata ensures history loads even after deletion
+    notifications_batch =
+      Enum.map(attendee_ids, fn user_id ->
+        %{
+          # Use your project's ULID generator
+          id: Kollective.Schemas.ULIDType.generate(),
+          user_id: user_id,
+          actor_id: actor_id,
+          type: type,
+          metadata: %{event_title: event.name, event_id: event.id, sub_type: "cancellation"},
+          read: false,
+          inserted_at: now,
+          updated_at: now
+        }
+      end)
+
+    # Performance: High-speed multi-row atomic insertion sweep into the database
+    if notifications_batch != [] do
+      Repo.insert_all("notifications", notifications_batch)
+    end
+
+    # 2. TRANSIENT REAL-TIME ALERTS: Push live notifications over WebSockets
+    Enum.each(attendee_ids, fn user_id ->
+      Phoenix.PubSub.broadcast(
+        Kollective.PubSub,
+        "user_notifications:#{user_id}",
+        {:new_notification,
+         %{
+           type: type,
+           actor_name: "System",
+           preview: "❌ Event Cancelled: '#{event.name}' has been called off."
+         }}
+      )
+    end)
+
+    # 3. GLOBAL FEED SCRUB: Tell active React scroll components to remove the card from the UI
+    Phoenix.PubSub.broadcast(Kollective.PubSub, "feed:public", {:event_deleted, event.id})
+
+    Phoenix.PubSub.broadcast(
+      Kollective.PubSub,
+      "event:#{event.id}",
+      {:event_cancelled_close_screen, event.id}
+    )
+  end
+
+  # ─── WORKFLOW 1: SECURE DIRECT-TO-R2 UPLOAD PRESIGNMENT ───
+  @doc """
+  Generates a signed, short-lived URL for direct-to-R2 client-side file uploads.
+  Organizes files deterministically inside designated folders based on their attachment intent.
+  """
+  def generate_upload_url(%User{} = user, event_id, filename, asset_type) do
+    allowed_types = ["banner", "logo", "chat"]
+
+    if asset_type in allowed_types do
+      cleaned_ext = Path.extname(filename) |> String.downcase()
+      unique_name = "asset_#{System.system_time(:millisecond)}#{cleaned_ext}"
+      s3_path = "events/#{event_id}/#{asset_type}/#{user.id}/#{unique_name}"
+
+      config = ExAws.Config.new(:s3)
+
+      # Wrap the S3 call in a safe case block to handle real connectivity errors
+      case ExAws.S3.presigned_url(config, :put, @bucket_name, s3_path, expires_in: 900) do
+        {:ok, presigned_url} ->
+          {:ok,
+           %{
+             upload_url: presigned_url,
+             final_asset_url: "#{@cdn_domain}/#{s3_path}"
+           }}
+
+        {:error, reason} ->
+          # This gives your case statement a real error path to resolve Dialyzer warnings
+          {:error, reason}
+      end
+    else
+      {:error, :invalid_type}
+    end
+  end
+
+  # ─── WORKFLOW 2: UNIFIED EVENT MEDIA GALLERY AGGREGATOR ───
+
+  @doc """
+  Collects official event branding items (banner, logo) and aggregates all
+  AI-approved chat photos into a unified grid portfolio array for the React UI.
+  """
+  def list_event_media(event_id) do
+    # 1. Fetch official branding image components natively
+    event = Repo.get!(Event, event_id)
+
+    official_branding =
+      [
+        %{url: event.banner_url, type: "banner", id: "banner-#{event.id}"},
+        %{url: event.logo_url, type: "logo", id: "logo-#{event.id}"}
+      ]
+      |> Enum.reject(fn item -> is_nil(item.url) or item.url == "" end)
+
+    # 2. Query for all AI-approved user text comment photos in a single fast query pass
+    user_uploads =
+      from(c in Comment,
+        where: c.event_id == ^event_id and c.moderation_status == "approved",
+        where: not is_nil(c.image_url) and c.image_url != "",
+        # Keyset indexing sorting optimization
+        order_by: [desc: c.id],
+        select: %{url: c.image_url, type: "user_upload", id: c.id}
+      )
+      |> Repo.all()
+
+    official_branding ++ user_uploads
+  end
+
+  # ─── WORKFLOW 3: ORGANIZER GALLERY CURATION & SILENCING ───
+
+  @doc """
+  Allows an event organizer to remove an image from the public gallery and chat logs.
+  Flips the comment state string to 'rejected' to invoke immediate global timeline hiding.
+  """
+  def hide_event_media(%User{} = organizer, comment_id) do
+    # Fetch target record with preloaded parental properties
+    case Repo.get(Comment, comment_id) |> Repo.preload(:event) do
+      nil ->
+        {:error, :not_found}
+
+      comment ->
+        # STRICT OWNERSHIP LOCK: Verify if the user is the true organizer of this event page
+        if comment.event.created_by != organizer.id do
+          {:error, :unauthorized}
+        else
+          Multi.new()
+          # 1. Flip comment moderation status to rejected to strip it out of index results instantly
+          |> Multi.update(:comment, Comment.changeset(comment, %{moderation_status: "rejected"}))
+
+          # 2. Log action to your administrative compliance logging board for transparency
+          |> Multi.insert(:admin_log, %AdminLog{
+            action: "event_media_hidden",
+            target_id: comment.id,
+            target_type: "Comment",
+            user_id: organizer.id,
+            metadata: %{event_id: comment.event_id}
+          })
+          |> Repo.transaction()
+          |> case do
+            {:ok, %{comment: updated_comment}} ->
+              # ─── REAL-TIME TRANSMISSION DATA PIPELINE ───
+              # Shouts straight out over the specific event page channel room topic
+              Phoenix.PubSub.broadcast(
+                Kollective.PubSub,
+                "event:#{updated_comment.event_id}",
+                {"image_removed", %{id: updated_comment.id}}
+              )
+
+              {:ok, :hidden}
+
+            {:error, _step, changeset, _changes} ->
+              {:error, changeset}
+          end
+        end
+    end
+  end
+
+  @doc """
+  Fetches a list of all events the specific user has joined with an accepted status.
+  """
+  def list_joined_events_for_user(%User{} = user, _params \\ %{}) do
+    from(e in Event,
+      join: p in Participant,
+      on: p.event_id == e.id,
+      where: p.user_id == ^user.id and p.status == "accepted" and e.event_status == "published",
+      order_by: [desc: e.start_time],
+      preload: [:user, :origin_city]
+    )
+    |> Repo.all()
+  end
+
+  # ─── ICALENDAR TIME-FORMATTING HELPER ───
+
+  @doc """
+  Converts a UTC DateTime into a standardized iCal local time string format (YYYYMMDDTHHMMSS).
+  """
+  def format_ical_datetime(%DateTime{} = dt, timezone_str) do
+    # Elixir core will look up the string inside the provided database module
+    dt
+    |> DateTime.shift_zone!(timezone_str, Tz.TimeZoneDatabase)
+    |> Calendar.strftime("%Y%m%dT%H%M%S")
+  rescue
+    _error ->
+      # Safe backup fallback string formatting if timezone parsing fails (appends Z for UTC)
+      Calendar.strftime(dt, "%Y%m%dT%H%M%SZ")
+  end
 
   @doc """
   Fetches a single event by ID, raising an Ecto.NoResultsError if not found.
@@ -846,7 +1372,6 @@ defmodule Kollective.Events.Events do
     |> Repo.all()
   end
 
-
   def get_event_with_hierarchy!(id) do
     Event
     |> Repo.get!(id)
@@ -873,13 +1398,579 @@ defmodule Kollective.Events.Events do
     ])
   end
 
+  # defp get_location(%{location_id: location_id}) when location_id in [nil, "", "nil"], do: nil
+  # defp get_location(%{location_id: location_id}) when is_binary(location_id) do
+  #  result = Geospatial.Service.service().get_by_id(location_id)
+  #  List.first(result)
+  # end
+  # defp get_location(_), do: nil
 
- # def list_events_in_state_hierarchy(state_id) do
-
-  defp get_location(%{location_id: location_id}) when location_id in [nil, "", "nil"], do: nil
-  defp get_location(%{location_id: location_id}) when is_binary(location_id) do
-    result = Geospatial.Service.service().get_by_id(location_id)
-    List.first(result)
+  @doc """
+  Inserts an event comment into the database.
+  Supports optional media URLs, parent threading IDs, and custom moderation statuses.
+  """
+  def create_comment(attrs \\ %{}) do
+    %Comment{}
+    # Ensure your schema file has a standard cast/validate changeset function defined
+    |> Comment.changeset(attrs)
+    |> Repo.insert()
   end
-  defp get_location(_), do: nil
+
+  @doc """
+  Asynchronous Mentions Processing Engine. Extracts user @mentions natively using regular
+  expressions and triggers targeted, index-optimized notification rows.
+  """
+  def process_comment_mentions(%Comment{} = comment) do
+    content_text = comment.content || ""
+
+    if String.trim(content_text) != "" do
+      # 1. Extract raw unique username strings directly from the text body
+      mentioned_usernames = extract_usernames_from_text(content_text)
+
+      if Enum.any?(mentioned_usernames) do
+        # 2. BATCH LOOKUP: Fetch all matching user profiles in a single query pass
+        # This completely avoids running repetitive individual database checks
+        mentioned_users =
+          Repo.all(from u in User, where: u.username in ^mentioned_usernames)
+
+        # 3. Iterate through found users and dispatch alerts via the unified pipeline
+        Enum.each(mentioned_users, fn mentioned_user ->
+          # SELF-NOTIFICATION GUARD: Never notify authors when they tag themselves
+          if mentioned_user.id != comment.user_id do
+            # Arguments layout contract: target_user_id, actor_id, type, database_attrs, websocket_payload
+            Notifications.notify(
+              # Who receives the notification
+              mentioned_user.id,
+              # Who wrote the comment (The actor)
+              comment.user_id,
+              # Type strictly maps to your standalone snake_case registry list
+              "mention",
+              %{
+                post_id: nil,
+                event_id: comment.event_id,
+                target_id: comment.id,
+                target_type: "Comment"
+              },
+              %{
+                post_id: nil,
+                preview: "✍️ @#{comment.user.username} tagged you in an event discussion."
+              }
+            )
+          end
+        end)
+      end
+    end
+
+    :ok
+  end
+
+  # ─── NATIVE SPATIAL TEXT-EXTRACTION HELPERS ───
+
+  defp extract_usernames_from_text(text) do
+    # Regex breakdown: Finds text characters immediately following an '@' symbol
+    # Catches common username strings while ignoring punctuation at the end of sentences
+    ~r/@([a-zA-Z0-9_]+)/
+    |> Regex.scan(text)
+    # Regex.scan returns nested arrays: [["@alice", "alice"], ["@bob", "bob"]]
+    # We map over the rows to grab index position 1—the clean captured username string
+    |> Enum.map(fn [_, username] -> String.downcase(username) end)
+    # Deduplicate matching results if a user tags the same account multiple times in one comment
+    |> Enum.uniq()
+  end
+
+  @doc """
+  Lists comments for a given event with support for pagination, sorting options,
+  and moderator shadow-banning filters.
+
+  Supported options:
+    * `:cursor_id`  - An integer ID to fetch records older than this cursor.
+    * `:viewer_id`   - The current user's ID. Required to see their own shadow-banned/pending comments.
+    * `:limit`       - Number of comments to return (defaults to 30).
+    * `:reverse`     - Set to true to reverse the list array into sequential chronological order.
+  """
+  def list_comments(event_id, opts \\ []) do
+    limit = Keyword.get(opts, :limit, 30)
+    cursor_id = Keyword.get(opts, :cursor_id)
+    viewer_id = Keyword.get(opts, :viewer_id)
+
+    # 1. Base query bound to the parent event target
+    query =
+      from c in Comment,
+        where: c.event_id == ^event_id,
+        preload: [:user]
+
+    # 2. Integrate the Shadow Ban Moderation Engine
+    query = apply_moderation_scope(query, viewer_id)
+
+    # 3. Handle Deterministic Cursor Pagination (Older than cursor_id matching)
+    query = apply_cursor_pagination(query, cursor_id)
+
+    # 4. Enforce Deterministic Sorting Limitations
+    results =
+      query
+      |> order_by([c], desc: c.inserted_at, desc: c.id)
+      |> limit(^limit)
+      |> Repo.all()
+
+    # 5. Conditionally flip formatting layouts for frontend timeline rendering
+    if Keyword.get(opts, :reverse, false) do
+      Enum.reverse(results)
+    else
+      results
+    end
+  end
+
+  # ─── WORKFLOW 1: PUBLIC FEED FILTERING ───
+  @doc """
+  Lists all globally accessible, published public events sorted chronologically.
+  """
+  def list_public_events do
+    from(e in Event,
+      where: e.event_status == "published" and e.join_mode in ["free", "restricted"],
+      order_by: [asc: e.start_time],
+      preload: [:user, :origin_city]
+    )
+    |> Repo.all()
+  end
+
+  # ─── WORKFLOW 2: PRIVACY-MAPPED FEED ISOLATION ───
+
+  @doc """
+  Fetches an index query scope mapping user-specific privacy rights.
+  Hides "invite_only" events unless the active user is the creator or an invited participant.
+  """
+  def list_visible_events_query(user) do
+    # 1. Fetch array of event IDs where the user has an active registration slot
+    invited_event_ids =
+      from(p in EventParticipant, where: p.user_id == ^user.id, select: p.event_id)
+      |> Repo.all()
+
+    # 2. Query: Enforce visibility rules using fast index matching bounds
+    from(e in Event,
+      where: e.event_status == "published",
+      where:
+        e.join_mode in ["free", "restricted"] or e.id in ^invited_event_ids or
+          e.created_by == ^user.id,
+      order_by: [desc: e.start_time],
+      preload: [:user, :origin_city]
+    )
+  end
+
+  # ─── WORKFLOW 3: ATOMIC PRIVATE EVENT INVITATIONS ───
+
+  @doc """
+  Dispatches a secure invitation to an invite-only private event.
+  Creates the permission slice row and maps notification logs in a single atomic transaction.
+  """
+  def invite_to_private_event(%User{} = inviter, event_id, target_user_id) do
+    event = Repo.get!(Event, event_id)
+
+    Multi.new()
+    # Step A: Insert the attendance mapping record as 'invited' (Acts as their view token key)
+    |> Multi.insert(:attendance, %EventParticipant{
+      user_id: target_user_id,
+      event_id: event.id,
+      status: "invited"
+    })
+    |> Repo.transaction()
+    |> case do
+      {:ok, _changes} ->
+        # Step B: Deliver notifications cleanly through the unified pipeline
+        # Arguments contract: target_user_id, actor_id, type, database_attrs, websocket_payload
+        Notifications.notify(
+          # Who receives the notification
+          target_user_id,
+          # Who initiated the action
+          inviter.id,
+          # Safe, verified snake_case type from your registry list
+          "event_update",
+          %{
+            event_id: event.id,
+            target_id: event.id,
+            target_type: "Event",
+            metadata: %{event_title: event.name, sub_type: "private_event_invite"}
+          },
+          %{
+            post_id: nil,
+            preview:
+              "🔒 Secret Invite: @#{inviter.username} invited you to a private event: '#{event.name}'."
+          }
+        )
+
+        {:ok, :invited}
+
+      {:error, _failed_step, changeset, _changes} ->
+        {:error, changeset}
+    end
+  end
+
+  # --- Internal Scope Filters ---
+
+  # Appends the visibility layer depending on who is requesting the timeline feed
+  defp apply_moderation_scope(query, nil) do
+    # An anonymous or unauthenticated request can only view clean public assets
+    where(query, [c], c.moderation_status == "approved")
+  end
+
+  defp apply_moderation_scope(query, viewer_id) do
+    # THE SHADOW BAN FILTER:
+    # Public users see "approved". Authors see their own "pending" or "rejected" content.
+    where(
+      query,
+      [c],
+      c.moderation_status == "approved" or
+        (c.moderation_status == "rejected" and c.user_id == ^viewer_id) or
+        (c.moderation_status == "pending" and c.user_id == ^viewer_id)
+    )
+  end
+
+  # Looks up the position of the last element loaded to return older content segments safely
+  defp apply_cursor_pagination(query, nil), do: query
+
+  defp apply_cursor_pagination(query, cursor_id) do
+    # Fetch records that were inserted prior to this specific record node sequence
+    where(query, [c], c.id < ^cursor_id)
+  end
+
+  @doc """
+  Fetches all top-level approved comments for a specific event page.
+  Preloads author metadata and dynamically hydrates like totals and 'has_liked' highlights.
+  """
+  def list_event_comments(event_id, reading_user \\ nil, params \\ %{}) do
+    limit = Map.get(params, "limit", 50)
+    cursor = Map.get(params, "cursor")
+
+    # 1. Base query focusing exclusively on approved, top-level comments
+    base_query =
+      from(c in Comment,
+        where:
+          c.event_id == ^event_id and c.moderation_status == "approved" and is_nil(c.parent_id)
+      )
+
+    # Apply keyset pagination boundary if a cursor parameter is passed
+    query =
+      if cursor,
+        do: from(c in base_query, where: c.id < ^cursor),
+        else: base_query
+
+    raw_comments =
+      query
+      |> order_by([c], desc: c.id)
+      |> limit(^limit)
+      |> preload([:user])
+      |> Repo.all()
+
+    # 2. BATCH DATA HYDRATION: Hydrate likes maps in a single memory pass
+    hydrate_comment_virtual_fields(raw_comments, reading_user)
+  end
+
+  @doc """
+  Safely fetches a single comment with its immediate nested reply structures preloaded.
+  """
+  def get_comment(id, reading_user \\ nil) do
+    Comment
+    |> where([c], c.id == ^id and c.moderation_status == "approved")
+    |> preload([:user, replies: [:user]])
+    |> Repo.one()
+    |> case do
+      nil ->
+        {:error, :not_found}
+
+      comment ->
+        [hydrated] = hydrate_comment_virtual_fields([comment], reading_user)
+        {:ok, hydrated}
+    end
+  end
+
+  # --- Private O(1) Hydration Engine ---
+  defp hydrate_comment_virtual_fields([], _), do: []
+
+  defp hydrate_comment_virtual_fields(comments, user) do
+    comment_ids = Enum.map(comments, & &1.id)
+
+    # Fetch absolute total counts across the list
+    likes_counts =
+      from(l in CommentLike,
+        where: l.comment_id in ^comment_ids,
+        group_by: l.comment_id,
+        select: {l.comment_id, count(l.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    # Fetch user specific highlights
+    liked_ids =
+      if user do
+        from(l in CommentLike,
+          where: l.comment_id in ^comment_ids and l.user_id == ^user.id,
+          select: l.comment_id
+        )
+        |> Repo.all()
+        |> MapSet.new()
+      else
+        MapSet.new()
+      end
+
+    Enum.map(comments, fn comment ->
+      # Assign properties seamlessly directly into the virtual schema map fields
+      %{comment | likes_count: Map.get(likes_counts, comment.id, 0)}
+      |> Map.put(:has_liked, MapSet.member?(liked_ids, comment.id))
+    end)
+  end
+
+  # Delete Comment feature
+  def delete_comment(user, comment_id) do
+    # 1. Fetch comment and preload the associated event to check ownership
+    comment = Repo.get!(Comment, comment_id) |> Repo.preload(:event)
+
+    # 2. Permission Check: Author OR Event Organizer
+    is_author = comment.user_id == user.id
+    is_organizer = comment.event.created_by == user.id
+
+    if is_author || is_organizer do
+      Repo.delete(comment)
+    else
+      {:error, :unauthorized}
+    end
+  end
+
+  @doc """
+  The definitive comment interaction engine. Handles unique database inserts,
+  atomic like increments, real-time WebSocket ticker updates, and author notifications.
+
+  Returns:
+    * {:ok, :liked}        -> Successfully liked, increments updated, alerts sent.
+    * {:error, :already_liked} -> Safe rollback transaction bypass to block duplicate clicks.
+  """
+  def like_comment(user_id, comment_id) do
+    Repo.transaction(fn ->
+      # 1. ATTEMPT UNIQUE LIKE INSERTION
+      # Leveraging the unique index constraint prevents double-liking or cache thrashing
+      case %Kollective.Events.CommentLike{}
+           |> Kollective.Events.CommentLike.changeset(%{user_id: user_id, comment_id: comment_id})
+           |> Repo.insert() do
+        {:ok, _like} ->
+          # 2. ATOMIC COUNTER INCREMENT
+          from(c in Comment, where: c.id == ^comment_id)
+          |> Repo.update_all(inc: [likes_count: 1])
+
+          # 3. NOTIFICATION DISPATCH (Fetch fresh comment metrics out of the transaction)
+          comment = Repo.get!(Comment, comment_id) |> Repo.preload([:user])
+
+          # SELF-NOTIFICATION GUARD: Never notify the author if they like their own comment
+          if comment.user_id != user_id do
+            # Arguments layout contract: target_user_id, actor_id, type, database_attrs, websocket_payload
+            Notifications.notify(
+              # Recipient (The Author)
+              comment.user_id,
+              # Actor (The Liker)
+              user_id,
+              # Validated clean snake_case type from your registry list
+              "favourite",
+              %{
+                event_id: comment.event_id,
+                target_id: comment.id,
+                target_type: "Comment"
+              },
+              %{
+                post_id: nil,
+                preview:
+                  "❤️ Someone liked your comment: \"#{String.slice(comment.content || "", 0, 30)}...\""
+              }
+            )
+          end
+
+          # 4. STREAM REAL-TIME TICKER UPDATES DOWNSTREAM TO ACTIVE VIEWERS
+          broadcast_comment_update(comment)
+
+          {:ok, :liked}
+
+        {:error, _changeset} ->
+          # Smoothly roll back the transaction to neutralize duplicate clicking spam
+          Repo.rollback(:already_liked)
+      end
+    end)
+  end
+
+  # ─── REAL-TIME TRANSMISSION DATA PIPELINE ───
+  defp broadcast_comment_update(%Comment{} = comment) do
+    # Broadcasts across your unified FeedChannel event topic room block
+    Phoenix.PubSub.broadcast(
+      Kollective.PubSub,
+      "event:#{comment.event_id}",
+      {"comment_updated",
+       %{
+         id: comment.id,
+         # Display the freshly incremented value instantly
+         likes_count: comment.likes_count + 1
+       }}
+    )
+  end
+
+  @doc """
+  Compiles and launches a new collective action from the frontend wizard.
+  Verifies organizational identity contexts, blocks boundary spoofing, and schedules async tasks.
+  """
+  def create_action(%Kollective.Accounts.User{} = current_user, attrs \\ %{}) do
+    now = DateTime.utc_now()
+    has_coordinates? = not is_nil(attrs["latitude"] || attrs[:latitude])
+    address_text = attrs["street"] || attrs[:street] || attrs["address"] || attrs[:address]
+
+    # 1. Organization Posting Overrides Check
+    # If the user selects to post on behalf of an approved Organization, bind its context!
+    organization_id = attrs["organization_id"] || attrs[:organization_id]
+
+    author =
+      if organization_id do
+        is_member? =
+          Repo.exists?(
+            from(m in "organization_memberships",
+              where:
+                m.organization_id == ^organization_id and m.user_id == ^current_user.id and
+                  m.status == :approved
+            )
+          )
+
+        if is_member?, do: Accounts.get_user!(organization_id), else: current_user
+      else
+        current_user
+      end
+
+    Multi.new()
+    # Step A: Validate and write the core action row inside our polymorphic event structure
+    |> Multi.insert(:event, fn _changes ->
+      base_attrs =
+        attrs
+        |> Map.put("event_status", "published")
+        |> Map.put("organization_id", if(author.type == :organization, do: author.id, else: nil))
+
+      %Event{created_by: current_user.id}
+      |> Event.creation_changeset(base_attrs)
+      # TARGETING ENFORCEMENT: Strips forged boundaries from standard citizens
+      |> validate_and_fix_targeting(base_attrs, current_user)
+    end)
+
+    # Step B: Auto-Join Creator as the First Accepted Participant
+    |> Multi.insert(:organizer_attendance, fn %{event: event} ->
+      %EventParticipant{user_id: current_user.id, event_id: event.id, status: "accepted"}
+    end)
+
+    # Step C: Increment attendee tracking cache column atomically on the row
+    |> Multi.update_all(
+      :inc_participants,
+      fn %{event: event} ->
+        from(e in Event, where: e.id == ^event.id)
+      end,
+      inc: [participants_count: 1]
+    )
+
+    # Step D: SCHEDULE TIMELINE WORKERS (Oban Background Engine)
+    |> Multi.run(:schedule_workers, fn _repo, %{event: event} ->
+      # Enqueue live start triggers and countdown reminders automatically
+      %{"event_id" => event.id}
+      |> Kollective.Workers.EventStartWorker.new(scheduled_at: event.start_time)
+      |> Oban.insert!()
+
+      {:ok, :scheduled}
+    end)
+
+    # Step E: Conditionally Enqueue the Polymorphic Oban GeocodeWorker
+    # Runs ONLY if the frontend left longitude/latitude parameters empty!
+    |> Multi.run(:enqueue_geocode, fn _repo, %{event: event} ->
+      if (not has_coordinates? and address_text) && String.trim(address_text) != "" do
+        %{"target_id" => event.id, "schema_type" => "Event", "address_text" => address_text}
+        |> Kollective.Workers.GeocodeWorker.new()
+        |> Oban.insert()
+      else
+        {:ok, :skipped}
+      end
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{event: event}} ->
+        # Broadcast live socket notifications out to update your feeds in under 0.001ms
+        Phoenix.PubSub.broadcast(
+          Kollective.PubSub,
+          "feed:public",
+          {:new_event_registered, event.id}
+        )
+
+        {:ok, Repo.preload(event, [:user, :organization])}
+
+      {:error, _failed_step, changeset, _changes} ->
+        {:error, changeset}
+    end
+  end
+
+  @doc """
+  The definitive localized action compiler. Filters your polymorphic events engine
+  by specific action categories and cross-checks tiered scope toggles against
+  the viewer's physical home base parameters or geometric coordinates .
+  """
+  def list_collective_actions(%Kollective.Accounts.User{} = user, category_tab, scope_toggle) do
+    # Precise 60 miles boundary sweep radius (96,560 meters)
+    radius_meters = 96560
+
+    # 1. Base Query: Restrict results to active, published collective action models
+    # Filter out regular timeline posts and standard informational calendar entries
+    base_query =
+      from(e in Event,
+        where:
+          e.event_status == "published" and e.category in ~w(protest town_hall rally meeting),
+        # Preload actor profiles to prevent N+1 loop overhead
+        preload: [:user, :organization]
+      )
+
+    # 2. STEP 2: DYNAMIC DASHBOARD CATEGORY TAB FILTER SLIDER
+    # Maps to your frontend layout classification selections ("protest", "town_hall", etc.)
+    query =
+      if (category_tab && category_tab != "all") and category_tab != "",
+        do: from(e in base_query, where: e.category == ^to_string(category_tab)),
+        else: base_query
+
+    # 3. STEP 3: TIERED GEOGRAPHY BOUNDARY FILTER MATRIX
+    # Coordinates your "Local / State / Country" sliding panel widget parameters
+    query =
+      case scope_toggle do
+        "country" ->
+          # Broadest Scope: Restrict content strictly to the citizen's sovereign country borders
+          from(e in query, where: e.origin_country == ^user.country)
+
+        "state" ->
+          # Regional Scope: Restrict content strictly to the citizen's administrative state line boundaries
+          from(e in query,
+            where: e.origin_state == ^user.state and e.origin_country == ^user.country
+          )
+
+        "local" ->
+          # Grassroots Local Scope: Fall back to shared structural political districts,
+          # municipal city boundaries, OR a precise 60-mile physical radius sweep
+          if user.location do
+            from(e in query,
+              # High-speed PostGIS spatial geometry index scanner avoids CPU trigonometry load
+              where:
+                e.city_id == ^user.city_id or
+                  (e.origin_district_l1 == ^user.district_l1 and e.origin_state == ^user.state) or
+                  (e.origin_district_l2 == ^user.district_l2 and e.origin_state == ^user.state) or
+                  fragment("ST_DWithin(?, ?, ?)", e.location, ^user.location, ^radius_meters)
+            )
+          else
+            # Fallback if the user profile does not contain active GPS metadata records
+            from(e in query,
+              where:
+                e.city_id == ^user.city_id or
+                  (e.origin_district_l1 == ^user.district_l1 and e.origin_state == ^user.state)
+            )
+          end
+
+        _all_fallback ->
+          query
+      end
+
+    # 4. EXECUTE B-TREE TIMELINE RETRIEVAL PASS
+    query
+    # Chronological sorting path maps perfectly to your card feeds
+    |> order_by([e], desc: e.start_time)
+    |> Repo.all()
+  end
 end

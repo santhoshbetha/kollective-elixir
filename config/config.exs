@@ -22,32 +22,50 @@ config :kollective, :scopes,
 
 config :kollective,
   ecto_repos: [Kollective.Repo],
-  generators: [timestamp_type: :utc_datetime, binary_id: true]
-
-config :geo, :ecto_repos, [Kollective.Repo]
+  generators: [
+    timestamp_type: :utc_datetime,
+    binary_id: true,
+    #
+    sample_binary_id: "01H2E3456789ABCDEFGHJKMNPQ"
+  ]
 
 # to ensure binary_id is used by default in all your schemas
 config :kollective, Kollective.Repo,
   migration_primary_key: [name: :id, type: :binary_id, autogenerate: false],
   migration_foreign_key: [type: :binary_id]
 
+config :geo, :ecto_repos, [Kollective.Repo]
+
 config :kollective, Oban,
   repo: Kollective.Repo,
-  queues: [default: 10, maintenance: 5, notifications: 10, media_processing: 10, discovery_updates: 15],
+  queues: [default: 10, maintenance: 5, notifications: 10, media_processing: 10],
   plugins: [
     # 1. Essential: Cleans up Oban's own internal job history (keeping 24h of data)
-    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24}, # Recommended: cleans up Oban's own job table
+    # Recommended: cleans up Oban's own job table
+    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24},
     # 2. Cron: Manages your custom recurring tasks
     {Oban.Plugins.Cron,
      crontab: [
-        {"*/15 * * * *", Kollective.Workers.TrendCalculatorWorker},
-        # Existing: Check for expired Voice/Urgent posts every minute
-        {"* * * * *", Kollective.Workers.MentionNotificationWorker},
-        # Sync official bot IPs daily at 01:00 AM
-        {"0 1 * * *", Kollective.Workers.VideoTranscoder},
-        #{"0 1 * * *", Kollective.Workers.BotIPSyncWorker}
-        # Runs at exactly 02:00 every single night
-        {"0 2 * * *", Kollective.Workers.ReconcileCountersWorker}
+       {"*/15 * * * *", Kollective.Workers.TrendCalculatorWorker},
+       # Existing: Check for expired Voice/Urgent posts every minute
+       {"* * * * *", Kollective.Workers.MentionNotificationWorker},
+       # Sync official bot IPs daily at 01:00 AM
+       {"0 1 * * *", Kollective.Workers.VideoTranscoder},
+       # {"0 1 * * *", Kollective.Workers.BotIPSyncWorker}
+       # Runs at exactly 02:00 every single night
+       {"0 2 * * *", Kollective.Workers.ReconcileCountersWorker},
+       # Evaluates database checks every single midnight automatically
+       {"0 0 * * *", Kollective.Workers.ScholarCronOrchestrator},
+       # Runs automatically at 12:05 AM every single night
+       {"5 0 * * *", Kollective.Workers.OrganizationProbationWorker},
+       {"0 0 * * *", Kollective.Workers.ScholarCronOrchestrator},
+       {"0 0 * * *", Kollective.Workers.JournalistCronOrchestrator},
+
+       # Runs every night at midnight to delete expired, unconsumed rows
+       {"0 0 * * *", Kollective.Workers.DailyPrunerWorker}
+
+       # Runs your out-of-band counter cache repair every Sunday at midnight smoothly
+       # {"0 0 * * 0", Kollective.Workers.RepairCountsWorker}
      ]}
   ]
 
@@ -56,7 +74,7 @@ config :kollective, KollectiveWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [
-    formats: [html: KollectiveWeb.ErrorHTML, json: KollectiveWeb.ErrorJSON],
+    formats: [json: KollectiveWeb.ErrorJSON],
     layout: false
   ],
   pubsub_server: Kollective.PubSub

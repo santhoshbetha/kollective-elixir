@@ -3,8 +3,10 @@ defmodule Kollective.Media.MediaAttachment do
 
   schema "media_attachments" do
     field :type, Kollective.Media.PostMedia.Type
-    field :url, :string      # Full URL to S3
-    field :blurhash, :string # For blurred placeholders (Mastodon standard)
+    # Full URL to S3
+    field :url, :string
+    # For blurred placeholders (Mastodon standard)
+    field :blurhash, :string
 
     # URL for the extracted first frame
     field :static_url, :string
@@ -22,17 +24,23 @@ defmodule Kollective.Media.MediaAttachment do
     # 1. Downscale the image (recommended for speed)
     # Encoding a massive image is slow; 32px is plenty for a blur
     import Mogrify
-    {:ok, pixels} =
-      open(image_path)
 
+    # 🔄 FIX 1: Bind the saved Mogrify struct to a variable
+    processed_image =
+      open(image_path)
       |> custom("resize", "32x32!")
       |> format("rgb")
-      |> save()
+      |> save(in_place: true) # 💡 Use in_place: true to avoid creating orphan temp files
 
+    # 🔄 FIX 2: Extract the string path (.path) out of the struct before reading bytes
+        # 🔄 FIX: Remove the tuple wrapper. bin_to_list/1 returns a plain [byte()] list directly.
+    pixels =
+      processed_image.path
       |> File.read!()
       |> :binary.bin_to_list()
 
     # 2. Encode to Blurhash string (4x3 components is standard)
     BlurHash.encode(pixels, 32, 32, 4, 3)
   end
+
 end

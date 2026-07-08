@@ -43,6 +43,4 @@ defmodule KollectiveWeb.MessageController do
     # 3. Use the Endpoint to broadcast from outside a channel process
     KollectiveWeb.Endpoint.broadcast!(topic, "new_message", payload)
   end
-
-
 end

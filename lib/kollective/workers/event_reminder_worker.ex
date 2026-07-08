@@ -20,9 +20,12 @@ defmodule Kollective.Workers.EventReminderWorker do
     Enum.each(participants, fn participant ->
       # Arguments contract: target_user_id, actor_id, type, database_attrs, websocket_payload
       Notifications.notify(
-        participant.user_id,    # The recipient (Attendee)
-        event.created_by,       # The actor (Organizer)
-        "event_reminder",       # Type strictly validates against your @notification_types registry
+        # The recipient (Attendee)
+        participant.user_id,
+        # The actor (Organizer)
+        event.created_by,
+        # Type strictly validates against your @notification_types registry
+        "event_reminder",
         %{
           event_id: event.id,
           target_id: event.id,
@@ -31,7 +34,8 @@ defmodule Kollective.Workers.EventReminderWorker do
           metadata: %{
             event_title: event.name,
             local_time: formatted_time,
-            sub_type: "one_hour_reminder" # Helps React parse custom timeline icons
+            # Helps React parse custom timeline icons
+            sub_type: "one_hour_reminder"
           }
         },
         %{

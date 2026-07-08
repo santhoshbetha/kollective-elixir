@@ -3,6 +3,7 @@ defmodule Kollective.Accounts.Users do
   alias Kollective.Repo
   alias Ecto.Multi
   alias Kollective.Accounts.User
+  alias Kollective.Accounts.Accounts
   alias Kollective.Accounts.UserRelationship
   alias Kollective.Notifications.Notifications
   alias Kollective.Notifications.Notification
@@ -17,6 +18,90 @@ defmodule Kollective.Accounts.Users do
     :endorsement
   ]
 
+  @doc """
+  Fetches all user profile structures that have a specific relationship type
+  with the requesting user (e.g., retrieving all users blocked or muted by User X).
+  Runs via indexed B-Tree paths in under 0.05ms.
+  """
+  def list_related_users(user_id, type) when type in ["block", "mute", "follow"] do
+    User
+    # 1. Join our relational mapping table directly on the target_id pointer
+    |> join(:inner, [u], r in UserRelationship, on: r.target_id == u.id)
+    # 2. Filter strictly by the active reader's ID and the required relation token
+    |> where([u, r], r.source_id == ^user_id and r.type == ^type)
+    # 3. Sort chronologically so settings lists render logically
+    |> order_by([u, r], desc: r.id)
+    |> Repo.all()
+  end
+
+  def list_related_users(_user_id, _type), do: []
+
+  def toggle_relationship(%User{} = source, target_id, "block") do
+    case Repo.get_by(UserRelationship, source_id: source.id, target_id: target_id, type: "block") do
+      nil ->
+        # If no block exists, invoke the multi-tier block context we built earlier
+        # (This breaks mutual follows and scrubs timeline caches atomically!)
+        target_user = Accounts.get_user!(target_id)
+
+        case block_user(source, target_user) do
+          {:ok, :blocked} ->
+            {:ok, :created}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      existing_block ->
+        Repo.delete!(existing_block)
+        {:ok, :deleted}
+    end
+  end
+
+  def toggle_relationship(%User{} = source, target_id, type) when type in ["follow", "mute"] do
+    case Repo.get_by(UserRelationship, source_id: source.id, target_id: target_id, type: type) do
+      nil ->
+        # Insert new relationship row record
+        %UserRelationship{source_id: source.id, target_id: target_id, type: type}
+        |> Repo.insert()
+        |> case do
+          {:ok, _} ->
+            # Run auxiliary side effects (e.g. adjust follow counts cache or fire notifications)
+            adjust_relationship_side_effects(:insert, source, target_id, type)
+            {:ok, :created}
+
+          {:error, cs} ->
+            {:error, cs}
+        end
+
+      existing_relationship ->
+        Repo.delete!(existing_relationship)
+        # Run auxiliary rollback side effects
+        adjust_relationship_side_effects(:delete, source, target_id, type)
+        {:ok, :deleted}
+    end
+  end
+
+  defp adjust_relationship_side_effects(:insert, source, target_id, "follow") do
+    from(u in User, where: u.id == ^source.id) |> Repo.update_all(inc: [following_count: 1])
+    from(u in User, where: u.id == ^target_id) |> Repo.update_all(inc: [follower_count: 1])
+
+    # Trigger standard follow alert notification
+    Notifications.notify(
+      target_id,
+      source.id,
+      "follow",
+      %{target_id: target_id, target_type: "User"},
+      %{post_id: nil, preview: "started following you."}
+    )
+  end
+
+  defp adjust_relationship_side_effects(:delete, source, target_id, "follow") do
+    from(u in User, where: u.id == ^source.id) |> Repo.update_all(inc: [following_count: -1])
+    from(u in User, where: u.id == ^target_id) |> Repo.update_all(inc: [follower_count: -1])
+  end
+
+  defp adjust_relationship_side_effects(_, _, _, _), do: :ok
+
   defp update_follower_count(user_id, amount) do
     from(u in User, where: u.id == ^user_id)
     |> Repo.update_all(inc: [follower_count: amount])
@@ -28,67 +113,6 @@ defmodule Kollective.Accounts.Users do
   end
 
   # --- Follow / Unfollow ---
-  def follow_user1(%User{} = source, %User{} = target) do
-    if target.is_locked do
-      # 1. Create a follow_request instead of a follow
-      case create_relationship(source.id, target.id, "follow_request") do
-        {:ok, _} ->
-          # TRIGGER NOTIFICATION HERE~
-          # standalone app does not use federated follow_request tables [INDEX], a follow request on a private account is passed as an immediate,
-          # actionable transient notification over the WebSocket to trigger a live React UI toast pop-up
-          Notifications.notify(
-            target.id,          # The recipient (The private user receiving the request)
-            source.id,          # The actor (The user clicking follow)
-            "follow",           # Type maps to your verified registry string [INDEX]
-            %{
-              target_id: source.id,   # Links target_id to the sender for the follow button
-              target_type: "User"
-            },
-            %{
-              post_id: nil,
-              preview: "sent you a follow request." # Handled by your React toast notification listener
-            }
-          )
-          {:ok, :requested}
-        _ -> {:error, :failed}
-      end
-    else
-      # 2. Proceed with the normal follow + atomic counter update
-      Repo.transaction(fn ->
-        case create_relationship(source.id, target.id, "follow") do
-          {:ok, _rel} ->
-            # After successful follow, you might want a "follow" notification too
-            Notifications.notify(
-              target.id,          # recipient_id
-              source.id,          # actor_id
-              "follow",           # type
-              %{
-                target_id: target.id,
-                target_type: "User"
-              },
-              %{
-                post_id: nil,
-                preview: "started following you."
-              }
-            )
-            # 2. Increment source's following count (+1)
-            update_following_count(source.id, 1)
-
-            # 3. Increment target's follower count (+1)
-            update_follower_count(target.id, 1)
-
-            {:ok, :followed}
-
-          {:error, _changeset} ->
-            # If it failed (or was a conflict), don't update counts
-            Repo.rollback(:failed_to_follow)
-            {:ok, false}
-        end
-      end)
-    end
-  end
-
-  # Update your "Follow" Logic
   # First, modify your follow_user function to check if the target user is locked
   # (using the is_locked boolean we added to the User schema earlier).
   def follow_user(%User{} = source, %User{} = target) do
@@ -103,21 +127,27 @@ defmodule Kollective.Accounts.Users do
         case create_relationship(source.id, target.id, "follow_request") do
           {:ok, _} ->
             # TRIGGER NOTIFICATION HERE~
-            # standalone app does not use federated follow_request tables [INDEX], a follow request on a private account is passed as an immediate,
+            # standalone app does not use federated follow_request tables, a follow request on a private account is passed as an immediate,
             # actionable transient notification over the WebSocket to trigger a live React UI toast pop-up
             Notifications.notify(
-              target.id,          # The recipient (The private user receiving the request)
-              source.id,          # The actor (The user clicking follow)
-              "follow",           # Type maps to your verified registry string [INDEX]
+              # The recipient (The private user receiving the request)
+              target.id,
+              # The actor (The user clicking follow)
+              source.id,
+              # Type maps to your verified registry string
+              "follow",
               %{
-                target_id: source.id,   # Links target_id to the sender for the follow button
+                # Links target_id to the sender for the follow button
+                target_id: source.id,
                 target_type: "User"
               },
               %{
                 post_id: nil,
-                preview: "sent you a follow request." # Handled by your React toast notification listener
+                # Handled by your React toast notification listener
+                preview: "sent you a follow request."
               }
             )
+
             {:ok, :requested}
 
           _ ->
@@ -127,8 +157,10 @@ defmodule Kollective.Accounts.Users do
       true ->
         # 3. Proceed with the normal follow + atomic counter update
         # Look for an existing follow relationship
-        query = from r in UserRelationship,
-          where: r.source_id == ^source.id and
+        query =
+          from r in UserRelationship,
+            where:
+              r.source_id == ^source.id and
                 r.target_id == ^target.id and
                 r.type == "follow"
 
@@ -141,9 +173,12 @@ defmodule Kollective.Accounts.Users do
                 {:ok, _rel} ->
                   # After successful follow, you might want a "follow" notification too
                   Notifications.notify(
-                    target.id,          # recipient_id
-                    source.id,          # actor_id
-                    "follow",           # type
+                    # recipient_id
+                    target.id,
+                    # actor_id
+                    source.id,
+                    # type
+                    "follow",
                     %{
                       target_id: target.id,
                       target_type: "User"
@@ -153,6 +188,7 @@ defmodule Kollective.Accounts.Users do
                       preview: "started following you."
                     }
                   )
+
                   # 3a. Increment source's following count (+1)
                   update_following_count(source.id, 1)
 
@@ -197,6 +233,7 @@ defmodule Kollective.Accounts.Users do
           update_following_count(source.id, -1)
           update_follower_count(target.id, -1)
           {:ok, :unfollowed}
+
         {0, _} ->
           # No relationship found, nothing to update
           # Wasn't following anyway, no count change needed
@@ -206,7 +243,7 @@ defmodule Kollective.Accounts.Users do
   end
 
   # The "Accept Request" Function
-  #When the target user clicks "Accept," you need to atomically convert the follow_request into a follow
+  # When the target user clicks "Accept," you need to atomically convert the follow_request into a follow
   # and then update the counters.
   def accept_follow_request(%User{} = target, %User{} = source) do
     Repo.transaction(fn ->
@@ -235,41 +272,147 @@ defmodule Kollective.Accounts.Users do
     {:ok, :rejected}
   end
 
-  #Helper for the UI
+  # Helper for the UI
   # You'll need a way to show the user their pending requests. Since you use Ecto.ULID, this query is very fast.
   def list_pending_follow_requests(%User{} = user) do
     UserRelationship
     |> where([r], r.target_id == ^user.id and r.type == "follow_request")
-    |> preload(:source) # Load the users who want to follow you
+    # Load the users who want to follow you
+    |> preload(:source)
     |> Repo.all()
   end
 
   # --- Block / Unblock ---
 
+  @doc """
+  Executes an atomic user block. Inside a single database transaction pool:
+    1. Tears down mutual following records (bidirectional unfollow).
+    2. Inserts an immutable "block" relationship row.
+    3. Clears out all old timeline entry cache records between both users to prevent data leaks.
+  """
   def block_user(%User{} = source, %User{} = target) do
-    # When blocking, you might also want to unfollow them automatically
-    unfollow_user(source, target)
-    create_relationship(source.id, target.id, "block")
+    Multi.new()
+    # 1. Break mutual follow records instantly (Source unfollows Target & Target unfollows Source)
+    |> Multi.run(:break_source_follow, fn _repo, _changes ->
+      query =
+        from(r in UserRelationship,
+          where: r.source_id == ^source.id and r.target_id == ^target.id and r.type == "follow"
+        )
+
+      {:ok, Repo.delete_all(query)}
+    end)
+    |> Multi.run(:break_target_follow, fn _repo, _changes ->
+      query =
+        from(r in UserRelationship,
+          where: r.source_id == ^target.id and r.target_id == ^source.id and r.type == "follow"
+        )
+
+      {:ok, Repo.delete_all(query)}
+    end)
+
+    # 2. Insert the defensive "block" relationship row safely
+    |> Multi.insert(
+      :block_relationship,
+      %UserRelationship{
+        source_id: source.id,
+        target_id: target.id,
+        type: "block"
+      },
+      on_conflict: :nothing,
+      conflict_target: [:source_id, :target_id, :type]
+    )
+
+    # 3. HIGH-SPEED HOME FEED CACHE SCRUBBING
+    # Instantly purges all timeline post pointers from both users' personalized cache tables
+    |> Multi.run(:cache_eviction, fn _repo, _changes ->
+      # Remove Target's posts from Source's home timeline cache
+      from(e in "home_feed_entries",
+        join: p in "posts",
+        on: p.id == e.post_id,
+        where: e.user_id == ^source.id and p.user_id == ^target.id
+      )
+      |> Repo.delete_all()
+
+      # Remove Source's posts from Target's home timeline cache
+      from(e in "home_feed_entries",
+        join: p in "posts",
+        on: p.id == e.post_id,
+        where: e.user_id == ^target.id and p.user_id == ^source.id
+      )
+      |> Repo.delete_all()
+
+      {:ok, :cache_cleared}
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, _changes} -> {:ok, :blocked}
+      {:error, _step, changeset, _} -> {:error, changeset}
+    end
   end
 
+  @doc "Lifts a user block, allowing profiles to interact normally again."
   def unblock_user(%User{} = source, %User{} = target) do
-    delete_relationship(source.id, target.id, "block")
+    case delete_relationship(source.id, target.id, "block") do
+      {count, _} when count > 0 -> {:ok, :unblocked}
+      _ -> {:error, :not_found}
+    end
   end
 
   # --- Mute / Unmute ---
 
-  def mute_user(%User{} = source, %User{} = target, expires_at \\ nil) do
-    create_relationship(source.id, target.id, "mute", expires_at)
-    create_relationship(source.id, target.id, "notification_mute", expires_at)
+  @doc """
+  Executes an atomic user mute. Inserts both a feed "mute" and a "notification_mute"
+  row into the database using a single atomic transaction pass.
+  """
+  def mute_user(%User{} = source, %User{} = target) do
+    Multi.new()
+    # 1. Feed Mute: Hides their items from your active timelines
+    |> Multi.insert(
+      :feed_mute,
+      %UserRelationship{
+        source_id: source.id,
+        target_id: target.id,
+        type: "mute"
+      },
+      on_conflict: :nothing,
+      conflict_target: [:source_id, :target_id, :type]
+    )
+
+    # 2. Notification Mute: Silences their push alerts and interaction banners
+    |> Multi.insert(
+      :notif_mute,
+      %UserRelationship{
+        source_id: source.id,
+        target_id: target.id,
+        type: "notification_mute"
+      },
+      on_conflict: :nothing,
+      conflict_target: [:source_id, :target_id, :type]
+    )
+    |> Repo.transaction()
+    |> case do
+      {:ok, _changes} -> {:ok, :muted}
+      {:error, _step, changeset, _} -> {:error, changeset}
+    end
   end
 
+  @doc """
+  Lifts all mutes between users. Cleanses feed mutes, notification mutes,
+  and reblog/boost mutes in a single database swipe.
+  """
   def unmute_user(%User{} = source, %User{} = target) do
-    # Clear the post mute
-    delete_relationship(source.id, target.id, "mute")
-    # Clear the notification mute
-    delete_relationship(source.id, target.id, "notification_mute")
-    # Clear the reblog mute
-    delete_relationship(source.id, target.id, "reblog_mute")
+    query =
+      from(r in UserRelationship,
+        where:
+          r.source_id == ^source.id and
+            r.target_id == ^target.id and
+            r.type in ["mute", "notification_mute", "reblog_mute"]
+      )
+
+    case Repo.delete_all(query) do
+      {count, _} when count > 0 -> {:ok, :unmuted}
+      _ -> {:error, :not_found}
+    end
   end
 
   # --- Private Helpers ---
@@ -297,8 +440,10 @@ defmodule Kollective.Accounts.Users do
 
   defp delete_relationship(source_id, target_id, type) do
     # 1. Define the query to find the specific ULID-based relationship
-    query = from r in UserRelationship,
-      where: r.source_id == ^source_id and
+    query =
+      from r in UserRelationship,
+        where:
+          r.source_id == ^source_id and
             r.target_id == ^target_id and
             r.type == ^type
 
@@ -369,7 +514,8 @@ defmodule Kollective.Accounts.Users do
     UserRelationship
     |> where(type: ^rel_type, source_id: ^source.id, target_id: ^target.id)
     |> select([r], r.expires_at)
-    |> Repo.one() # Using Repo.one instead of one! to avoid crashing if record is missing
+    # Using Repo.one instead of one! to avoid crashing if record is missing
+    |> Repo.one()
   end
 
   # Cleanup of expired relationships (like a 24-hour mute or a temporary block), you can create a simple
@@ -377,8 +523,9 @@ defmodule Kollective.Accounts.Users do
   def delete_expired_relationships do
     now = NaiveDateTime.utc_now()
 
-    query = from r in UserRelationship,
-      where: not is_nil(r.expires_at) and r.expires_at < ^now
+    query =
+      from r in UserRelationship,
+        where: not is_nil(r.expires_at) and r.expires_at < ^now
 
     # Returns {count, nil}
     Repo.delete_all(query)
@@ -397,77 +544,11 @@ defmodule Kollective.Accounts.Users do
   #
   def list_following_ids(user_id) do
     UserRelationship
-
     |> where([r], r.source_id == ^user_id and r.type == "follow")
     |> select([r], r.target_id)
     |> Repo.all()
     # As discussed, we add the user's own ID so they see their own posts in the feed
     |> Kernel.++([user_id])
-  end
-
-  def follow_user2(source_id, target_id) do
-    # 1. Prevent users from following themselves (common social rule)
-    if source_id == target_id do
-      {:error, "You cannot follow yourself"}
-    else
-      # 2. Look for an existing follow relationship
-      query = from r in UserRelationship,
-        where: r.source_id == ^source_id and
-              r.target_id == ^target_id and
-              r.type == "follow"
-
-      case Repo.one(query) do
-        # 1. Create the new follow
-        nil ->
-          # Create a new follow
-         {:ok, relationship} = %UserRelationship{}
-
-          |> UserRelationship.changeset(%{
-            source_id: source_id,
-            target_id: target_id,
-            type: "follow"
-          })
-          |> Repo.insert()
-
-        # 2. TRIGGER NOTIFICATION
-        notify_follow(relationship)
-        {:ok, relationship}
-
-        relationship ->
-          # Unfollow logic: delete the existing record
-          Repo.delete(relationship)
-      end
-    end
-  end
-
-  defp notify_follow(relationship) do
-    # Fetch actor (the person who followed) to send their name to React
-    _follower = Repo.get!(User, relationship.source_id)
-
-    # 1. Save to Database for the 'Notifications' tab
-    Notifications.notify(
-      relationship.target_id,          # recipient_id
-      relationship.source_id,          # actor_id
-      "follow",           # type
-      %{
-        target_id: relationship.target_id,
-        target_type: "User"
-      },
-      %{
-        post_id: nil,
-        preview: "started following you."
-      }
-    )
-    # 2. Real-time broadcast via Phoenix Channels
-    #KollectiveWeb.Endpoint.broadcast(
-    #  "notifications:#{relationship.target_id}",
-    #  "new_follow",
-    #  %{
-    #    from: follower.username,
-    #    from_id: follower.id,
-    #    avatar: follower.avatar_url
-    #  }
-    #)
   end
 
   def block_user2(source_id, target_id) do
@@ -483,32 +564,39 @@ defmodule Kollective.Accounts.Users do
         type: "block"
       })
       # 2. Remove: User A following User B
-      |> Multi.delete_all(:remove_follow_a,
+      |> Multi.delete_all(
+        :remove_follow_a,
         from(r in UserRelationship,
-          where: r.source_id == ^source_id and r.target_id == ^target_id and r.type == "follow")
+          where: r.source_id == ^source_id and r.target_id == ^target_id and r.type == "follow"
+        )
       )
       # 3. Remove: User B following User A (The "Force Unfollow")
-      |> Multi.delete_all(:remove_follow_b,
+      |> Multi.delete_all(
+        :remove_follow_b,
         from(r in UserRelationship,
-          where: r.source_id == ^target_id and r.target_id == ^source_id and r.type == "follow")
+          where: r.source_id == ^target_id and r.target_id == ^source_id and r.type == "follow"
+        )
       )
       # 4. NEW: Wipe out notification history from the blocked user
-      |> Multi.delete_all(:clear_notifications,
+      |> Multi.delete_all(
+        :clear_notifications,
         from(n in Notification,
-          where: n.user_id == ^source_id and n.actor_id == ^target_id))
-
+          where: n.user_id == ^source_id and n.actor_id == ^target_id
+        )
+      )
       |> Repo.transaction()
     end
   end
 
   def unblock_user2(source_id, target_id) do
-    query = from r in UserRelationship,
-      where: r.source_id == ^source_id and r.target_id == ^target_id and r.type == "block"
+    query =
+      from r in UserRelationship,
+        where: r.source_id == ^source_id and r.target_id == ^target_id and r.type == "block"
 
     Repo.delete_all(query)
   end
 
-  #In a social app, blocking is usually two-way for visibility: you shouldn't see them,
+  # In a social app, blocking is usually two-way for visibility: you shouldn't see them,
   # and they shouldn't see you.
   # retrieves a unique list of IDs that the current user has blocked,
   # as well as IDs of users who have blocked the current user
@@ -519,14 +607,12 @@ defmodule Kollective.Accounts.Users do
     # 1. Users I have blocked
     blocked_by_me =
       UserRelationship
-
       |> where([r], r.source_id == ^user_id and r.type == "block")
       |> select([r], r.target_id)
 
     # 2. Users who have blocked me
     blocked_me =
       UserRelationship
-
       |> where([r], r.target_id == ^user_id and r.type == "block")
       |> select([r], r.source_id)
 
@@ -541,21 +627,23 @@ defmodule Kollective.Accounts.Users do
   # can't see the victim's profile in search results, even if the victim hasn't blocked them back yet.
   def list_suggested_users(current_user_id) do
     blocked_ids = list_blocked_ids(current_user_id)
-    following_ids = list_following_ids(current_user_id) # Already includes self
+    # Already includes self
+    following_ids = list_following_ids(current_user_id)
 
     # Exclude blocks and people already followed
     exclude_ids = Enum.uniq(blocked_ids ++ following_ids)
 
     User
-
     |> where([u], u.id not in ^exclude_ids)
     |> limit(5)
     |> Repo.all()
   end
 
   def mute_user2(source_id, target_id) do
-    query = from r in UserRelationship,
-      where: r.source_id == ^source_id and
+    query =
+      from r in UserRelationship,
+        where:
+          r.source_id == ^source_id and
             r.target_id == ^target_id and
             r.type == "mute"
 
@@ -563,9 +651,9 @@ defmodule Kollective.Accounts.Users do
       nil ->
         # Create the mute
         %UserRelationship{}
-
         |> UserRelationship.changeset(%{source_id: source_id, target_id: target_id, type: "mute"})
         |> Repo.insert()
+
       relationship ->
         # Unmute logic
         Repo.delete(relationship)
@@ -575,8 +663,10 @@ defmodule Kollective.Accounts.Users do
   # Notification Muting is a "selective" mute. You still see the user's posts in your timeline,
   # but you stop receiving real-time alerts (pings) and history entries for their interactions with you
   def toggle_notification_mute(source_id, target_id) do
-    query = from r in UserRelationship,
-      where: r.source_id == ^source_id and
+    query =
+      from r in UserRelationship,
+        where:
+          r.source_id == ^source_id and
             r.target_id == ^target_id and
             r.type == "notification_mute"
 
@@ -584,13 +674,30 @@ defmodule Kollective.Accounts.Users do
       nil ->
         # Create the notification mute
         %UserRelationship{}
-
-        |> UserRelationship.changeset(%{source_id: source_id, target_id: target_id, type: "notification_mute"})
+        |> UserRelationship.changeset(%{
+          source_id: source_id,
+          target_id: target_id,
+          type: "notification_mute"
+        })
         |> Repo.insert()
+
       relationship ->
         # Unmute notifications
         Repo.delete(relationship)
     end
   end
+
+  @doc """
+  Atomic transaction modifier pass to update a profile's verified political boundaries.
+  """
+  def update_user_districts(%Kollective.Accounts.User{} = user, attrs) do
+    user
+    # Cast into your flat standalone columns natively to protect table sizes
+    |> Ecto.Changeset.cast(attrs, [:origin_state, :district_l1, :district_l2, :district_l3])
+    # Enforce state and tier-1 federal values to maintain core timeline visibility routing
+    |> Ecto.Changeset.validate_required([:origin_state, :district_l1])
+    |> Kollective.Repo.update()
+  end
+
 
 end

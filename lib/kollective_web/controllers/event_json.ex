@@ -18,11 +18,12 @@ defmodule KollectiveWeb.EventJSON do
       start_time: event.start_time,
       end_time: event.end_time,
       timezone: event.timezone,
-
       status: event.event_status,
 
       # Visuals
-      banner_url: event.banner_url || default_banner(),
+      banner_url:
+        event.banner_url || Kollective.Events.EventHelpers.get_banner_url(event) ||
+          default_banner(),
       logo_url: event.logo_url,
 
       # Engagement
@@ -46,12 +47,37 @@ defmodule KollectiveWeb.EventJSON do
         username: event.user.username,
         is_verified: event.user.is_verified
       },
-
       inserted_at: event.inserted_at
     }
   end
 
   defp default_banner, do: "https://media.kollective.app"
 
+  @doc """
+  Serializes a single pending participation request row from the database.
+  """
+  def participation_request(%{request: request, for: reading_user}) do
+    %{
+      id: to_string(request.id),
 
+      # 1. Nest the requester's user profile using your optimized AccountJSON
+      account: KollectiveWeb.AccountJSON.show(%{user: request.user, for: reading_user}),
+      type: "participation_request",
+      # Maps directly to your local status strings ("pending", "accepted")
+      state: request.status || "pending",
+
+      # Standard international ISO timestamp format string
+      created_at: Calendar.strftime(request.inserted_at, "%Y-%m-%dT%H:%M:%SZ")
+    }
+  end
+
+  @doc """
+  Serializes a list of pending attendance request records for the administrator panel grid.
+  """
+  def participation_requests(%{requests: requests} = opts) do
+    # Standard Elixir collection mapping pass instead of an expensive, nested macro loop
+    Enum.map(requests, fn request ->
+      participation_request(Map.put(opts, :request, request))
+    end)
+  end
 end

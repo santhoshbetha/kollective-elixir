@@ -17,10 +17,13 @@ defmodule Kollective.Notifications.Notifications do
   """
   def notify(target_user_id, actor_id, type, attrs \\ %{}, data_payload \\ %{}) do
     # 1. THE "SILENCER": Has the recipient muted notifications from this specific actor?
-    is_muted = Repo.exists?(
-      from r in UserRelationship,
-        where: r.source_id == ^target_user_id and r.target_id == ^actor_id and r.type == "notification_mute"
-    )
+    is_muted =
+      Repo.exists?(
+        from r in UserRelationship,
+          where:
+            r.source_id == ^target_user_id and r.target_id == ^actor_id and
+              r.type == "notification_mute"
+      )
 
     # 2. SELF-NOTIFICATION GUARD: Don't notify users of their own actions
     if not is_muted and target_user_id != actor_id do
@@ -45,18 +48,19 @@ defmodule Kollective.Notifications.Notifications do
           broadcast_raw_toast(target_user_id, type, data_payload)
           {:ok, notification}
 
-        error -> error
+        error ->
+          error
       end
     else
       {:error, :muted_or_self_action}
     end
   end
 
-  #Thread Muting (also known as Conversation Muting in Mastodon), you allow a user to silence all
-  #, update your global notify logic. Before saving a notification or broadcasting
-  #via Phoenix Channels, check if the user has muted the entire thread
-  #When someone replies to a post, your notification system needs to check if the author of the original
-  #post (the person being replied to) has muted that thread.
+  # Thread Muting (also known as Conversation Muting in Mastodon), you allow a user to silence all
+  # , update your global notify logic. Before saving a notification or broadcasting
+  # via Phoenix Channels, check if the user has muted the entire thread
+  # When someone replies to a post, your notification system needs to check if the author of the original
+  # post (the person being replied to) has muted that thread.
 
   @doc """
   Thread/Conversation Muting Router. Verifies if the recipient has silenced the
@@ -66,13 +70,16 @@ defmodule Kollective.Notifications.Notifications do
     root_id = post.root_post_id || post.id
 
     # Check if the recipient has actively muted this conversation thread
-    is_thread_muted = Repo.exists?(
-      from tm in "thread_mutes", # Safely fallback to database string if schema is loose
-        where: tm.user_id == ^recipient_id and tm.root_post_id == ^root_id
-    )
+    is_thread_muted =
+      Repo.exists?(
+        # Safely fallback to database string if schema is loose
+        from tm in "thread_mutes",
+          where: tm.user_id == ^recipient_id and tm.root_post_id == ^root_id
+      )
 
     if not is_thread_muted and recipient_id != actor_id do
-      type = determine_type(post) # "reply", "reblog", etc.
+      # "reply", "reblog", etc.
+      type = determine_type(post)
 
       # Build the notification properties
       attrs = %{
@@ -117,7 +124,8 @@ defmodule Kollective.Notifications.Notifications do
       from n in Notification,
         where: n.user_id == ^user_id,
         preload: [:actor, :post, :event],
-        order_by: [desc: n.id], # Keyset sorting matching sequential ULIDs/IDs
+        # Keyset sorting matching sequential ULIDs/IDs
+        order_by: [desc: n.id],
         limit: ^limit
 
     query = if cursor && cursor != "", do: where(query, [n], n.id < ^cursor), else: query
@@ -157,11 +165,12 @@ defmodule Kollective.Notifications.Notifications do
       inserted_at: first.inserted_at
     }
   end
+
   defp summarize_group([single]), do: single
 
   # --- Aggregate Unread State Management Toggles ---
 
-  #"Read Status" so that the notification badge in React disappears once the user opens their notifications tab
+  # "Read Status" so that the notification badge in React disappears once the user opens their notifications tab
   def count_unread_notifications(user_id) do
     from(n in Notification, where: n.user_id == ^user_id and n.read == false)
     |> Repo.aggregate(:count, :id)
@@ -207,4 +216,31 @@ defmodule Kollective.Notifications.Notifications do
   defp action_text("reblog"), do: "boosted your post"
   defp action_text("reply"), do: "replied to your thread"
   defp action_text(_), do: "interacted with your profile"
+
+  @doc """
+  Fetches an active chronological history stream of notifications for a user profile.
+  Preloads the interaction actor to guarantee single-pass database speeds .
+  """
+  def list_user_notifications(user_id, params \\ %{}) do
+    limit = Map.get(params, "limit", 20)
+    cursor = Map.get(params, "cursor")
+
+    base_query =
+      from(n in Notification,
+        where: n.user_id == ^user_id,
+        # CRITICAL: Grabs user profiles in one pass to avoid N+1 traps
+        preload: [:actor]
+      )
+
+    query =
+      if cursor,
+        do: from(n in base_query, where: n.id < ^cursor),
+        else: base_query
+
+    query
+    # Keyset sorting matching primary key index layouts
+    |> order_by([n], desc: n.id)
+    |> limit(^limit)
+    |> Repo.all()
+  end
 end

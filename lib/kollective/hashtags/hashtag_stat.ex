@@ -1,6 +1,6 @@
 # This schema maps to a table that acts as a time-series log of hashtag activity.
 defmodule Kollective.Hashtags.HashtagStat do
-  use Ecto.Schema
+  use Kollective.Schemas.Schema
   import Ecto.Changeset
 
   schema "hashtag_stats" do
@@ -10,12 +10,11 @@ defmodule Kollective.Hashtags.HashtagStat do
 
     belongs_to :hashtag, Kollective.Hashtags.Hashtag
 
-    timestamps(type: :utc_datetime)
+    timestamps()
   end
 
   def changeset(stat, attrs) do
     stat
-
     |> cast(attrs, [:count, :bucket, :hashtag_id])
     |> validate_required([:count, :bucket, :hashtag_id])
     # Ensure we don't have two records for the same tag in the same hour

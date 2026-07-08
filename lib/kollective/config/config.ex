@@ -1,5 +1,5 @@
 defmodule Kollective.Config.Config do
-  use Ecto.Schema
+  use Kollective.Schemas.Schema
   import Ecto.Changeset
 
   schema "config" do

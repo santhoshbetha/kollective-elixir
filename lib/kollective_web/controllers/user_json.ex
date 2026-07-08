@@ -4,8 +4,7 @@ defmodule KollectiveWeb.UserJSON do
     %{data: data(user)}
   end
 
-
-  #{
+  # {
   #  "user": {
   #    "username": "voter_123",
   #    "districts": {
@@ -19,7 +18,7 @@ defmodule KollectiveWeb.UserJSON do
   #      "l3": "Colaba"
   #    }
   #  }
-  #}
+  # }
   def data(user) do
     %{
       id: user.id,
@@ -44,7 +43,6 @@ defmodule KollectiveWeb.UserJSON do
       city: if(user.origin_city, do: user.origin_city.name),
       state_code: user.state,
       country_code: user.country,
-
       settings: %{
         auto_play_gifs: user.auto_play_gifs
       }

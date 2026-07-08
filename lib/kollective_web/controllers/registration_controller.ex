@@ -7,10 +7,10 @@ defmodule KollectiveWeb.RegistrationController do
     case register_user(user_params) do
       {:ok, user} ->
         # 1. Update the mailer template link to your FRONTEND app domain, not Phoenix HTML
-        {:ok, _} =
+        _ =
           Accounts.deliver_login_instructions(
             user,
-            &"https://kollective99.com#{&1}"
+            &"https://kollective.social#{&1}"
           )
 
         # 2. Automatically generate an API session token so they are logged in right away
@@ -34,17 +34,14 @@ defmodule KollectiveWeb.RegistrationController do
         errors = Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
 
         conn
-        |> put_status(:unprocessable_entity) #422
+        # 422
+        |> put_status(:unprocessable_entity)
         |> json(%{errors: errors})
 
       {:error, _reason} ->
         conn
         |> put_status(:internal_server_error)
-        |> json(
-          %{status: "error",
-            message: "Registration failed"
-          }
-        )
+        |> json(%{status: "error", message: "Registration failed"})
     end
   end
 

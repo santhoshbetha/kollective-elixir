@@ -6,7 +6,8 @@ defmodule Kollective.Posts.PostAttachment do
   schema "post_attachments" do
     field :media, Kollective.Media.PostMedia.Type
     field :alt_text, :string
-    field :content_type, :string # Store the detected type
+    # Store the detected type
+    field :content_type, :string
     belongs_to :post, Kollective.Posts.Post
     field :is_processed, :boolean, default: false
 
@@ -21,4 +22,4 @@ defmodule Kollective.Posts.PostAttachment do
   end
 end
 
-#create index(:post_attachments, [:post_id])
+# create index(:post_attachments, [:post_id])

@@ -297,7 +297,7 @@ You can also specify a name to nest the params:
 When using changesets, the underlying data, form params, and errors are retrieved from it. The `:as` option is automatically computed too. E.g. if you have a user schema:
 
     defmodule MyApp.Users.User do
-      use Ecto.Schema
+      use Kollective.Schemas.Schema
       ...
     end
 

@@ -1,7 +1,7 @@
-#"User Reporting" system so regular users can flag posts that the automated keyword filter missed
+# "User Reporting" system so regular users can flag posts that the automated keyword filter missed
 
 defmodule Kollective.Moderation.Report do
-  use Ecto.Schema
+  use Kollective.Schemas.Schema
   import Ecto.Changeset
 
   schema "reports" do

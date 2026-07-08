@@ -3,12 +3,15 @@ defmodule KollectiveWeb.UserSocket do
   alias Kollective.Accounts.Accounts
 
   ## Channels
-  channel "notifications:*", KollectiveWeb.NotificationsChannel
   channel "user:*", KollectiveWeb.UserChannel
+  channel "user:public", KollectiveWeb.UserPublicChannel
+  channel "feed:*", KollectiveWeb.FeedChannel
+  channel "voice_alert", KollectiveWeb.FeedChannel
+  channel "event:*", KollectiveWeb.FeedChannel
+  channel "timeline:*", KollectiveWeb.FeedChannel
 
   # Socket params are passed from the client and can
   # be used to verify and authenticate a user. After
-  # verification, you can put default assigns into
   # the socket that will be set for all channels, ie
   #
   #     {:ok, assign(socket, :user_id, verified_user_id)}
@@ -21,14 +24,20 @@ defmodule KollectiveWeb.UserSocket do
     case Accounts.get_user_by_session_token(token) do
       nil ->
         :error
+
       {:ok, %{suspended_at: nil} = user} ->
-        {:ok, socket
-          |> assign(:user, user)
-          |> assign(:user_id, user.id)
-          |> assign(:is_authenticated, true)}
+        {:ok,
+         socket
+         |> assign(:user, user)
+         |> assign(:user_id, user.id)
+         |> assign(:is_authenticated, true)}
+
       {:ok, _suspended_user} ->
-        :error # Reject connection for suspended users
-       _ -> :error
+        # Reject connection for suspended users
+        :error
+
+      _ ->
+        :error
     end
   end
 
@@ -45,5 +54,4 @@ defmodule KollectiveWeb.UserSocket do
   @impl true
   # This allows us to target a specific user by their UUID
   def id(socket), do: "users_socket:#{socket.assigns.current_user.id}"
-
 end

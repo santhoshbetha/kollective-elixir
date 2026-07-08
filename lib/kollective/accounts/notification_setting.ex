@@ -1,5 +1,5 @@
 defmodule Kollective.Accounts.NotificationSetting do
-  use Ecto.Schema
+  use Kollective.Schemas.Schema
   import Ecto.Changeset
 
   @derive Jason.Encoder

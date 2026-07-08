@@ -8,7 +8,6 @@ defmodule Kollective.User.Query do
         Kollective.Repo.all(query)
   """
   import Ecto.Query
-  alias Kollective.Config
   alias Kollective.Accounts.User
 
   @type criteria ::
@@ -30,14 +29,14 @@ defmodule Kollective.User.Query do
             super_users: boolean(),
             staff: boolean(),
             is_privileged: atom(),
-            invisible: boolean(),
-            followers: User.t(),
-            friends: User.t(),
+            is_invisible: boolean(),
+            followers: %User{},
+            friends: %User{},
             username: [String.t()] | String.t(),
             order_by: term(),
             select: term(),
             limit: pos_integer(),
-            birthday_day: pos_integer()
+            birthday_year: pos_integer()
           }
           | map()
 
@@ -50,7 +49,7 @@ defmodule Kollective.User.Query do
     prepare_query(query, criteria)
   end
 
-   @spec paginate(Ecto.Query.t(), pos_integer(), pos_integer()) :: Ecto.Query.t()
+  @spec paginate(Ecto.Query.t(), pos_integer(), pos_integer()) :: Ecto.Query.t()
   def paginate(query, page, page_size) do
     from(u in query,
       limit: ^page_size,
@@ -85,22 +84,22 @@ defmodule Kollective.User.Query do
 
   # --- Relationship Graphs (Swapped to your local UserRelationship schema) ---
   defp compose_query({:followers, %User{id: id}}, query) do
-      # Users who actively follow this specific account ID
-      from(u in query,
-        where: u.id != ^id,
-        join: r in "user_relationships",
-        on: r.target_id == ^id and r.source_id == u.id and r.type == "follow"
-      )
-    end
+    # Users who actively follow this specific account ID
+    from(u in query,
+      where: u.id != ^id,
+      join: r in "user_relationships",
+      on: r.target_id == ^id and r.source_id == u.id and r.type == "follow"
+    )
+  end
 
-    defp compose_query({:friends, %User{id: id}}, query) do
-      # Accounts that this specific user explicitly tracks
-      from(u in query,
-        where: u.id != ^id,
-        join: r in "user_relationships",
-        on: r.source_id == ^id and r.target_id == u.id and r.type == "follow"
-      )
-    end
+  defp compose_query({:friends, %User{id: id}}, query) do
+    # Accounts that this specific user explicitly tracks
+    from(u in query,
+      where: u.id != ^id,
+      join: r in "user_relationships",
+      on: r.source_id == ^id and r.target_id == u.id and r.type == "follow"
+    )
+  end
 
   # --- Structural Permissions & Role Filters (Unified Staff & Super Users) ---
   defp compose_query({:is_admin, bool}, query) do
@@ -122,7 +121,9 @@ defmodule Kollective.User.Query do
 
   # --- Account Status Flags ---
   defp compose_query({:active, false}, query) do
-    from(u in query, where: u.is_active == false or u.is_approved == false or u.is_confirmed == false)
+    from(u in query,
+      where: u.is_active == false or u.is_approved == false or u.is_confirmed == false
+    )
   end
 
   defp compose_query({:active, _}, query) do
@@ -157,8 +158,8 @@ defmodule Kollective.User.Query do
 
   # --- Discovery Meta Parameters ---
 
-  defp compose_query({:invisible, bool}, query) when is_boolean(bool) do
-    from(u in query, where: u.invisible == ^bool)
+  defp compose_query({:is_invisible, bool}, query) when is_boolean(bool) do
+    from(u in query, where: u.is_invisible == ^bool)
   end
 
   defp compose_query({:is_suggested, bool}, query) do
@@ -173,13 +174,15 @@ defmodule Kollective.User.Query do
     from(u in query, where: u.accepts_email_list == ^bool)
   end
 
-  defp compose_query({:tags, tags}, query) when is_list(tags) and length(tags) > 0 do
+  defp compose_query({:tags, tags}, query) when is_list(tags) and tags != [] do
     from(u in query, where: fragment("? && ?", u.tags, ^tags))
   end
 
   defp compose_query({:birthday_day, day}, query) do
     from(u in query,
-      where: u.show_birthday == true and not is_nil(u.birthday) and fragment("date_part('day', ?)", u.birthday) == ^day
+      where:
+        u.show_birthday == true and not is_nil(u.birthday) and
+          fragment("date_part('day', ?)", u.birthday) == ^day
     )
   end
 
@@ -205,5 +208,4 @@ defmodule Kollective.User.Query do
   defp location_query(query, local) do
     from(u in query, where: u.local == ^local)
   end
-
 end

@@ -74,13 +74,16 @@ if config_env() == :prod do
     secret_access_key: System.get_env("R2_SECRET_ACCESS_KEY"),
     # Format: https://<account_id>.r2.cloudflarestorage.com
     scheme: "https://",
-    region: "auto" # R2 uses 'auto'
+    # R2 uses 'auto'
+    region: "auto"
 
   config :waffle,
     storage: Waffle.Storage.S3,
-    bucket: System.get_env("R2_BUCKET_NAME")#,
-    # remove the asset_host for now to ensure signed URLs work correctly with Cloudflare R2
-    #asset_host: System.get_env("R2_PUBLIC_DOMAIN") # e.g., https://pub-xyz.r2.dev
+    # ,
+    bucket: System.get_env("R2_BUCKET_NAME")
+
+  # remove the asset_host for now to ensure signed URLs work correctly with Cloudflare R2
+  # asset_host: System.get_env("R2_PUBLIC_DOMAIN") # e.g., https://pub-xyz.r2.dev
 
   # ## SSL Support
   #
@@ -131,4 +134,24 @@ if config_env() == :prod do
   #     config :swoosh, :api_client, Swoosh.ApiClient.Req
   #
   # See https://hexdocs.pm/swoosh/Swoosh.html#module-installation for details.
+end
+
+if config_env() == :test do
+  # 1. Keep it on ETS mode during local test suite runs
+  config :hammer,
+    backend:
+      {Hammer.Backend.ETS,
+       [
+         expiry_ms: 600_000,
+         cleanup_interval_ms: 60_000
+       ]}
+else
+  # 2. Only activate Redis during Development (:dev) or Production (:prod)
+  config :hammer,
+    backend:
+      {Hammer.Backend.Redis,
+       [
+         expiry_ms: 60_000,
+         redis_url: System.get_env("REDIS_URL") || "redis://localhost:6379"
+       ]}
 end

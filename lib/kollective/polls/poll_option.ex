@@ -1,6 +1,6 @@
 defmodule Kollective.Polls.PollOption do
   use Kollective.Schemas.Schema
-  #import Ecto.Changeset
+  import Ecto.Changeset
 
   schema "poll_options" do
     field :title, :string
@@ -14,7 +14,6 @@ defmodule Kollective.Polls.PollOption do
 
   def changeset(option, attrs) do
     option
-
     |> cast(attrs, [:title])
     |> validate_required([:title])
   end

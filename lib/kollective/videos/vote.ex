@@ -1,5 +1,6 @@
 defmodule Kollective.Videos.Vote do
   use Kollective.Schemas.Schema
+  import Ecto.Changeset
 
   schema "votes" do
     # type: 1 for upvote, -1 for downvote, 0 for neutral/like

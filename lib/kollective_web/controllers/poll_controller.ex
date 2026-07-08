@@ -1,4 +1,3 @@
-# lib/kollective_web/controllers/poll_controller.ex
 defmodule KollectiveWeb.PollController do
   use KollectiveWeb, :controller
   alias Kollective.Polls.Polls
@@ -9,7 +8,10 @@ defmodule KollectiveWeb.PollController do
 
     case Polls.get_poll_results(id, user_id) do
       nil ->
-        conn |> put_status(:not_found) |> json(%{error: "Poll not found"})
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "Poll not found"})
+
       poll ->
         render(conn, :show, poll: poll)
     end
@@ -27,10 +29,14 @@ defmodule KollectiveWeb.PollController do
         render(conn, :show, poll: poll)
 
       {:error, :already_voted} ->
-        conn |> put_status(:unprocessable_entity) |> json(%{error: "Already voted"})
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "Already voted"})
 
       {:error, :poll_expired} ->
-        conn |> put_status(:unprocessable_entity) |> json(%{error: "Poll has expired"})
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "Poll has expired"})
     end
   end
 end

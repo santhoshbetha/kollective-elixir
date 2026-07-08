@@ -1,61 +1,36 @@
-defmodule KollectiveWeb.NotificationsJSON do
-  alias Kollective.Notifications.Notification
+# lib/kollective_web/views/notification_json.ex
+defmodule KollectiveWeb.NotificationJSON do
+  @moduledoc """
+  Unified Standalone Notification Serializer.
+  Outputs clean timeline activity shapes safely for the React frontend.
+  """
 
   def index(%{notifications: notifications}) do
-    %{data: for(n <- notifications, do: data(n))}
+    Enum.map(notifications, &data/1)
   end
 
-  def show(%{notification: notification}) do
-    %{data: data(notification)}
-  end
-
-  def data(%Notification{} = n) do
+  def data(notification) do
     %{
-      id: n.id,
-      type: n.type,
-      actor: %{
-        id: n.actor_id,
-        username: n.actor.username
-      },
-      target_id: n.target_id,
-      target_type: n.target_type,
-      # Call the link generator here
-      url: get_link(n),
-      inserted_at: n.inserted_at
-    }
-  end
+      id: to_string(notification.id),
+      # "mention", "reply", "follow", "upvote"
+      type: notification.type,
+      is_read: notification.is_read || false,
+      preview_text: notification.preview || "interacted with your profile.",
+      inserted_at: Calendar.strftime(notification.inserted_at, "%Y-%m-%dT%H:%M:%SZ"),
 
-  # The "get_link" logic
-  defp get_link(n) do
-    case n.target_type do
-      "User" -> "/users/#{n.target_id}"
-      "Post" -> "/posts/#{n.target_id}"
-      "Comment" -> "/posts/#{n.post_id}#comment-#{n.target_id}"
-      _ -> nil
-    end
-  end
-
-  #list_notifications query to show a user their full history of follows, mentions, and reblogs
-  def data2(notification) do
-    %{
-      id: notification.id,
-      type: notification.type, # "follow", "mention", "reblog"
-      inserted_at: notification.inserted_at,
+      # Actor Metadata profile footprint
       actor: %{
-        id: notification.actor.id,
+        id: to_string(notification.actor.id),
         username: notification.actor.username,
-        avatar_url: notification.actor.avatar_url
+        avatar_url: notification.actor.avatar_url || "/default-avatar.jpg"
       },
-      # Only include post data if the notification is linked to one
-      post: if notification.post do
-        %{
-          id: notification.post.id,
-          content: notification.post.content
-        }
-      else
-        nil
-      end
+
+      # Target metadata maps allow React to route clicks dynamically
+      target: %{
+        id: to_string(notification.target_id),
+        # "Post", "Event", "User"
+        type: notification.target_type
+      }
     }
   end
-
 end

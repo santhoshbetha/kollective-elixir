@@ -10,8 +10,18 @@ defmodule Kollective.Application do
     children = [
       KollectiveWeb.Telemetry,
       Kollective.Repo,
-      {DNSCluster, query: Application.get_env(:kollective, :dns_cluster_query) || :ignore},
+
+      # Cachex handles the token cache from the vouch system, which is used for secure token-based authentication.
+      {Cachex, name: :vouch_secure_tokens},
       {Phoenix.PubSub, name: Kollective.PubSub},
+
+      # Oban automatically picks up your Buffer module configurations when it boots!
+      {Oban, Application.fetch_env!(:kollective, Oban)},
+
+      # Start the Phoenix Presence supervisor tracking pool
+      KollectiveWeb.Presence,
+      {DNSCluster, query: Application.get_env(:kollective, :dns_cluster_query) || :ignore},
+
       # Start a worker by calling: Kollective.Worker.start_link(arg)
       # {Kollective.Worker, arg},
       # Start to serve requests, typically the last entry

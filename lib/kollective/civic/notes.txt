@@ -1,0 +1,117 @@
+To make your ETS-backed VouchCache bulletproof against data loss, you must solve one fundamental Erlang/Elixir rule: 
+If a process crashes, any ETS table it owns is permanently wiped from memory.
+If a bug triggers a crash inside your VouchCache (for example, during a complex match spec deletion in handle_info), 
+your supervisor will instantly restart it, but all active, unexpired user tokens will be lost.To fix this, you need a "Heir and Gift" pattern using a separate, bulletproof Metadata/Storage Supervisor or an ETS Manager process whose only job is to stay alive and inherit the table if VouchCache dies.
+Here are the step-by-step code tweaks to make this completely resilient.
+
+Step 1: Create an ETSManager (The Guardian Process)We create a tiny, ultra-simple GenServer that does absolutely no heavy lifting, loops, or complex business logic. Because it does almost nothing, it is virtually impossible for it to crash. 
+Its sole purpose is to act as the "Heir" to the table.Create a new file lib/kollective/civic/ets_manager.ex:
+
+defmodule Kollective.Civic.ETSManager do
+  use GenServer
+
+  @table_name :vouch_secure_tokens
+
+  def start_link(_opts) do
+    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
+  end
+
+  @impl true
+  def init(state) do
+    # 1. Create the table HERE instead of inside the VouchCache.
+    # 2. Add the `heir: {self(), :heir_data}` option. 
+    # If the process using this table dies, the table is "gifted" to this manager.
+    :ets.new(@table_name, [
+      :named_table, 
+      :public, 
+      :set, 
+      read_concurrency: true, 
+      write_concurrency: true,
+      heir: {self(), :cache_crashed}
+    ])
+
+    {:ok, state}
+  end
+
+  @impl true
+  def handle_info({:"ETS-TRANSFER", @table_name, _dead_pid, :cache_crashed}, state) do
+    # If VouchCache crashes, the table is transferred here.
+    # We immediately look for the newly restarted VouchCache and give it BACK.
+    give_table_to_cache()
+    {:noreply, state}
+  end
+
+  defp give_table_to_cache do
+    case Process.whereis(Kollective.Civic.VouchCache) do
+      nil -> 
+        # If VouchCache is still booting, try again in 10ms
+        Process.send_after(self(), {:"ETS-TRANSFER", @table_name, nil, :cache_crashed}, 10)
+      pid -> 
+        :ets.give_away(@table_name, pid, :here_is_your_table_back)
+    end
+  end
+end
+
+
+Step 2: Tweak Your Original VouchCacheNow, update your original 
+VouchCache module to accept an inherited table when it starts, rather than trying to create a new one every time.
+Modify your lib/kollective/civic/vouch_cache.ex:
+
+# --- SERVER HANDSHAKE INITIALIZATION CORE ---
+
+@impl true
+def init(state) do
+  # REMOVE the old :ets.new line from here!
+  # Instead, ask the ETSManager to hand the table over if it's already holding it
+  send(Kollective.Civic.ETSManager, {:"ETS-TRANSFER", @table_name, nil, :cache_crashed})
+
+  # Schedule the normal garbage collection loop
+  schedule_garbage_collection()
+  {:ok, state}
+end
+
+# Add a handle_info to receive the table from the ETSManager
+@impl true
+def handle_info({:"ETS-TRANSFER", @table_name, _manager_pid, :here_is_your_table_back}, state) do
+  # VouchCache now officially owns the table again with zero data loss!
+  {:noreply, state}
+end
+
+
+Step 3: Wire Them Up in application.exThe order of your children matters immensely. 
+The ETSManager must boot before the VouchCache so the table exists before the cache tries to use it.
+Update your lib/kollective/application.ex:
+
+def start(_type, _args) do
+  children = [
+    Kollective.Repo,
+    KollectiveWeb.Endpoint,
+
+    # 1. First, boot the immortal table manager
+    Kollective.Civic.ETSManager,
+
+    # 2. Second, boot the working cache that does the processing
+    Kollective.Civic.VouchCache
+  ]
+
+  # Using :one_for_one strategy ensures that if VouchCache crashes, 
+  # ONLY VouchCache restarts. ETSManager remains untouched in memory.
+  opts = [strategy: :one_for_one, name: Kollective.Supervisor]
+  Supervisor.start_link(children, opts)
+end
+
+[ Normal Flow ]   ETSManager (Holds Heir Right) <─────────> VouchCache (Owns Active Table)
+
+[ Crash Event ]   VouchCache crashes due to a bug!
+                  │
+                  ▼
+                  Erlang Kernel automatically sends Table -> ETSManager (Zero rows lost)
+
+[ Recovery ]      Supervisor restarts VouchCache
+                  │
+                  ▼
+                  VouchCache requests table -> ETSManager gives table back
+
+With this pattern, you can manually run Process.exit(Process.whereis(Kollective.Civic.VouchCache), :kill) in your production terminal, 
+and your users won't even notice.
+The table will instantly teleport to the manager and right back to the new cache instance with 100% of your validation tokens completely intact.

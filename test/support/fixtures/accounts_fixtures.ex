@@ -6,8 +6,9 @@ defmodule Kollective.AccountsFixtures do
 
   import Ecto.Query
 
-  alias Kollective.Accounts
+  alias Kollective.Accounts.Accounts
   alias Kollective.Accounts.Scope
+  alias Kollective.Accounts.UserToken
 
   def unique_user_email, do: "user#{System.unique_integer()}@example.com"
   def valid_user_password, do: "hello world!"
@@ -35,10 +36,12 @@ defmodule Kollective.AccountsFixtures do
         Accounts.deliver_login_instructions(user, url)
       end)
 
-    {:ok, {user, _expired_tokens}} =
-      Accounts.login_user_by_magic_link(token)
+    # 1. Run the login process to confirm the account
+    _login_result = Accounts.login_user_by_magic_link(token)
 
-    user
+    # 2. Force-fetch the fresh, complete user record from the database
+    # to guarantee a valid %User{} map with an email column is returned.
+    Kollective.Repo.get!(Kollective.Accounts.User, user.id)
   end
 
   def user_scope_fixture do
@@ -51,7 +54,8 @@ defmodule Kollective.AccountsFixtures do
   end
 
   def set_password(user) do
-    {:ok, {user, _expired_tokens}} =
+    # 🔄 FIX: Match against the double {:ok, {:ok, ...}} wrapper returned by Repo.transaction
+    {:ok, {:ok, {user, _expired_tokens}}} =
       Accounts.update_user_password(user, %{password: valid_user_password()})
 
     user
@@ -65,7 +69,7 @@ defmodule Kollective.AccountsFixtures do
 
   def override_token_authenticated_at(token, authenticated_at) when is_binary(token) do
     Kollective.Repo.update_all(
-      from(t in Accounts.UserToken,
+      from(t in UserToken,
         where: t.token == ^token
       ),
       set: [authenticated_at: authenticated_at]
@@ -73,7 +77,7 @@ defmodule Kollective.AccountsFixtures do
   end
 
   def generate_user_magic_link_token(user) do
-    {encoded_token, user_token} = Accounts.UserToken.build_email_token(user, "login")
+    {encoded_token, user_token} = UserToken.build_email_token(user, "login")
     Kollective.Repo.insert!(user_token)
     {encoded_token, user_token.token}
   end
@@ -82,7 +86,7 @@ defmodule Kollective.AccountsFixtures do
     dt = DateTime.add(DateTime.utc_now(:second), amount_to_add, unit)
 
     Kollective.Repo.update_all(
-      from(ut in Accounts.UserToken, where: ut.token == ^token),
+      from(ut in UserToken, where: ut.token == ^token),
       set: [inserted_at: dt, authenticated_at: dt]
     )
   end

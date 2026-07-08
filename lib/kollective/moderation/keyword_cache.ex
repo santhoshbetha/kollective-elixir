@@ -15,7 +15,9 @@ defmodule Kollective.Moderation.KeywordCache do
         keywords = Kollective.Moderation.Moderation.list_active_keyword_strings()
         Agent.update(__MODULE__, fn _ -> keywords end)
         keywords
-      keywords -> keywords
+
+      keywords ->
+        keywords
     end
   end
 

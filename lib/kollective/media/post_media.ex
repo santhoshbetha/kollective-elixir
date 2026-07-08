@@ -20,8 +20,10 @@ defmodule Kollective.Media.PostMedia do
       case File.stat(file.path) do
         {:ok, %File.Stat{size: size}} when size <= @max_size ->
           true
+
         {:ok, _} ->
           {:error, "File is too large (max 5MB)"}
+
         {:error, _} ->
           {:error, "Could not read file metadata"}
       end
@@ -52,7 +54,8 @@ defmodule Kollective.Media.PostMedia do
   def s3_object_headers(_version, {file, _scope}) do
     [
       content_type: MIME.from_path(file.file_name),
-      cache_control: "public, max-age=31536000" # 1 year cache
+      # 1 year cache
+      cache_control: "public, max-age=31536000"
     ]
   end
 
@@ -73,6 +76,4 @@ defmodule Kollective.Media.PostMedia do
       _ -> "https://media.kollective.app"
     end
   end
-
-
 end

@@ -21,15 +21,19 @@ defmodule Kollective.Events.Comment do
     belongs_to :parent, __MODULE__
     has_many :replies, __MODULE__, foreign_key: :parent_id
 
-    timestamps(type: :utc_datetime)
+    field :likes_count, :integer, virtual: true, default: 0
+
+    timestamps()
   end
 
   @doc "Main changeset for creating a comment"
   def changeset(comment, attrs) do
     comment
     |> cast(attrs, [:content, :image_url, :user_id, :event_id, :moderation_status, :parent_id])
+    # Allow text to be blank if uploading pure images
     |> validate_required([:user_id, :event_id])
-    |> validate_content_or_image() # Ensures a comment isn't empty
+    # Ensures a comment isn't empty
+    |> validate_content_or_image()
     |> validate_inclusion(:moderation_status, @statuses)
     |> validate_length(:content, max: 5000)
     |> foreign_key_constraint(:user_id)
@@ -47,19 +51,18 @@ defmodule Kollective.Events.Comment do
       changeset
     end
   end
-
 end
 
-#Why this is the "Golden Path":
+# Why this is the "Golden Path":
 
-  #  Polymorphic Content: The validate_content_or_image check allows users to post "Image only" comments (like a photo from the event) or "Text only" comments.
-  #  Database Integrity: Using on_delete: :delete_all ensures that if an Event is cancelled or a User deletes their account, the chat history is scrubbed automatically.
-  #  Performance: The composite index on [:event_id, :inserted_at] makes your TanStack Virtual infinite scroll lightning fast even with millions of rows.
-  #  Safety: Defaulting moderation_status to pending ensures your Moderation Worker always has a starting point.
+#  Polymorphic Content: The validate_content_or_image check allows users to post "Image only" comments (like a photo from the event) or "Text only" comments.
+#  Database Integrity: Using on_delete: :delete_all ensures that if an Event is cancelled or a User deletes their account, the chat history is scrubbed automatically.
+#  Performance: The composite index on [:event_id, :inserted_at] makes your TanStack Virtual infinite scroll lightning fast even with millions of rows.
+#  Safety: Defaulting moderation_status to pending ensures your Moderation Worker always has a starting point.
 
-  #Why this is the "Golden Path":
+# Why this is the "Golden Path":
 
-   # Polymorphic Content: The validate_content_or_image check allows users to post "Image only" comments (like a photo from the event) or "Text only" comments.
-   # Database Integrity: Using on_delete: :delete_all ensures that if an Event is cancelled or a User deletes their account, the chat history is scrubbed automatically.
-   # Performance: The composite index on [:event_id, :inserted_at] makes your TanStack Virtual infinite scroll lightning fast even with millions of rows.
-   # Safety: Defaulting moderation_status to pending ensures your Moderation Worker always has a starting point.
+# Polymorphic Content: The validate_content_or_image check allows users to post "Image only" comments (like a photo from the event) or "Text only" comments.
+# Database Integrity: Using on_delete: :delete_all ensures that if an Event is cancelled or a User deletes their account, the chat history is scrubbed automatically.
+# Performance: The composite index on [:event_id, :inserted_at] makes your TanStack Virtual infinite scroll lightning fast even with millions of rows.
+# Safety: Defaulting moderation_status to pending ensures your Moderation Worker always has a starting point.

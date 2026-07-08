@@ -1,12 +1,15 @@
 defmodule Kollective.Locations.PoliticalDistrict do
-  use Ecto.Schema
+  use Kollective.Schemas.Schema
 
   schema "political_districts" do
     field :name, :string
-    field :level, :integer         # 1, 2, or 3, => district_l1, district_l2, or district_l3
-    field :type_label, :string     # e.g., "MLA Constituency" or "Congressional District"
+    # 1, 2, or 3, => district_l1, district_l2, or district_l3
+    field :level, :integer
+    # e.g., "MLA Constituency" or "Congressional District"
+    field :type_label, :string
     field :state, :string
-    field :country, :string        # e.g., "IN" or "US"
+    # e.g., "IN" or "US"
+    field :country, :string
 
     # The "Self-Join"
     belongs_to :parent, Kollective.Locations.PoliticalDistrict
@@ -18,4 +21,4 @@ defmodule Kollective.Locations.PoliticalDistrict do
   end
 end
 
-#create index(:political_districts, [:parent_id, :id])
+# create index(:political_districts, [:parent_id, :id])

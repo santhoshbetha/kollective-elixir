@@ -11,7 +11,11 @@ defmodule Kollective.MixProject do
       aliases: aliases(),
       deps: deps(),
       compilers: Mix.compilers(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      dialyzer: [
+        plt_add_apps: [:ex_unit, :mix],
+        plt_file: {:no_warn, "priv/plts/dialyzer.plt"} # Optional: keeps PLT inside project folders
+      ]
     ]
   end
 
@@ -55,8 +59,8 @@ defmodule Kollective.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
-      {:ecto_ulid_next, "~> 0.1"},
-      {:oban, "~> 2.17"},
+      {:ecto_ulid_next, "~> 1.0"},
+      {:oban, "~> 2.18"},
       {:waffle, "~> 1.1"},
       {:waffle_ecto, "~> 0.0.12"},
       {:ex_aws, "~> 2.0"},
@@ -65,12 +69,19 @@ defmodule Kollective.MixProject do
       {:geospatial, "~> 0.3.4"},
       {:hackney, "1.25.0", override: true},
       {:scrivener_ecto, "~> 2.0"},
-      {:hammer, "~> 6.1"},
+      {:hammer_backend_redis, "~> 6.1"},
       {:inet_cidr, "~> 1.0.0"},
       {:lingua, "~> 0.3.0"},
-      {:cachex, "~> 3.2"},
-      {:blurhash, "~> 2.0"}, # Pure Elixir implementation
-      {:mogrify, "~> 0.9"}   # Optional: Helps convert images to raw pixels
+      {:cachex, "~> 3.4"},
+      {:tz, "~> 0.28.1"},
+      {:floki, "~> 0.38.0"},
+      {:libcluster, "~> 3.3"},
+      # Pure Elixir implementation
+      {:blurhash, "~> 2.0"},
+      # Optional: Helps convert images to raw pixels
+      {:mogrify, "~> 0.9"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 
@@ -85,7 +96,7 @@ defmodule Kollective.MixProject do
       setup: ["deps.get", "ecto.setup"],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      test: ["ecto.create --quiet", "test"],
       precommit: ["compile --warning-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

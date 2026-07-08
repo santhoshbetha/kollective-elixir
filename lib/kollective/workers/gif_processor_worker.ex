@@ -22,7 +22,10 @@ defmodule Kollective.Workers.GifProcessorWorker do
               {:ok, _} = PostMedia.store({%{path: static_path, filename: "static.png"}, att})
 
               att
-              |> Ecto.Changeset.change(is_processed: true, static_url: PostMedia.url({att.media, att}, :static))
+              |> Ecto.Changeset.change(
+                is_processed: true,
+                static_url: PostMedia.url({att.media, att}, :static)
+              )
               |> Repo.update!()
 
               Phoenix.PubSub.broadcast(
@@ -30,6 +33,7 @@ defmodule Kollective.Workers.GifProcessorWorker do
                 "post_details:#{att.post_id}",
                 {:gif_ready, att}
               )
+
               :ok
 
             {error, _} ->
@@ -39,7 +43,8 @@ defmodule Kollective.Workers.GifProcessorWorker do
         {:error, reason} ->
           {:error, "Failed to download original GIF: #{inspect(reason)}"}
       end
-    # FIX: Use 'after' exclusively to guarantee disk file cleanup
+
+      # FIX: Use 'after' exclusively to guarantee disk file cleanup
     after
       File.rm(temp_gif_path)
       File.rm(static_path)

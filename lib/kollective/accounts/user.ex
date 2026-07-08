@@ -14,21 +14,33 @@ defmodule Kollective.Accounts.User do
     # --- IDENTITY ---
     field :username, :string
     field :display_name, :string
-    field :alias_name, :string # For pseudonyms or pen names or to hide caste/religion guessing in India
+    # For pseudonyms or pen names or to hide caste/religion guessing in India
+    field :alias_name, :string
 
-    field :locale, :string, default: "en" # ISO 639-1 code #preferred language
+    # ISO 639-1 code #preferred language
+    field :locale, :string, default: "en"
     field :first_name, :string
     field :last_name, :string
     field :bio, :string, default: ""
     # Useful for search indexing
     field :raw_bio, :string, default: ""
 
+    # The user's phone number or email, put through a one-way cryptographic hashing function with a secure,
+    field :identity_hash, :string, default: ""
+    # server-side salt (SHA-256(phone + server_secret)).
+
     # --- AUTHENTICATION (Phx.Gen.Auth style) ---
     field :is_confirmed, :boolean, default: false
     field :is_active, :boolean, default: true
 
-    # User Types: :regular, :scholar, :journalist
-    field :type, Ecto.Enum, values: [:regular, :scholar, :journalist], default: :regular
+    # User Types: :citizen, :scholar, :journalist, :activist, :organization
+    # activist --> Union leaders, strike organizers, whistleblowers.
+    # scholar --> Academic researchers, professors, and subject matter experts.
+    # journalist --> Reporters, editors, and media professionals, Independent reporters and field correspondents.
+    # organization --> Non-profits, NGOs, advocacy groups, and civic organizations.
+    field :type, Ecto.Enum,
+      values: [:citizen, :scholar, :journalist, :activist, :organization],
+      default: :citizen
 
     # For Scholars/Journalists: Specialized bio or verification notes
     field :professional_credentials, :string
@@ -41,7 +53,7 @@ defmodule Kollective.Accounts.User do
     field :location, :string
     field :language, :string, default: "en"
     field :is_discoverable, :boolean, default: true
-    field :invisible, :boolean, default: false
+    field :is_invisible, :boolean, default: false
     field :is_suggested, :boolean, default: false
     field :last_active_at, :utc_datetime
 
@@ -51,24 +63,27 @@ defmodule Kollective.Accounts.User do
 
     # e.g., "CA-12" (Congressional)
     # federal_district => L1 = Federal/National (MP, Congressman)
-    #field :district_l1, :string
-    belongs_to :district_l1, Kollective.Locations.PoliticalDistrict # National
+    # field :district_l1, :string
+    # National
+    belongs_to :district_l1, Kollective.Locations.PoliticalDistrict
 
     # e.g., "SD-24"  (State Senate)
     # state_senate_district => L2 = State Upper House (State Senate)
-    #field :district_l2, :string
-    belongs_to :district_l2, Kollective.Locations.PoliticalDistrict # State Upper
+    # field :district_l2, :string
+    # State Upper
+    belongs_to :district_l2, Kollective.Locations.PoliticalDistrict
 
     # e.g., "SD-11" (State Assembly)
     # state_district => L3 = State Lower House (State Rep, MLA)
-    #field :district_l3, :string
-    belongs_to :district_l3, Kollective.Locations.PoliticalDistrict # State Lower
+    # field :district_l3, :string
+    # State Lower
+    belongs_to :district_l3, Kollective.Locations.PoliticalDistrict
 
     # Smallest local unit (optional)
     field :precinct, :string
 
     # Internal City ID
-    #field :city_id, :integer
+    # field :city_id, :integer
     belongs_to :city, Kollective.Locations.City, foreign_key: :city_id
     # Display name
     field :city_name, :string
@@ -93,8 +108,8 @@ defmodule Kollective.Accounts.User do
     field :official_website, :string
 
     # --- VISUALS ---
-    field :avatar, :map, default: %{}
-    field :banner, :map, default: %{}
+    field :avatar_url, :string, default: "/default-avatar.jpg"
+    field :cover_image_url, :string, default: "/default-banner-bg.jpg"
 
     # --- SOCIAL COUNTERS (Cached for performance) ---
     field :note_count, :integer, default: 0
@@ -161,31 +176,31 @@ defmodule Kollective.Accounts.User do
 
     # Reblog Mutes (Hide boosts from this person)
     has_many :reblog_mute_rels, Kollective.Accounts.UserRelationship,
-      foreign_key: :source_id, where: [type: "reblog_mute"]
+      foreign_key: :source_id,
+      where: [type: "reblog_mute"]
 
     has_many :reblog_muted_users, through: [:reblog_mute_rels, :target]
 
     # Notification Mutes (Don't notify me when they interact)
     has_many :notification_mute_rels, Kollective.Accounts.UserRelationship,
-      foreign_key: :source_id, where: [type: "notification_mute"]
+      foreign_key: :source_id,
+      where: [type: "notification_mute"]
 
     has_many :notification_muted_users, through: [:notification_mute_rels, :target]
 
     # Endorsements (Featured users on your profile)
     has_many :endorsement_rels, Kollective.Accounts.UserRelationship,
-      foreign_key: :source_id, where: [type: "endorsement"]
+      foreign_key: :source_id,
+      where: [type: "endorsement"]
 
     has_many :endorsed_users, through: [:endorsement_rels, :target]
 
     # Inverse Subscriptions (Requested follows / Private accounts)
     has_many :inv_sub_rels, Kollective.Accounts.UserRelationship,
-      foreign_key: :source_id, where: [type: "inverse_subscription"]
+      foreign_key: :source_id,
+      where: [type: "inverse_subscription"]
 
     has_many :subscriber_users, through: [:inv_sub_rels, :target]
-
-    # user org relationships
-    many_to_many :followed_organizations, Kollective.Accounts.Organization,
-      join_through: "user_organization_relationships"
 
     # shadow-ban for aggressive spammers
     field :is_shadow_banned, :boolean, default: false
@@ -194,6 +209,9 @@ defmodule Kollective.Accounts.User do
     field :is_exempt, :boolean, default: false
 
     field :is_verified, :boolean, default: false
+
+    # Mode controllers -> "social_only" or "civic_active"
+    field :experience_mode, :string, default: "social_only"
 
     has_many :candidate_videos, Kollective.Videos.CandidateVideo
 
@@ -211,7 +229,8 @@ defmodule Kollective.Accounts.User do
 
     field :show_role, :boolean, default: true
     field :is_locked, :boolean, default: false
-    field :default_scope, :string, default: "public" #["public", "unlisted", "local", "private", "direct", "list"]
+    # ["public", "unlisted", "local", "private", "direct", "list"]
+    field :default_scope, :string, default: "public"
 
     # Privacy
     field :hide_followers_count, :boolean, default: false
@@ -241,13 +260,14 @@ defmodule Kollective.Accounts.User do
     # "Auto-play GIFs" setting in your user preferences
     field :auto_play_gifs, :boolean, default: false
 
-    timestamps(type: :utc_datetime)
+    timestamps()
   end
 
   def changeset(user, attrs) do
     user
-    |> cast(attrs, [:username, :display_name])
-    |> validate_required([:username])
+    |> cast(attrs, [:username, :display_name, :is_verified, :identity_hash, :experience_mode])
+    |> validate_required([:username, :identity_hash, :experience_mode])
+    |> validate_inclusion(:experience_mode, ["social_only", "civic_active"])
     |> validate_length(:username, min: 2, max: 20)
     # FIX: Enforce Mastodon's default 30-character styling boundary constraint
     |> validate_length(:display_name, max: 30)
@@ -265,6 +285,7 @@ defmodule Kollective.Accounts.User do
         else
           changeset
         end
+
       _ ->
         changeset
     end
@@ -286,7 +307,28 @@ defmodule Kollective.Accounts.User do
     |> validate_required([:first_name, :last_name, :email, :date_of_birth, :country])
     |> validate_length(:first_name, max: 100)
     |> validate_length(:last_name, max: 100)
-    |> validate_inclusion(:country, ["US", "CA", "GB", "AU", "DE", "FR", "JP", "MX", "ES", "IN", "AR", "BO", "BR", "CL", "CO", "VE", "UY", "PE", "PY"]) # Example country codes
+    # Example country codes
+    |> validate_inclusion(:country, [
+      "US",
+      "CA",
+      "GB",
+      "AU",
+      "DE",
+      "FR",
+      "JP",
+      "MX",
+      "ES",
+      "IN",
+      "AR",
+      "BO",
+      "BR",
+      "CL",
+      "CO",
+      "VE",
+      "UY",
+      "PE",
+      "PY"
+    ])
     |> normalize_registration_age_fields()
     |> put_change(:is_confirmed, false)
   end
@@ -312,7 +354,7 @@ defmodule Kollective.Accounts.User do
     end
   end
 
-  #defp put_calculated_age(changeset) do
+  # defp put_calculated_age(changeset) do
   #  case get_field(changeset, :date_of_birth) do
   #    %Date{} = dob ->
   #      age = calculate_age(dob)
@@ -320,9 +362,9 @@ defmodule Kollective.Accounts.User do
   #    _ ->
   #      changeset
   #  end
-  #end
+  # end
 
-  #defp calculate_age(dob) do
+  # defp calculate_age(dob) do
   #  today = Date.utc_today()
   #  age = today.year - dob.year
   #
@@ -332,7 +374,7 @@ defmodule Kollective.Accounts.User do
   #  else
   #    age
   #  end
-  #end
+  # end
 
   @doc """
   A user changeset for registering or changing the email.
@@ -348,6 +390,11 @@ defmodule Kollective.Accounts.User do
   def email_changeset(user, attrs, opts \\ []) do
     user
     |> cast(attrs, [:email])
+    |> update_change(:email, fn email ->
+      if is_binary(email), do: String.downcase(email), else: email
+    end)
+
+    # 👈 Force email to lowercase before validation happens
     |> validate_email(opts)
   end
 
@@ -451,23 +498,49 @@ defmodule Kollective.Accounts.User do
   end
 
   # Profile Updates
-  def profile_changeset(user, attrs) do
+  def profile_changeset(%__MODULE__{} = user, attrs) do
     user
-    |> cast(attrs, [:display_name, :alias_name, :bio, :avatar_url])
-    |> validate_length(:bio, max: 160) # Traditional "Twitter-style" bio limit
+    # STRICT WHITE-LIST CASTING: Only allow modification of standard layout fields
+    |> Ecto.Changeset.cast(attrs, [
+      :display_name,
+      :alias_name,
+      :bio,
+      :location,
+      :avatar_url,
+      :cover_image_url,
+      :show_birthday,
+      :accepts_chat_messages
+    ])
+    |> Ecto.Changeset.validate_length(:display_name, max: 100)
+    # Traditional "Twitter-style" bio limit
+    |> Ecto.Changeset.validate_length(:bio, max: 160)
+    |> Ecto.Changeset.validate_length(:location, max: 255)
+    # Ensure they are formatted as valid cloud storage urls before saving
+    |> validate_url_prefix(:avatar_url)
+    |> validate_url_prefix(:cover_image_url)
   end
 
+  defp validate_url_prefix(changeset, field) do
+    validate_change(changeset, field, fn _, value ->
+      if String.starts_with?(value, ["http://", "https://", "/"]) do
+        []
+      else
+        [{field, "must be a valid asset URL"}]
+      end
+    end)
+  end
 
   def district_changeset(user, attrs) do
     user
-    |> cast(attrs, [:state, :district_l1, :district_l2, :district_l3])
+    |> cast(attrs, [:state, :district_l1_id, :district_l2_id, :district_l3_id])
     |> validate_required([:state])
   end
 
   def settings_changeset(user, attrs) do
     user
-    |> cast(attrs, [:auto_play_emails, :auto_play_gifs]) # Add other settings here
+    # Add other settings here
+    |> cast(attrs, [:auto_play_emails, :auto_play_gifs])
   end
 end
 
-#create index(:user_relationships, [:source_id, :type, :target_id], unique: true)
+# create index(:user_relationships, [:source_id, :type, :target_id], unique: true)

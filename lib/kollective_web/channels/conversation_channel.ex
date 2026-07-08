@@ -4,9 +4,9 @@
 # You can do this automatically when they join the channel.
 
 # Flow:
-#1. React: Calls socket.channel("conversation:123").
-#2. Elixir (join): Validates user, saves 123 to socket.assigns, and triggers :after_join.
-#3. Elixir (handle_info): Grabs 123 from socket.assigns and updates the database.
+# 1. React: Calls socket.channel("conversation:123").
+# 2. Elixir (join): Validates user, saves 123 to socket.assigns, and triggers :after_join.
+# 3. Elixir (handle_info): Grabs 123 from socket.assigns and updates the database.
 
 defmodule KollectiveWeb.ConversationChannel do
   use Phoenix.Channel
@@ -31,9 +31,9 @@ defmodule KollectiveWeb.ConversationChannel do
     Kollective.Chats.Chats.mark_as_read(socket.assigns.conversation_id, socket.assigns.user_id)
 
     # Optional: Broadcast to the OTHER user that their message was read
-    #KollectiveWeb.Endpoint.broadcast("user:#{other_user_id}", "messages_read", %{
+    # KollectiveWeb.Endpoint.broadcast("user:#{other_user_id}", "messages_read", %{
     #  conversation_id: socket.assigns.conversation_id
-    #})
+    # })
 
     {:noreply, socket}
   end
@@ -79,13 +79,16 @@ defmodule KollectiveWeb.ConversationChannel do
     {:noreply, socket}
   end
 
-   # Typing Indicators
+  # Typing Indicators
   def handle_in("typing", %{"is_typing" => true}, socket) do
     # Track the user with 'typing' status in the conversation's presence
-    {:ok, _} = Presence.track(socket, socket.assigns.user_id, %{
-      typing: true,
-      username: socket.assigns.username # Helpful for the React UI
-    })
+    {:ok, _} =
+      Presence.track(socket, socket.assigns.user_id, %{
+        typing: true,
+        # Helpful for the React UI
+        username: socket.assigns.username
+      })
+
     {:noreply, socket}
   end
 
@@ -96,7 +99,7 @@ defmodule KollectiveWeb.ConversationChannel do
   end
 
   # "Decryption Failures"
-  #Handling the Rekey Request (Elixir Backend)
+  # Handling the Rekey Request (Elixir Backend)
   # The server acts as a relay. It passes the "Rekey Request" back to the sender's active session.
   def handle_in("request_rekey", payload, socket) do
     # Broadcast to the SENDER of the original message
@@ -104,6 +107,4 @@ defmodule KollectiveWeb.ConversationChannel do
     broadcast_from(socket, "incoming_rekey_request", payload)
     {:noreply, socket}
   end
-
-
 end

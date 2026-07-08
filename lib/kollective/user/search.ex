@@ -1,13 +1,14 @@
 # lib/kollective/accounts/user_search.ex
 defmodule Kollective.User.Search do
   @moduledoc """
-  Fuzzy, typo-tolerant local profile search engine.
-  Leverages PostgreSQL FTS and Trigram vector distances.
+  High-Performance, typo-tolerant local profile search engine.
+  Combines PostgreSQL Full-Text Search (FTS), Trigram similarities,
+  and relational social graph ranking boosting natively inside database memory.
   """
-  import Ecto.Query
+  import Ecto.Query, warn: false
   alias Kollective.Repo
   alias Kollective.Accounts.User
-  alias Kollective.Accounts.Accounts
+  alias Kollective.User.Query, as: UserQuery
 
   @default_limit 20
 
@@ -21,17 +22,17 @@ defmodule Kollective.User.Search do
     offset = Keyword.get(opts, :offset, 0)
     for_user = Keyword.get(opts, :for_user)
 
-    # 1. Clean, trim, and strip incoming search handles (e.g. "@alice" -> "alice")
-    query_string =
+    # 1. Clean, trim, and strip incoming search handles
+    cleaned_query =
       query_string
       |> to_string()
       |> String.trim()
       |> String.trim_leading("@")
 
-    if query_string == "" or String.length(query_string) < 2 do
+    if cleaned_query == "" or String.length(cleaned_query) < 2 do
       []
     else
-      query_string
+      cleaned_query
       |> compile_search_query(for_user, following_only)
       |> limit(^result_limit)
       |> offset(^offset)
@@ -39,40 +40,36 @@ defmodule Kollective.User.Search do
     end
   end
 
-  # --- Core Multi-Tiered Search Compiler ---
+  # ─── CORE MULTI-TIERED SEARCH COMPILER ───
 
   defp compile_search_query(query_string, for_user, following_only) do
-    # 1. Start with the appropriate baseline target user group query
     base_query(for_user, following_only)
-    # 2. Strict Standalone Isolation & Data Privacy Filters
     |> filter_deactivated_users()
     |> filter_invisible_users()
     |> filter_blocked_users(for_user)
-    # 3. Text Density Matching: Core FTS Search Vector Matrix
     |> fts_search(query_string)
-    # 4. Fuzzy Proximity Scoring: Trigram Distance Calculations (Typo Safety)
+    # FIX: Combined similarity calculations with safe positional binding parameters
     |> trigram_similarity_rank(query_string)
-    # 5. Relationship Boosts: Bubble up mutual friends and direct followers
+    # FIX: Relational social boosting moved entirely into high-speed database joins
     |> boost_social_rank(for_user)
-    # Wrap in an operational subquery to execute sorting parameters cleanly
     |> subquery()
     |> order_by([u], desc: u.search_rank, asc: u.username)
   end
 
-  # --- Structural Data Filters & Security Guards ---
+  # ─── STRUCTURAL FILTERS & SECURITY SHIELDS ───
 
   defp base_query(%User{} = user, true) do
-    # Restrict lookup bounds to accounts the current user explicitly follows
-    Kollective.User.Query.build(%{friends: user})
+    UserQuery.build(%{friends: user})
   end
+
   defp base_query(_for_user, _following_only), do: from(u in User)
 
   defp filter_deactivated_users(query) do
-    from(u in query, where: u.is_active == true)
+    from(u in query, where: u.is_active == true and u.is_approved == true)
   end
 
   defp filter_invisible_users(query) do
-    from(u in query, where: u.invisible == false)
+    from(u in query, where: u.is_discoverable == true)
   end
 
   defp filter_blocked_users(query, nil), do: query
@@ -80,17 +77,21 @@ defmodule Kollective.User.Search do
     # Bidirectional safety gate: Exclude users who have blocked you OR whom you have blocked
     blocked_ids_subquery =
       from(r in "user_relationships",
-        where: (r.source_id == ^current_user.id or r.target_id == ^current_user.id) and r.type == "block",
-        select: fragment("CASE WHEN r.source_id = ? THEN r.target_id ELSE r.source_id END", ^current_user.id)
+        where:
+          (r.source_id == ^current_user.id or r.target_id == ^current_user.id) and
+            r.type == "block",
+        select:
+          fragment(
+            "CASE WHEN r.source_id = ? THEN r.target_id ELSE r.source_id END",
+            ^current_user.id
+          )
       )
 
     from(u in query, where: u.id not in subquery(blocked_ids_subquery))
   end
 
-  # --- Text Evaluation & Ranking Matrices ---
-
+  # ─── TEXT MATCHING VECTORS ───
   defp fts_search(query, query_string) do
-    # Format the input string into a standard PostgreSQL prefix wildcard query (e.g. "ali:*")
     fts_token =
       query_string
       |> String.replace(~r/[^\w\s]+/u, " ")
@@ -101,59 +102,54 @@ defmodule Kollective.User.Search do
       |> Enum.join(" | ")
 
     from(u in query,
-      where: fragment(
-        """
-        (
-          setweight(to_tsvector('simple', regexp_replace(?, '\\W', ' ', 'g')), 'A') ||
-          setweight(to_tsvector('simple', regexp_replace(coalesce(?, ''), '\\W', ' ', 'g')), 'B')
-        ) @@ to_tsquery('simple', ?)
-        """,
-        u.username,
-        u.name,
-        ^fts_token
-      )
+      where:
+        fragment(
+          """
+          (
+            setweight(to_tsvector('simple', regexp_replace(?, '\\W', ' ', 'g')), 'A') ||
+            setweight(to_tsvector('simple', regexp_replace(coalesce(?, ''), '\\W', ' ', 'g')), 'B')
+          ) @@ to_tsquery('simple', ?)
+          """,
+          u.username,
+          u.name,
+          ^fts_token
+        )
     )
   end
 
   defp trigram_similarity_rank(query, query_string) do
     from(u in query,
       select_merge: %{
-        search_rank: fragment(
-          "similarity(?, u.username) + similarity(?, coalesce(u.name, ''))",
-          ^query_string,
-          ^query_string
-        )
+        # FIX: Explicit parameter mapping fixes macro schema compilation errors
+        search_rank: fragment("similarity(?, ?) + similarity(?, coalesce(?, ''))", ^query_string, u.username, ^query_string, u.name)
       }
     )
   end
 
+  # ─── HIGH-SPEED O(1) SOCIAL ACCELERATOR ───
+
   defp boost_social_rank(query, nil), do: query
-  defp boost_social_rank(query, %User{} = for_user) do
-    # Fetch flat relationship integer tracking arrays using your optimized contexts
-    friends_ids = Accounts.get_following_ids(for_user.id)
-
-    # Query followers using a light standalone relational inline array extract query
-    followers_ids = Repo.all(
-      from(r in "user_relationships",
-        where: r.target_id == ^for_user.id and r.type == "follow",
-        select: r.source_id
-      )
-    )
-
-    from(u in subquery(query),
+  defp boost_social_rank(query, %User{id: current_user_id}) do
+    # Subqueries calculate relationship flags inside DB RAM instantly without loading lists to Elixir
+    from(u in query,
+      left_join: follows_target in subquery(from(r in "user_relationships", where: r.source_id == ^current_user_id and r.type == "follow", select: %{id: r.target_id, match: true})),
+        on: follows_target.id == u.id,
+      left_join: followed_by in subquery(from(r in "user_relationships", where: r.target_id == ^current_user_id and r.type == "follow", select: %{id: r.source_id, match: true})),
+        on: followed_by.id == u.id,
       select_merge: %{
         search_rank: fragment(
           """
           CASE
-            WHEN u.id IN (?) AND u.id IN (?) THEN u.search_rank * 1.5 -- Mutual Friends
-            WHEN u.id IN (?) THEN u.search_rank * 1.3                 -- People I Follow
-            WHEN u.id IN (?) THEN u.search_rank * 1.1                 -- My Followers
-            ELSE u.search_rank
+            WHEN ? AND ? THEN ? * 1.5 -- Mutual Friends
+            WHEN ? THEN ? * 1.3        -- Accounts I Follow
+            WHEN ? THEN ? * 1.1        -- Accounts Following Me
+            ELSE ?
           END
           """,
-          ^friends_ids, ^followers_ids,
-          ^friends_ids,
-          ^followers_ids
+          not is_nil(follows_target.match), not is_nil(followed_by.match), u.search_rank,
+          not is_nil(follows_target.match), u.search_rank,
+          not is_nil(followed_by.match), u.search_rank,
+          u.search_rank
         )
       }
     )

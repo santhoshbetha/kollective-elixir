@@ -1,14 +1,14 @@
-#Proactive Follow-up: You now have the full lifecycle from Creating to Exporting! Should we add
-#"Event Reminders" for the organizer so they get a summary of who is attending 24 hours before the event starts?
+# Proactive Follow-up: You now have the full lifecycle from Creating to Exporting! Should we add
+# "Event Reminders" for the organizer so they get a summary of who is attending 24 hours before the event starts?
 
-#To wrap up the Event Lifecycle, we’ll build an Oban worker that sends a "Pre-Event Summary" to the organizer.
-#This gives them a "Heads Up" with the final headcount 24 hours before the event starts.
+# To wrap up the Event Lifecycle, we’ll build an Oban worker that sends a "Pre-Event Summary" to the organizer.
+# This gives them a "Heads Up" with the final headcount 24 hours before the event starts.
 
-#Pre-Event Summary" to the organizer
+# Pre-Event Summary" to the organizer
 
-#1. The Organizer Summary Worker
-#This worker fetches the counts for "Going" and "Maybe" and sends a notification specifically to the
-#created_by user.
+# 1. The Organizer Summary Worker
+# This worker fetches the counts for "Going" and "Maybe" and sends a notification specifically to the
+# created_by user.
 
 defmodule Kollective.Workers.OrganizerSummaryWorker do
   use Oban.Worker, queue: :events
@@ -26,9 +26,12 @@ defmodule Kollective.Workers.OrganizerSummaryWorker do
 
     # 2. Notify the Organizer (created_by)
     Notifications.notify(
-      event.created_by,       # The recipient (The Organizer)
-      event.created_by,       # The actor (System self-notification tracking)
-      "event_reminder",       # Type must match our strict @notification_types registry string
+      # The recipient (The Organizer)
+      event.created_by,
+      # The actor (System self-notification tracking)
+      event.created_by,
+      # Type must match our strict @notification_types registry string
+      "event_reminder",
       %{
         event_id: event.id,
         target_id: event.id,

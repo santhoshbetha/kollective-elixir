@@ -2,14 +2,15 @@ defmodule Kollective.Accounts.UserRelationship do
   use Kollective.Schemas.Schema
   import Ecto.Changeset
 
-  @types ["follow",
-          "block",
-          "mute",
-          "reblog_mute",
-          "notification_mute",
-          "inverse_subscription",
-          "endorsement"
-         ]
+  @types [
+    "follow",
+    "block",
+    "mute",
+    "reblog_mute",
+    "notification_mute",
+    "inverse_subscription",
+    "endorsement"
+  ]
 
   schema "user_relationships" do
     field :type, :string, default: "follow"
@@ -41,10 +42,10 @@ defmodule Kollective.Accounts.UserRelationship do
 end
 
 # In your UserRelationship migration
-#create index(:user_relationships, [:expires_at])
-#create index(:user_relationships, [:source_id, :target_id, :type], unique: true)
+# create index(:user_relationships, [:expires_at])
+# create index(:user_relationships, [:source_id, :target_id, :type], unique: true)
 
 # Index for follows/mutes lookups
-#create index(:user_relationships, [:source_id, :type])
+# create index(:user_relationships, [:source_id, :type])
 # Ensure a user can't follow the same person twice
-#create unique_index(:user_relationships, [:source_id, :target_id, :type])
+# create unique_index(:user_relationships, [:source_id, :target_id, :type])

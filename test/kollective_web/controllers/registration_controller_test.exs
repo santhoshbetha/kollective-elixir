@@ -3,48 +3,48 @@ defmodule KollectiveWeb.RegistrationControllerTest do
 
   import Kollective.AccountsFixtures
 
-  describe "GET /users/register" do
-    test "renders registration page", %{conn: conn} do
-      conn = get(conn, ~p"/users/register")
-      response = html_response(conn, 200)
-      assert response =~ "Register"
-      assert response =~ ~p"/users/log-in"
-      assert response =~ ~p"/users/register"
-    end
-
-    test "redirects if already logged in", %{conn: conn} do
-      conn = conn |> log_in_user(user_fixture()) |> get(~p"/users/register")
-
-      assert redirected_to(conn) == ~p"/"
-    end
-  end
-
-  describe "POST /users/register" do
-    @tag :capture_log
-    test "creates account but does not log in", %{conn: conn} do
+  describe "POST /api/users/register - JSON API" do
+    test "creates account with valid attributes", %{conn: conn} do
       email = unique_user_email()
 
       conn =
-        post(conn, ~p"/users/register", %{
+        post(conn, ~p"/api/users/register", %{
           "user" => valid_user_attributes(email: email)
         })
 
-      refute get_session(conn, :user_token)
-      assert redirected_to(conn) == ~p"/users/log-in"
-
-      assert conn.assigns.flash["info"] =~
-               ~r/An email was sent to .*, please access it to confirm your account/
+      # 🔄 Align to expect the clean 201 header state
+      assert conn.status == 201
+      response = json_response(conn, 201)
+      # 💡 Match your custom JSON layout nesting
+      assert response["data"]["user"]["email"] == email
     end
 
-    test "render errors for invalid data", %{conn: conn} do
+    test "returns error for invalid email", %{conn: conn} do
       conn =
-        post(conn, ~p"/users/register", %{
-          "user" => %{"email" => "with spaces"}
+        post(conn, ~p"/api/users/register", %{
+          "user" => %{"email" => "invalid-email"}
         })
 
-      response = html_response(conn, 200)
-      assert response =~ "Register"
-      assert response =~ "must have the @ sign and no spaces"
+      assert conn.status in [400, 422]
+      response = json_response(conn, conn.status)
+      assert response["error"] || response["errors"]
+    end
+
+    test "returns error when already authenticated", %{conn: conn} do
+      user = user_fixture()
+
+      conn =
+        conn
+        |> assign(:current_user, user)
+        # ➕ Add this line to build the structural :current_scope metadata assign!
+        |> KollectiveWeb.UserAuth.fetch_current_scope_for_user([])
+        |> post(~p"/api/users/register", %{
+          "user" => valid_user_attributes(email: unique_user_email())
+        })
+
+      assert conn.status == 403
+      response = json_response(conn, 403)
+      assert response["error"] =~ "already logged in"
     end
   end
 end

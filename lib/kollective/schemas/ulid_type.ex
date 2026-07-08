@@ -29,4 +29,11 @@ defmodule Kollective.Schemas.ULIDType do
 
   @impl true
   def equal?(a, b), do: a == b
+
+  def generate do
+    # Replace this with the actual underlying generation function of your library
+    # For example, if you use the 'ecto_ulid' library, it is usually Ecto.ULID.generate()
+    # if it's explicitly supported, or you generate a raw string value here.
+    Ecto.ULID.generate()
+  end
 end

@@ -5,7 +5,7 @@
 defmodule Kollective.Workers.FeedFanoutWorker do
   use Oban.Worker, queue: :default, max_attempts: 2
   alias Kollective.Repo
-  #alias Kollective.Chat.Participant # Reuse structural queries or use a dedicated helper
+  # alias Kollective.Chat.Participant # Reuse structural queries or use a dedicated helper
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"post_id" => post_id, "author_id" => author_id}}) do
@@ -15,21 +15,23 @@ defmodule Kollective.Workers.FeedFanoutWorker do
     follower_ids =
       from(r in "user_relationships",
         where: r.target_id == ^author_id and r.type == "follow",
-        select: r.source_id)
+        select: r.source_id
+      )
       |> Repo.all()
 
     # 2. Bulk insert rows into the Home Feed Cache table
     # This is a high-speed bulk database insertion pass
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    entries = Enum.map(follower_ids, fn follower_id ->
-      %{
-        user_id: follower_id,
-        post_id: post_id,
-        inserted_at: now,
-        updated_at: now
-      }
-    end)
+    entries =
+      Enum.map(follower_ids, fn follower_id ->
+        %{
+          user_id: follower_id,
+          post_id: post_id,
+          inserted_at: now,
+          updated_at: now
+        }
+      end)
 
     # Insert in chunks of 1,000 to prevent hitting Postgres parameter limits
     Enum.chunk_every(entries, 1000)

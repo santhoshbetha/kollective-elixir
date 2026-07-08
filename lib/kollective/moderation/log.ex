@@ -1,6 +1,6 @@
-#Audit Log that records every moderation action (who approved what and when)
+# Audit Log that records every moderation action (who approved what and when)
 defmodule Kollective.Moderation.Log do
-  use Ecto.Schema
+  use Kollective.Schemas.Schema
   import Ecto.Changeset
 
   schema "moderation_logs" do

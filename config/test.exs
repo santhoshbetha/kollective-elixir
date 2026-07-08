@@ -23,6 +23,23 @@ config :kollective, KollectiveWeb.Endpoint,
   secret_key_base: "/cXcHps34v0nW3z9IepcsxY86dwRWhl+spzLQ3Z38sEnmA5F/+q7GOHiVuov63J7",
   server: false
 
+config :kollective, Oban,
+  repo: Kollective.Repo,
+  # Run jobs immediately inline during tests if needed
+  testing: :inline,
+  # 👈 Turn off all cron plugins/pruners for testing
+  plugins: false
+
+# Configure Hammer rate limiter for the test environment
+# Format for Hammer v6+
+config :hammer,
+  backend:
+    {Hammer.Backend.ETS,
+     [
+       expiry_ms: 600_000,
+       cleanup_interval_ms: 60_000
+     ]}
+
 # In test we don't send emails
 config :kollective, Kollective.Mailer, adapter: Swoosh.Adapters.Test
 
@@ -34,7 +51,3 @@ config :logger, level: :warning
 
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
-
-# Enable helpful, but potentially expensive runtime checks
-config :phoenix_live_view,
-  enable_expensive_runtime_checks: true

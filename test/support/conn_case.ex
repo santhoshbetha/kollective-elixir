@@ -37,43 +37,37 @@ defmodule KollectiveWeb.ConnCase do
   end
 
   @doc """
-  Setup helper that registers and logs in users.
+  @doc \"""
+  Setup helper that creates an authenticated user and assigns them to the connection.
 
-      setup :register_and_log_in_user
+      setup :authenticate_user
 
   It stores an updated connection and a registered user in the
-  test context.
+  test context with Bearer token authorization.
   """
-  def register_and_log_in_user(%{conn: conn} = context) do
+  def authenticate_user(%{conn: conn}) do
     user = Kollective.AccountsFixtures.user_fixture()
+    token = Kollective.Accounts.Accounts.generate_user_session_token(user)
+
+    authenticated_conn =
+      conn
+      |> Plug.Conn.put_req_header("authorization", "Bearer #{token}")
+      |> Plug.Conn.assign(:current_user, user)
+
     scope = Kollective.Accounts.Scope.for_user(user)
-
-    opts =
-      context
-      |> Map.take([:token_authenticated_at])
-      |> Enum.into([])
-
-    %{conn: log_in_user(conn, user, opts), user: user, scope: scope}
+    %{conn: authenticated_conn, user: user, scope: scope, token: token}
   end
 
   @doc """
-  Logs the given `user` into the `conn`.
+  Adds Bearer token authorization to a connection for the given user.
 
-  It returns an updated `conn`.
+  It returns an updated connection with the Authorization header set.
   """
-  def log_in_user(conn, user, opts \\ []) do
-    token = Kollective.Accounts.generate_user_session_token(user)
-
-    maybe_set_token_authenticated_at(token, opts[:token_authenticated_at])
+  def authenticate_conn(conn, user) do
+    token = Kollective.Accounts.Accounts.generate_user_session_token(user)
 
     conn
-    |> Phoenix.ConnTest.init_test_session(%{})
-    |> Plug.Conn.put_session(:user_token, token)
-  end
-
-  defp maybe_set_token_authenticated_at(_token, nil), do: nil
-
-  defp maybe_set_token_authenticated_at(token, authenticated_at) do
-    Kollective.AccountsFixtures.override_token_authenticated_at(token, authenticated_at)
+    |> Plug.Conn.put_req_header("authorization", "Bearer #{token}")
+    |> Plug.Conn.assign(:current_user, user)
   end
 end

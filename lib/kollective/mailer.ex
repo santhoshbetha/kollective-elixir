@@ -5,9 +5,10 @@ defmodule Kollective.Mailer do
   def send_admin_alert(subject, body) do
     new()
     |> to("admin@example.com")
-    |> from({"Kollective System", "system@kollective99.com"})
+    |> from({"Kollective System", "system@kollective.social"})
     |> subject(subject)
     |> text_body(body)
-    |> deliver() # This sends the email via Finch/Swoosh
+    # This sends the email via Finch/Swoosh
+    |> deliver()
   end
 end

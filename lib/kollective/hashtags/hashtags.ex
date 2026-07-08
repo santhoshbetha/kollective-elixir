@@ -16,7 +16,6 @@ defmodule Kollective.Hashtags.Hashtags do
 
     # 1. Reset old scores to 0 so dead trends disappear
     from(t in Hashtag, where: t.updated_at < ^one_day_ago)
-
     |> Repo.update_all(set: [trending_score: 0.0])
 
     # 2. Get active tags and their usage stats
@@ -58,9 +57,8 @@ defmodule Kollective.Hashtags.Hashtags do
   """
   def list_trending_tags(limit \\ 10) do
     Hashtag
-
     |> where([t], t.trending_score > 0)
-    |> order_by([desc: :trending_score])
+    |> order_by(desc: :trending_score)
     |> limit(^limit)
     # Select as a map to make JSON serialization easy
 
@@ -72,18 +70,27 @@ defmodule Kollective.Hashtags.Hashtags do
     |> Repo.all()
   end
 
-  #How it's populated (The Upsert)
+  # How it's populated (The Upsert)
   # When a post is created, you don't just insert a row; you increment the count for the current hour's bucket.
   # This keeps the table size manageable
   def increment_hashtag_stat(hashtag_id) do
-    # Truncate the current time to the start of the hour
-    hour_bucket = DateTime.utc_now() |> DateTime.truncate(:hour)
+    now = DateTime.utc_now()
+
+    # 🔄 FIX 1: Extract a clean %Date{} struct from the current time
+    current_date = DateTime.to_date(now)
+
+    # 🔄 FIX 2: Create an hour-aligned %Time{} struct forcing minutes/seconds to 0
+    {:ok, aligned_time} = Time.new(now.hour, 0, 0)
+
+    # 🔄 FIX 3: Combine them using native structs to satisfy type check boundaries
+    {:ok, hour_bucket} = DateTime.new(current_date, aligned_time, "Etc/UTC")
 
     # Atomic Upsert: If the bucket exists, increment count. If not, create it.
     import Ecto.Query
 
-    _query = from s in HashtagStat,
-      where: s.hashtag_id == ^hashtag_id and s.bucket == ^hour_bucket
+    _query =
+      from s in HashtagStat,
+        where: s.hashtag_id == ^hashtag_id and s.bucket == ^hour_bucket
 
     Repo.insert!(
       %HashtagStat{hashtag_id: hashtag_id, bucket: hour_bucket, count: 1},

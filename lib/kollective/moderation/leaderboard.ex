@@ -1,7 +1,7 @@
 # The Reporter Leaderboard (Admin API)
 # This allows admins to see who their most helpful "community moderators" are.
 
-#Why this is a "Self-Cleaning" System:
+# Why this is a "Self-Cleaning" System:
 
 #    Discourages Trolls: If a user tries to harass a "Verified" member by reporting all their posts, their report_trust_score will plummet to
 #    after a few admin dismissals, making their future reports effectively useless.

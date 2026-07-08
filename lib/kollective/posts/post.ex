@@ -1,5 +1,6 @@
 defmodule Kollective.Posts.Post do
   use Kollective.Schemas.Schema
+  import Ecto.Changeset
 
   alias Kollective.Notifications.Notification
   alias Kollective.Posts.Posts
@@ -13,10 +14,8 @@ defmodule Kollective.Posts.Post do
   schema "posts" do
     # --- OWNERSHIP & CORE IDENTITY ---
     # Individual User/ Orgamization Member (actual human who writes org posts)
+    # This single field handles both humans and corporate actors seamlessly!
     belongs_to(:author, Kollective.Accounts.User, foreign_key: :user_id)
-
-    # If this is set, the post is an "Organization Post"
-    belongs_to(:organization, Kollective.Accounts.Organization) #orhanization_id
 
     # 2. Cleanup for Discovery/Social Actions
     # This ensures that if a post is deleted, all related "liked", "reblogged",
@@ -40,7 +39,8 @@ defmodule Kollective.Posts.Post do
     field :spoiler_text, :string
     # Short snippet
     field :summary, :string
-    field :language, :string,  default: "english" # Store as 'english', 'spanish', etc.
+    # Store as 'english', 'spanish', etc.
+    field :language, :string, default: "english"
 
     # Virtual field: exists only in memory during the changeset
     field :language_override, :string, virtual: true
@@ -58,6 +58,9 @@ defmodule Kollective.Posts.Post do
 
     # Post Category: :post (standard) or :voice (urgent/protest)
     field :category, Ecto.Enum, values: [:post, :voice], default: :post
+
+    # Trending score calculation column:
+    field :trending_score, :float, default: 0.0
 
     # Optional: Level of urgency for Voice posts (1-5)
     field :urgency_level, :integer, default: 0
@@ -84,16 +87,16 @@ defmodule Kollective.Posts.Post do
     field :origin_district_l3, :string
 
     # Discovery/Voting / Quora-style Ranking
-    field :upvotes_count,   :integer, virtual: true, default: 0
+    field :upvotes_count, :integer, virtual: true, default: 0
     field :downvotes_count, :integer, virtual: true, default: 0
-    field :score,           :integer, virtual: true, default: 0
+    field :score, :integer, virtual: true, default: 0
 
     # Engagement Cache
     # Virtual field to hold the aggregate count from the DB
-    field :likes_count,   :integer, virtual: true, default: 0
+    field :likes_count, :integer, virtual: true, default: 0
     field :reblogs_count, :integer, virtual: true, default: 0
     field :replies_count, :integer, virtual: true, default: 0
-    field :quotes_count,  :integer, virtual: true, default: 0
+    field :quotes_count, :integer, virtual: true, default: 0
 
     # --- THREADING ---
     # Self-referential relationships for replies
@@ -114,11 +117,13 @@ defmodule Kollective.Posts.Post do
     #              column to look for in the database.
     has_many :children, __MODULE__, foreign_key: :root_post_id
     # Retrieves all posts that were sent as a direct reply to this one
-    has_many :all_direct_replies, __MODULE__, foreign_key: :in_reply_to_id #parent ID
+    # parent ID
+    has_many :all_direct_replies, __MODULE__, foreign_key: :in_reply_to_id
 
     # Virtual field to hold the nested reply tree when fetching a thread
     # With this, Elixir can hold the nested replies without trying to save them to a database column
-    field :replies, {:array, :map}, virtual: true, default: [] # <--- Virtual field for the tree
+    # <--- Virtual field for the tree
+    field :replies, {:array, :map}, virtual: true, default: []
 
     # Denormalized handle for "Replying to @user" display without extra joins
     field :in_reply_to_username, :string
@@ -137,7 +142,9 @@ defmodule Kollective.Posts.Post do
     has_many :votes, Kollective.Posts.Vote
 
     # Link to Hashtags via the join table string
-    many_to_many :hashtags, Kollective.Hashtags.Hashtag, join_through: "posts_hashtags", on_replace: :delete
+    many_to_many :hashtags, Kollective.Hashtags.Hashtag,
+      join_through: "posts_hashtags",
+      on_replace: :delete
 
     # For tagging users: [%{username: "alice", id: 1}, ...]
     # MISSING: List of tagged users
@@ -169,8 +176,6 @@ defmodule Kollective.Posts.Post do
     # has_one(:video, Kollective.Videos.Video)
     has_one(:poll, Kollective.Polls.Poll)
 
-    has_many :attachments, Kollective.Posts.PostAttachment, on_replace: :delete
-
     # Video transcoding can take several seconds for large files
     # "Upload Status" WebSocket
     #   1. Add a new field to track the processing status of the video.
@@ -183,6 +188,20 @@ defmodule Kollective.Posts.Post do
     field :status, Ecto.Enum,
       values: [:published, :pending, :rejected, :appealed],
       default: :published
+
+    # OpenGraph Link Preview Parameters (Stored directly on the row for fast O(1) feed reads)
+    # "https://bbc.com..."
+    field :link_url, :string
+    # "Breaking News: AI Milestones reached"
+    field :link_title, :string
+    # "BBC coverage on newest technology shifts..."
+    field :link_description, :string
+    # Extracted OpenGraph image thumbnail URL
+    field :link_preview_image, :string
+
+    has_many :attachments, Kollective.Posts.PostAttachment,
+      foreign_key: :post_id,
+      on_replace: :delete
 
     field :rejection_reason, :string
     field :rejected_at, :utc_datetime
@@ -199,36 +218,51 @@ defmodule Kollective.Posts.Post do
     field :data, :map, default: %{}
     field :metadata, :map, default: %{}
 
-    timestamps(type: :utc_datetime)
+    timestamps()
   end
 
   def changesetX(post, attrs) do
     post
-    |> cast(attrs, [:content, :user_id, :root_post_id, :in_reply_to_id, :language_override])
+    |> cast(attrs, [
+      :content,
+      :user_id,
+      :root_post_id,
+      :in_reply_to_id,
+      :language_override,
+      :link_url,
+      :link_title,
+      :link_description,
+      :link_preview_image
+    ])
     |> cast_assoc(:poll, with: &Kollective.Polls.Poll.changeset/2)
-    |> validate_required([:content, :user_id]) # user is usually mandatory
+    # user is usually mandatory
+    |> validate_required([:content, :user_id])
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:root_post_id)
     |> foreign_key_constraint(:in_reply_to_id)
     |> validate_mastodon_length(:content, 500)
     # Call the extractor here
     |> put_hashtags()
-    |> detect_and_set_language() # <--- New helper
+    # <--- New helper
+    |> detect_and_set_language()
     # Mastodon logic: If there's a warning, the content is sensitive
     |> ensure_sensitive_if_spoiler()
   end
 
   defp put_hashtags(changeset) do
     case get_change(changeset, :content) do
-      nil -> changeset
+      nil ->
+        changeset
+
       content ->
         # 1. Get the strings: ["elixir", "phoenix"]
         tag_names = Posts.extract_hashtags(content)
 
         # 2. Convert strings into Hashtag structs
-        tags = Enum.map(tag_names, fn name ->
-          Posts.get_or_create_hashtag(name)
-        end)
+        tags =
+          Enum.map(tag_names, fn name ->
+            Posts.get_or_create_hashtag(name)
+          end)
 
         # 3. Associate them with the post
         put_assoc(changeset, :hashtags, tags)
@@ -255,13 +289,23 @@ defmodule Kollective.Posts.Post do
         supported_langs = [:english, :spanish, :french, :german]
 
         # Use Lingua to detect from your supported subset
-        detected_language = Lingua.detect(content,
-          builder_option: :with_languages,
-          languages: supported_langs
-        )
+        detected_language =
+          Lingua.detect(content,
+            builder_option: :with_languages,
+            languages: supported_langs
+          )
 
         # Use detected result; if Lingua is unsure, fall back to user's default locale
-        final_lang = if detected_language, do: detected_language, else: user_locale
+        # 🔄 FIX: Use a case statement to safely unwrap the Lingua result tuple typings
+        final_lang =
+          case detected_language do
+            {:ok, language_atom} ->
+              language_atom
+
+            {:error, _reason} ->
+              # If Lingua is unsure or encounters an error, safely fall back to user's locale
+              user_locale
+          end
         put_change(changeset, :language, map_to_postgres_lang(final_lang))
 
       # Priority 3: Fallback (Empty content or no detection)
@@ -302,15 +346,19 @@ defmodule Kollective.Posts.Post do
 
         # Calculate URL discount
         urls = Regex.scan(url_regex, content) |> List.flatten()
-        url_adjustment = Enum.reduce(urls, 0, fn url, acc ->
-          acc + (String.length(url) - 23)
-        end)
+
+        url_adjustment =
+          Enum.reduce(urls, 0, fn url, acc ->
+            acc + (String.length(url) - 23)
+          end)
 
         # Calculate Mention discount (subtract the @domain part)
         mentions = Regex.scan(mention_regex, content)
-        mention_adjustment = Enum.reduce(mentions, 0, fn [_full_mention, domain_part], acc ->
-          acc + String.length(domain_part)
-        end)
+
+        mention_adjustment =
+          Enum.reduce(mentions, 0, fn [_full_mention, domain_part], acc ->
+            acc + String.length(domain_part)
+          end)
 
         # Final Mastodon weight
         final_length = String.length(content) - url_adjustment - mention_adjustment
@@ -326,24 +374,50 @@ defmodule Kollective.Posts.Post do
     end)
   end
 
-
   @doc "Main changeset for creating/updating posts"
   def changeset(post, attrs) do
     post
     |> cast(attrs, [
       # Core Identity
-      :user_id, :organization_id, :status, :category, :visibility, :target_scope,
+      :user_id,
+      :organization_id,
+      :status,
+      :category,
+      :visibility,
+      :target_scope,
       # Content
-      :content, :text, :spoiler_text, :summary, :language, :content_type, :urgency_level,
+      :content,
+      :text,
+      :spoiler_text,
+      :summary,
+      :language,
+      :content_type,
+      :urgency_level,
       # Threading & Relations
-      :root_post_id, :in_reply_to_id, :in_reply_to_username,
-      :quote_id, :quote_url, :reblog_id, :context, :direct_conversation_id,
+      :root_post_id,
+      :in_reply_to_id,
+      :in_reply_to_username,
+      :quote_id,
+      :quote_url,
+      :reblog_id,
+      :context,
+      :direct_conversation_id,
       # Engagement & Counters (Usually updated via context, but castable for migrations/sync)
-      :replies_count, :quotes_count, :likes_count, :reblogs_count,
+      :replies_count,
+      :quotes_count,
+      :likes_count,
+      :reblogs_count,
       # Rich Data (JSONB)
-      :emojis, :emoji_reactions, :mentions, :application_name, :data, :metadata,
+      :emojis,
+      :emoji_reactions,
+      :mentions,
+      :application_name,
+      :data,
+      :metadata,
       # Lifecycle
-      :published_at, :expires_at, :processing_status
+      :published_at,
+      :expires_at,
+      :processing_status
     ])
     # --- Validations ---
     |> validate_required([:content, :status, :target_scope, :category])
@@ -381,6 +455,7 @@ defmodule Kollective.Posts.Post do
   # Custom validation: ensure urgency is only set for voice posts
   defp validate_urgency_by_category(changeset) do
     category = get_field(changeset, :category)
+
     if category == :post && get_field(changeset, :urgency_level) > 0 do
       add_error(changeset, :urgency_level, "cannot be set for standard posts")
     else
@@ -390,6 +465,7 @@ defmodule Kollective.Posts.Post do
 
   defp validate_attachment_limit(changeset, max) do
     attachments = get_field(changeset, :attachments) || []
+
     if length(attachments) > max do
       add_error(changeset, :attachments, "cannot have more than #{max} files")
     else

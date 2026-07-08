@@ -1,5 +1,5 @@
 defmodule Kollective.Posts.Like do
-  use Ecto.Schema
+  use Kollective.Schemas.Schema
   import Ecto.Changeset
 
   schema "likes" do
@@ -10,7 +10,6 @@ defmodule Kollective.Posts.Like do
 
   def changeset(like, attrs) do
     like
-
     |> cast(attrs, [:user_id, :post_id])
     |> validate_required([:user_id, :post_id])
     |> unique_constraint([:user_id, :post_id])

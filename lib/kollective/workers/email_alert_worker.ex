@@ -2,11 +2,11 @@
 
 # Oban Worker for these email alerts now to keep your API response times fast
 
-#To keep your API response times under 100ms, you should never send emails directly during a request.
-#Instead, you "fire and forget" a job into Oban.
+# To keep your API response times under 100ms, you should never send emails directly during a request.
+# Instead, you "fire and forget" a job into Oban.
 
 # Create the Worker
-#This worker handles the actual email delivery. If the mail server is down, Oban will automatically retry
+# This worker handles the actual email delivery. If the mail server is down, Oban will automatically retry
 # it later without affecting the user who created the event.
 
 defmodule Kollective.Workers.EventAlertWorker do

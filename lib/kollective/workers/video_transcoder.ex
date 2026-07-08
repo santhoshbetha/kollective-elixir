@@ -17,18 +17,40 @@ defmodule Kollective.Workers.VideoTranscoder do
 
     # 1. Extract Poster Image (Fast Seek to 2s)
     poster_path = "/tmp/poster_#{id}.jpg"
-    poster_args = ["-ss", "00:00:02", "-i", input_url, "-vframes", "1", "-q:v", "2", poster_path, "-y"]
+
+    poster_args = [
+      "-ss",
+      "00:00:02",
+      "-i",
+      input_url,
+      "-vframes",
+      "1",
+      "-q:v",
+      "2",
+      poster_path,
+      "-y"
+    ]
 
     with {_, 0} <- System.cmd("ffmpeg", poster_args),
          # 2. Store the poster image in R2 via Waffle
          {:ok, _} <- PostMedia.store({%{path: poster_path, filename: "poster.jpg"}, att}),
          # 3. Transcode Video to Web-Optimized MP4
          video_path <- "/tmp/transcoded_#{id}.mp4",
-         video_args <- ["-i", input_url, "-c:v", "libx264", "-crf", "23", "-movflags", "+faststart", "-y", video_path],
+         video_args <- [
+           "-i",
+           input_url,
+           "-c:v",
+           "libx264",
+           "-crf",
+           "23",
+           "-movflags",
+           "+faststart",
+           "-y",
+           video_path
+         ],
          {_, 0} <- System.cmd("ffmpeg", video_args),
          # 4. Store the optimized video
          {:ok, _} <- PostMedia.store({%{path: video_path, filename: "video.mp4"}, att}) do
-
       # Cleanup and Mark as Processed
       File.rm(poster_path)
       File.rm(video_path)
@@ -36,8 +58,8 @@ defmodule Kollective.Workers.VideoTranscoder do
       att |> Ecto.Changeset.change(is_processed: true) |> Repo.update!()
       :ok
     else
-      {err, _} -> {:error, "FFmpeg Error: #{err}"}
       {:error, reason} -> {:error, "Upload Error: #{inspect(reason)}"}
+      {err, _} -> {:error, "FFmpeg Error: #{err}"}
     end
   end
 
@@ -55,17 +77,40 @@ defmodule Kollective.Workers.VideoTranscoder do
 
     # Wrap in try/ensure block to guarantee local file erasure under failure states
     try do
-      poster_args = ["-ss", "00:00:02", "-i", input_url, "-vframes", "1", "-q:v", "2", poster_path, "-y"]
-      video_args = ["-i", input_url, "-c:v", "libx264", "-crf", "23", "-movflags", "+faststart", "-y", video_path]
+      poster_args = [
+        "-ss",
+        "00:00:02",
+        "-i",
+        input_url,
+        "-vframes",
+        "1",
+        "-q:v",
+        "2",
+        poster_path,
+        "-y"
+      ]
+
+      video_args = [
+        "-i",
+        input_url,
+        "-c:v",
+        "libx264",
+        "-crf",
+        "23",
+        "-movflags",
+        "+faststart",
+        "-y",
+        video_path
+      ]
 
       with {_, 0} <- System.cmd("ffmpeg", poster_args),
            # 2. Upload extracted first-frame poster to Cloudflare R2 via Waffle
            {:ok, _} <- PostMedia.store({%{path: poster_path, filename: "poster.jpg"}, att}),
            # 3. Process video into clean, web-compressed h264 MP4 stream
-           {_, 0} <- System.cmd("system", ["ffmpeg" | video_args]), # Safe execution array wrap
+           # Safe execution array wrap
+           {_, 0} <- System.cmd("ffmpeg", video_args),
            # 4. Upload web-ready asset container payload to R2 bucket
            {:ok, _} <- PostMedia.store({%{path: video_path, filename: "video.mp4"}, att}) do
-
         # 5. Finalize record states inside database context layer
         {:ok, updated_att} =
           att
@@ -85,13 +130,12 @@ defmodule Kollective.Workers.VideoTranscoder do
 
         :ok
       else
-        {err, _} ->
-          handle_processing_failure(att.post_id, "FFmpeg Error: #{err}")
-          {:error, "FFmpeg Transcoding Exception"}
-
         {:error, reason} ->
           handle_processing_failure(att.post_id, "Upload Failure")
           {:error, "Storage Engine Write Exception: #{inspect(reason)}"}
+        {err, _} ->
+          handle_processing_failure(att.post_id, "FFmpeg Error: #{err}")
+          {:error, "FFmpeg Transcoding Exception: #{err}"}
       end
     after
       # This block executes 100% of the time, keeping your server's disk storage clean
@@ -106,8 +150,8 @@ defmodule Kollective.Workers.VideoTranscoder do
     |> Repo.update_all(set: [processing_status: status])
   end
 
-  defp handle_processing_failure(post_id, reason) do
+  defp handle_processing_failure(post_id, _reason) do
     update_post_processing_status(post_id, "failed")
-    IO.inspect(reason, label: "Video Processing Pipeline Error Intercept")
+    #IO.inspect(reason, label: "Video Processing Pipeline Error Intercept")
   end
 end

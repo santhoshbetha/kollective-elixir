@@ -1,57 +1,94 @@
-# lib/kollective_web/controllers/admin/emoji_controller.ex
-defmodule KollectiveWeb.Admin.EmojiController do
+defmodule KollectiveWeb.Admin.AdminEmojiController do
   use KollectiveWeb, :controller
+
   alias Kollective.Posts.Posts
+  alias KollectiveWeb.ChangesetJSON
 
-  # GET /api/v1/admin/custom_emojis/presign
-  def presign(conn, %{"shortcode" => shortcode, "content_type" => type}) do
+  @bucket_name "your-r2-bucket"
+  @cdn_domain "https://your-cdn.com"
+
+  # ─── ACTION 1: GENERATE CUSTOM EMOJI PRESIGNED URLS ───
+  # GET /api/v1/admin/custom_emojis/presign?shortcode=kollective_logo&content_type=image/gif
+  def presign(conn, %{"shortcode" => shortcode, "content_type" => content_type}) do
     config = ExAws.Config.new(:s3)
-    bucket = "your-r2-bucket"
 
-    # Target path layout for original animated and static assets
-    key_gif = "custom_emojis/#{shortcode}.gif"
-    key_static = "custom_emojis/#{shortcode}_static.png"
+    # Clean the shortcode text input to prevent file directory traversal hacks
+    safe_shortcode = String.replace(shortcode, ~r/[^a-zA-Z0-9_\-]/, "")
 
-    {:ok, url_gif} = ExAws.S3.presigned_url(config, :put, bucket, key_gif, expires_in: 3600, query_params: [{"Content-Type", type}])
-    {:ok, url_static} = ExAws.S3.presigned_url(config, :put, bucket, key_static, expires_in: 3600, query_params: [{"Content-Type", "image/png"}])
+    # Target path layout for both original animated assets and static frames
+    key_gif = "custom_emojis/#{safe_shortcode}.gif"
+    key_static = "custom_emojis/#{safe_shortcode}_static.png"
 
-    json(conn, %{
+    # Generate an unauthenticated 15-minute write ticket straight to Cloudflare R2 edge pools
+    {:ok, url_gif} =
+      ExAws.S3.presigned_url(config, :put, @bucket_name, key_gif,
+        expires_in: 900,
+        query_params: [{"Content-Type", content_type}]
+      )
+
+    {:ok, url_static} =
+      ExAws.S3.presigned_url(config, :put, @bucket_name, key_static,
+        expires_in: 900,
+        query_params: [{"Content-Type", "image/png"}]
+      )
+
+    conn
+    |> put_status(:ok)
+    # FIX: Corrected string interpolation syntax with a leading root forward slash
+    |> json(%{
+      status: "success",
       upload_url_gif: url_gif,
       upload_url_static: url_static,
-      final_url: "https://your-cdn.com{key_gif}",
-      final_static_url: "https://your-cdn.com{key_static}"
+      final_url: "#{@cdn_domain}/#{key_gif}",
+      final_static_url: "#{@cdn_domain}/#{key_static}"
     })
   end
 
+  # ─── ACTION 2: REGISTER COMPLETED EMOJI METADATA ───
   # POST /api/v1/admin/custom_emojis
+  # Expected JSON: %{"emoji" => %{"shortcode" => "kollective", "url" => "https://...", "category" => "Logos"}}
   def create(conn, %{"emoji" => emoji_params}) do
     case Posts.create_emoji(emoji_params) do
       {:ok, emoji} ->
-        conn |> put_status(:created) |> json(%{status: "ok", data: emoji})
+        conn
+        |> put_status(:created)
+        |> json(%{
+          status: "success",
+          message: "Custom emoji successfully registered onto platform matrices.",
+          data: %{id: to_string(emoji.id), shortcode: emoji.shortcode, category: emoji.category}
+        })
+
       {:error, changeset} ->
-        conn |> put_status(:unprocessable_entity) |> render(:error, changeset: changeset)
+        conn
+        |> put_status(:unprocessable_entity)
+        # FIX: Call your unified ChangesetJSON function contract directly into json/2
+        |> json(ChangesetJSON.error(%{changeset: changeset}))
     end
   end
 
-  def createX(conn, %{"emoji" => emoji_params}) do
-    case Posts.create_emoji(emoji_params) do
-      {:ok, emoji} ->
-        json(conn, %{status: "ok", shortcode: emoji.shortcode})
-      {:error, changeset} ->
-        conn |> put_status(:unprocessable_entity) |> render(:error, changeset: changeset)
-    end
-  end
-
-  #You need to return your custom emojis grouped by category so the picker can
-  #organize them (e.g., "Custom", "Logos", "Animations").
+  # ─── ACTION 3: FETCH GROUPED DICTIONARY FOR PICKERS ───
+  # GET /api/v1/custom_emojis (Exposed publicly to feed text editor panels)
   def index(conn, _params) do
-    # Group emojis by category in the database
-    emojis =
-      Kollective.Posts.Posts.list_custom_emojis()
-      |> Enum.group_by(& &1.category)
+    # FIX: Corrected namespace module tracking error
+    raw_emojis = Posts.list_custom_emojis()
 
-    # Format for the frontend picker
-    render(conn, :index, categories: emojis)
+    # Map database collection maps flat into grouped categories natively inside memory
+    grouped_emojis =
+      raw_emojis
+      |> Enum.group_by(fn emoji -> emoji.category || "Custom" end, fn emoji ->
+        %{
+          shortcode: emoji.shortcode,
+          url: emoji.url,
+          static_url: emoji.static_url || emoji.url
+        }
+      end)
+
+    conn
+    |> put_status(:ok)
+    # FIX: Replaced deprecated render/3 template loops with direct JSON serialization
+    |> json(%{
+      status: "success",
+      categories: grouped_emojis
+    })
   end
-
 end

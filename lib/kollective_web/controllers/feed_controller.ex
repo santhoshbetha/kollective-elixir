@@ -1,4 +1,3 @@
-# lib/kollective_web/controllers/feed_controller.ex
 defmodule KollectiveWeb.FeedController do
   use KollectiveWeb, :controller
   alias Kollective.Posts.Posts
@@ -9,7 +8,7 @@ defmodule KollectiveWeb.FeedController do
 
     # Fetch pre-compiled, hydrated dataset batch
     %{entries: entries, next_cursor: next_cursor} =
-      Posts.list_home_feed(user, [limit: 20, after: params["after"]])
+      Posts.list_home_feed(user, limit: 20, after: params["after"])
 
     json(conn, %{
       data: serialize_timeline_payload(entries),
@@ -38,12 +37,16 @@ defmodule KollectiveWeb.FeedController do
           username: item.post.author.username,
           avatar_url: item.post.author.avatar_url
         },
-        organization: if(item.post.organization, do: %{id: item.post.organization.id, name: item.post.organization.name}, else: nil)
+        organization:
+          if(item.post.organization,
+            do: %{id: item.post.organization.id, name: item.post.organization.name},
+            else: nil
+          )
       }
     end)
   end
 
-  #Community Feed:
+  # Community Feed:
   # lib/kollective_web/controllers/community_controller.ex
   # GET /api/v1/communities/feed
   # Expected query params from React: ?scope=local&cursor=TIMESTAMP,ID
@@ -52,7 +55,7 @@ defmodule KollectiveWeb.FeedController do
 
     # Directly dispatch params into the unified engine
     %{entries: entries, next_cursor: next_cursor} =
-      Posts.list_posts(current_user, params)
+      Posts.list_posts_for_feed(current_user, params)
 
     json(conn, %{
       data: serialize_community_posts(entries),
@@ -65,7 +68,8 @@ defmodule KollectiveWeb.FeedController do
       %{
         id: item.post.id,
         content: item.post.content,
-        category: item.post.category, # Automatically includes both "voice" and regular "posts"
+        # Automatically includes both "voice" and regular "posts"
+        category: item.post.category,
         expires_at: item.post.expires_at,
         inserted_at: item.post.inserted_at,
         likes_count: item.likes_count,
@@ -80,5 +84,4 @@ defmodule KollectiveWeb.FeedController do
       }
     end)
   end
-
 end

@@ -14,7 +14,7 @@ defmodule Kollective.Events.Location do
     field :state, :string
     field :country, :string
 
-    timestamps(type: :utc_datetime)
+    timestamps()
   end
 
   @doc false

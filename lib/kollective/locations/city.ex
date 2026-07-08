@@ -4,12 +4,15 @@ defmodule Kollective.Locations.City do
 
   schema "cities" do
     field :name, :string
-    field :state, :string        # e.g., "TX" or "UP"
-    field :country, :string      # e.g., "US" or "IN"
+    # e.g., "TX" or "UP"
+    field :state, :string
+    # e.g., "US" or "IN"
+    field :country, :string
     field :latitude, :float
     field :longitude, :float
 
-    field :external_id, :string  # Unique ID from Geoapify/Google
+    # Unique ID from Geoapify/Google
+    field :external_id, :string
 
     # Reverse associations: Useful if you ever want to see everyone in a city
     has_many :users, Kollective.Accounts.User, foreign_key: :city_id

@@ -8,7 +8,7 @@ defmodule KollectiveWeb.UserRelationshipController do
   def toggle_follow(conn, %{"target_id" => target_id}) do
     source_id = conn.assigns.current_user.id
 
-    case Users.follow_user2(source_id, target_id) do
+    case Users.follow_user(source_id, target_id) do
       {:ok, %UserRelationship{}} ->
         json(conn, %{status: "following"})
 

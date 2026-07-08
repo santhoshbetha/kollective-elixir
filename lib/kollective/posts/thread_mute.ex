@@ -1,6 +1,6 @@
 # lib/kollective/posts/thread_mute.ex
 defmodule Kollective.Posts.ThreadMute do
-  use Ecto.Schema
+  use Kollective.Schemas.Schema
   import Ecto.Changeset
 
   schema "thread_mutes" do
@@ -13,7 +13,6 @@ defmodule Kollective.Posts.ThreadMute do
 
   def changeset(struct, attrs) do
     struct
-
     |> cast(attrs, [:user_id, :root_post_id])
     |> validate_required([:user_id, :root_post_id])
     |> unique_constraint([:user_id, :root_post_id])

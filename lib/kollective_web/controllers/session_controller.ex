@@ -4,7 +4,10 @@ defmodule KollectiveWeb.SessionController do
   alias Kollective.Accounts.Accounts
 
   # email + password login
-  def create(conn, %{"action" => "password", "user" => %{"email" => email, "password" => password}}) do
+  def create(conn, %{
+        "action" => "password",
+        "user" => %{"email" => email, "password" => password}
+      }) do
     if user = Accounts.get_user_by_email_and_password(email, password) do
       token = Accounts.generate_user_session_token(user)
 
@@ -24,6 +27,16 @@ defmodule KollectiveWeb.SessionController do
   # magic link login (Verifies token from email link)
   def create(conn, %{"action" => "verify_magic_link", "user" => %{"token" => token}}) do
     case Accounts.login_user_by_magic_link(token) do
+      {:ok, {:ok, {user, _expired_tokens}}} ->
+        token = Accounts.generate_user_session_token(user)
+
+        conn
+        |> put_status(:ok)
+        |> json(%{
+          message: "Welcome back!",
+          data: %{token: token, user: %{id: user.id, email: user.email}}
+        })
+
       {:ok, {user, _expired_tokens}} ->
         token = Accounts.generate_user_session_token(user)
 
@@ -34,7 +47,9 @@ defmodule KollectiveWeb.SessionController do
           data: %{token: token, user: %{id: user.id, email: user.email}}
         })
 
-      {:error, :not_found} ->
+      # 🔄 FIX: Add a flexible pattern matcher to catch all verification/not_found errors
+      # and return a clean 422 JSON payload to your React frontend.
+      {:error, _reason} ->
         conn
         |> put_status(:unprocessable_entity)
         |> json(%{error: "The link is invalid or it has expired."})
@@ -47,13 +62,14 @@ defmodule KollectiveWeb.SessionController do
       # Note: Update your mailer template to link to your FRONTEND app URL, not Phoenix HTML
       Accounts.deliver_login_instructions(
         user,
-        &"https://kollective99.com#{&1}"
+        &"https://kollective.social#{&1}"
       )
     end
 
     # Return identical generic response to prevent user enumeration attacks
     conn
-    |> put_status(:accepted) #202
+    # 202
+    |> put_status(:accepted)
     |> json(%{
       message: "If your email is in our system, you will receive instructions shortly."
     })

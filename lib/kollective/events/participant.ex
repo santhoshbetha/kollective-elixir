@@ -5,12 +5,12 @@ defmodule Kollective.Events.Participant do
   schema "event_participants" do
     belongs_to :event, Kollective.Events.Event
     belongs_to :user, Kollective.Accounts.User
-    #field :status, :string, default: "accepted"
+    # field :status, :string, default: "accepted"
 
     # Statuses: "going", "maybe", "no", "pending", "waitlisted" , "accepted", "rejected"
     field :status, :string, default: "going"
 
-    timestamps(type: :utc_datetime)
+    timestamps()
   end
 
   def changeset(participant, attrs) do

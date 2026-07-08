@@ -7,6 +7,7 @@ defmodule Kollective.Polls.Poll do
   Represents a poll with multiple options that users can vote on.
   """
   use Kollective.Schemas.Schema
+  import Ecto.Changeset
 
   @type t :: %__MODULE__{}
 
@@ -25,29 +26,28 @@ defmodule Kollective.Polls.Poll do
     field :voted, :boolean, virtual: true, default: false
     field :own_votes, {:array, :integer}, virtual: true, default: []
 
-    timestamps(type: :utc_datetime)
+    timestamps()
   end
 
   def changesetX(poll, attrs) do
     poll
-
     |> cast(attrs, [:multiple, :expires_at, :non_anonymous])
     |> cast_assoc(:options, with: &Kollective.Polls.PollOption.changeset/2, required: true)
     |> validate_required([:expires_at])
   end
 
   # validation to ensure a poll has between 2 and 4 options, which is the standard Mastodon constraint
-  #dd a custom validation to your Poll.changeset. This prevents users from creating "polls" with only one choice or
-  #overwhelming the UI with 50 options
+  # dd a custom validation to your Poll.changeset. This prevents users from creating "polls" with only one choice or
+  # overwhelming the UI with 50 options
   def changeset(poll, attrs) do
     poll
-
     |> cast(attrs, [:multiple, :expires_at])
     |> cast_assoc(:options, required: true, with: &Kollective.Polls.PollOption.changeset/2)
     |> validate_required([:expires_at])
-
-    |> validate_options_count() # <--- Custom validation
-    |> validate_future_expiry() # <--- Bonus: Ensure it doesn't expire in the past
+    # <--- Custom validation
+    |> validate_options_count()
+    # <--- Bonus: Ensure it doesn't expire in the past
+    |> validate_future_expiry()
   end
 
   defp validate_options_count(changeset) do
@@ -58,8 +58,10 @@ defmodule Kollective.Polls.Poll do
     cond do
       count < 2 ->
         add_error(changeset, :options, "must have at least 2 choices")
+
       count > 4 ->
         add_error(changeset, :options, "cannot have more than 4 choices")
+
       true ->
         changeset
     end
@@ -74,5 +76,4 @@ defmodule Kollective.Polls.Poll do
       end
     end)
   end
-
 end

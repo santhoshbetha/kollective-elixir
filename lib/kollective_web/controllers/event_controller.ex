@@ -1,5 +1,6 @@
 defmodule KollectiveWeb.EventController do
   use KollectiveWeb, :controller
+  alias Kollective.Repo
   alias Kollective.Accounts.Accounts
   alias Kollective.Events.Events
   alias Kollective.Moderation.Moderation
@@ -8,6 +9,126 @@ defmodule KollectiveWeb.EventController do
 
   # Apply the same rate limit as posts (or stricter, e.g., 2 events/min)
   plug KollectiveWeb.Plugs.RateLimiter when action in [:create]
+
+  # GET /api/v1/events
+  def index(conn, _params) do
+    user = conn.assigns.current_user
+
+    events =
+      if user do
+        # Authenticated: Apply privacy-mapped visibility constraints
+        Events.list_visible_events_query(user)
+        |> Kollective.Repo.all()
+      else
+        # Anonymous: Deliver public content pools exclusively
+        Events.list_public_events()
+      end
+
+    # Format items through your strict EventJSON payload serializer
+    serialized_data = Enum.map(events, &KollectiveWeb.EventJSON.data/1)
+
+    conn
+    |> put_status(:ok)
+    |> json(%{data: serialized_data})
+  end
+
+  # ─── ACTION 1: FETCH DASHBOARD FEED CARD (WITH USER RSVP STATE) ───
+  # GET /api/v1/kollective/events/:id
+  def show(conn, %{"id" => id}) do
+    current_user = conn.assigns.current_user
+    event = Events.get_event!(id)
+
+    # Fetch the user's active RSVP state record mapping to this event node
+    my_rsvp =
+      Repo.get_by(Kollective.Events.Participant, event_id: event.id, user_id: current_user.id)
+
+    rsvp_status_str = if my_rsvp, do: my_rsvp.status, else: nil
+
+    # Inject the value into the preloaded struct map virtual field safely
+    event_with_status = Map.put(event, :join_state, rsvp_status_str)
+
+    # Present via your strict uniform EventJSON data schema format contract
+    json(conn, %{
+      status: "success",
+      data: KollectiveWeb.EventJSON.data(event_with_status)
+    })
+  end
+
+  # ─── ACTION 2: RETRIEVE ALL EVENTS JOINED BY CURRENT USER ───
+  # GET /api/v1/kollective/events/joined
+  def joined_events(conn, params) do
+    user = conn.assigns.current_user
+    events = Events.list_joined_events_for_user(user, params)
+
+    json(conn, %{
+      status: "success",
+      data: Enum.map(events, &KollectiveWeb.EventJSON.data/1)
+    })
+  end
+
+  # ─── ACTION 3: DISPATCH SOCIAL EVENT INVITE DIALOG TABS ───
+  # POST /api/v1/kollective/events/:id/invite
+  def invite(conn, %{"id" => event_id, "user_id" => target_user_id}) do
+    inviter = conn.assigns.current_user
+    event = Events.get_event!(event_id)
+
+    # Security Guard: Only the organizer can invite to a private, locked space
+    if event.join_mode == "invite_only" and event.created_by != inviter.id do
+      conn
+      |> put_status(:forbidden)
+      |> json(%{
+        error: "forbidden",
+        message: "Only the organizer can invite users to this private event."
+      })
+    else
+      # Reuses your high-performance, atomic invitation context module
+      case Events.invite_to_private_event(inviter, event.id, target_user_id) do
+        {:ok, :invited} ->
+          json(conn, %{status: "success", message: "Invitation sent successfully."})
+
+        {:error, _changeset} ->
+          conn
+          |> put_status(:unprocessable_entity)
+          |> json(%{error: "failed_to_send"})
+      end
+    end
+  end
+
+  # ─── ACTION 4: DOWNLOAD STANDARD CALENDAR EVENT (.ICS ATTACHMENT) ───
+  # GET /api/v1/kollective/events/:id/ics
+  def download_ics(conn, %{"id" => id}) do
+    event = Events.get_event!(id)
+
+    # Format timestamps according to international calendar database conventions
+    tz_str = event.timezone || "UTC"
+    start_str = Events.format_ical_datetime(event.start_time, tz_str)
+
+    end_time = event.end_time || DateTime.add(event.start_time, 2, :hour)
+    end_str = Events.format_ical_datetime(end_time, tz_str)
+
+    # Generate RFC 5545 compliant multi-platform iCal feed text block
+    ics_content = """
+    BEGIN:VCALENDAR
+    VERSION:2.0
+    PRODID:-//Kollective//NONSGML Standalone Calendar Engine//EN
+    CALSCALE:GREGORIAN
+    BEGIN:VEVENT
+    SUMMARY:#{event.name}
+    DTSTART;TZID=#{tz_str}:#{start_str}
+    DTEND;TZID=#{tz_str}:#{end_str}
+    DESCRIPTION:#{String.replace(event.description || "", "\n", "\\n")}
+    LOCATION:#{event.location_name}
+    STATUS:CONFIRMED
+    SEQUENCE:1
+    END:VEVENT
+    END:VCALENDAR
+    """
+
+    conn
+    |> put_resp_content_type("text/calendar")
+    |> put_resp_header("content-disposition", "attachment; filename=\"#{event.name}.ics\"")
+    |> send_resp(200, String.trim(ics_content))
+  end
 
   @doc """
   Unified Event Creation Controller Action. Handles complex parameter checking,
@@ -37,7 +158,10 @@ defmodule KollectiveWeb.EventController do
             notes_string = "Triggered words in window: #{triggered_words}"
 
             # 2. Instantly blacklist their IP address in Cachex memory for 1 hour
-            Security.blacklist_ip_temporary(ip, :erlang.convert_time_unit(1, :hours, :millisecond))
+            Security.blacklist_ip_temporary(
+              ip,
+              :timer.hours(1)
+            )
 
             # 3. Automatically flag and shadow-ban the user account globally for spam
             Accounts.flag_user_for_spam("user:#{user.id}")
@@ -53,7 +177,13 @@ defmodule KollectiveWeb.EventController do
             # FIRST STRIKE: Return an explicit validation error to guide real users
             # Alert admins of the initial attempt asynchronously via Oban
             # Log security alert
-            enqueue_security_alert("hard_ban_attempt", user.id, ip, 1, "Triggered word: #{matched_word}")
+            enqueue_security_alert(
+              "hard_ban_attempt",
+              user.id,
+              ip,
+              1,
+              "Triggered word: #{matched_word}"
+            )
 
             conn
             |> put_status(:unprocessable_entity)
@@ -92,14 +222,7 @@ defmodule KollectiveWeb.EventController do
           {:error, changeset} ->
             conn
             |> put_status(:unprocessable_entity)
-            |> json(%{
-              status: "error",
-              errors: Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
-                Enum.reduce(opts, msg, fn {key, value}, acc ->
-                  String.replace(acc, "%{#{key}}", to_string(value))
-                end)
-              end)
-            })
+            |> json(KollectiveWeb.ChangesetJSON.error(%{changeset: changeset}))
         end
     end
   end
@@ -141,34 +264,59 @@ defmodule KollectiveWeb.EventController do
       {:ok, event} ->
         # 2. OWNERSHIP GUARD: Stop bad actors from modifying other users' groups
         if event.created_by != user.id do
-          conn |> put_status(:forbidden) |> json(%{error: "You are not authorized to edit this event."})
+          conn
+          |> put_status(:forbidden)
+          |> json(%{error: "You are not authorized to edit this event."})
         else
-          # 3. MODERATION SCAN: Pipe edits through the unified five-priority matrix [INDEX]
+          # 3. MODERATION SCAN: Pipe edits through the unified five-priority matrix
           case Moderation.determine_status(user, event_params) do
             {:error, :forbidden_content, matched_word} ->
-              # TWO-STRIKE BLACKLIST GATING [INDEX]
+              # TWO-STRIKE BLACKLIST GATING
               Moderation.track_denied_word(user.id, matched_word)
 
               case Moderation.record_denial(user.id) do
                 :cooldown ->
                   triggered_words = Moderation.get_denied_words(user.id)
-                  Security.blacklist_ip_temporary(ip, :erlang.convert_time_unit(1, :hours, :millisecond))
+
+                  Security.blacklist_ip_temporary(
+                    ip,
+                    :timer.hours(1)
+                  )
+
                   Accounts.flag_user_for_spam("user:#{user.id}")
-                  enqueue_security_alert("cooldown_triggered", user.id, ip, 2, "Triggered words: #{triggered_words}")
+
+                  enqueue_security_alert(
+                    "cooldown_triggered",
+                    user.id,
+                    ip,
+                    2,
+                    "Triggered words: #{triggered_words}"
+                  )
+
                   black_hole_response(conn)
 
                 :ok ->
-                  enqueue_security_alert("hard_ban_attempt", user.id, ip, 1, "Triggered word: #{matched_word}")
-                  conn |> put_status(:unprocessable_entity) |> json(%{error: "Your edits contain prohibited language."}) |> halt()
+                  enqueue_security_alert(
+                    "hard_ban_attempt",
+                    user.id,
+                    ip,
+                    1,
+                    "Triggered word: #{matched_word}"
+                  )
+
+                  conn
+                  |> put_status(:unprocessable_entity)
+                  |> json(%{error: "Your edits contain prohibited language."})
+                  |> halt()
               end
 
             {:ok, status} ->
-              # Inject the parsed compliance status token directly into attributes map strings [INDEX]
+              # Inject the parsed compliance status token directly into attributes map strings
               status_str = Atom.to_string(status)
               final_params = Map.put(event_params, "status", status_str)
 
               # 4. EXECUTE LOCAL UPDATE PIPELINE
-              case Events.update_event(event, final_params) do
+              case Events.update_event(user, event.id, final_params) do
                 {:ok, updated_event} ->
                   # Trigger an alert if modified state slips into soft-ban review queue
                   if status == :pending do
@@ -182,7 +330,7 @@ defmodule KollectiveWeb.EventController do
 
                   conn
                   |> put_status(:ok)
-                  # Output matching your exact EventJSON.data contract payload [INDEX]
+                  # Output matching your exact EventJSON.data contract payload
                   |> json(%{
                     status: "success",
                     data: KollectiveWeb.EventJSON.data(final_event)
@@ -191,34 +339,58 @@ defmodule KollectiveWeb.EventController do
                 {:error, changeset} ->
                   conn
                   |> put_status(:unprocessable_entity)
-                  |> json(%{
-                    status: "error",
-                    errors: Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
-                      Enum.reduce(opts, msg, fn {key, value}, acc ->
-                        String.replace(acc, "%{#{key}}", to_string(value))
-                      end)
-                    end)
-                  })
+                  |> json(KollectiveWeb.ChangesetJSON.error(%{changeset: changeset}))
               end
           end
         end
     end
   end
 
+  # DELETE /api/v1/kollective/events/:id
+  def delete(conn, %{"id" => id}) do
+    user = conn.assigns.current_user
+
+    case Events.cancel_event(user, id) do
+      {:ok, :cancelled} ->
+        json(conn, %{
+          status: "success",
+          message: "Event successfully deleted and attendees notified."
+        })
+
+      {:error, :unauthorized} ->
+        conn
+        |> put_status(:forbidden)
+        |> json(%{error: "unauthorized", message: "You don't own this event."})
+    end
+  end
+
+  # lib/kollective_web/controllers/admin/moderation_controller.ex
+  # POST /api/v1/admin/reports/:report_id/resolve_event
+  def resolve_flagged_event(conn, %{"report_id" => report_id}) do
+    admin = conn.assigns.current_admin
+
+    case Events.admin_cancel_event(admin, report_id) do
+      {:ok, :admin_cancelled} ->
+        json(conn, %{status: "success", message: "Event successfully pulled from the timeline."})
+
+      {:error, :event_already_deleted} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_action", message: "Event was already pulled."})
+    end
+  end
 
   # --- Cachex Word-Tracking Operations ---
 
-  #defp track_denied_word(user_id, word) do
+  # defp track_denied_word(user_id, word) do
   #  Moderation.track_denied_word(user_id, word)
-  #end
+  # end
 
-  #defp get_denied_words(user_id) do
+  # defp get_denied_words(user_id) do
   #  Moderation.get_denied_words(user_id)
-  #end
+  # end
 
   defp guest_ip(conn) do
     conn.remote_ip |> :inet.ntoa() |> to_string()
   end
-
-
 end

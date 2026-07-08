@@ -1,16 +1,16 @@
 # Oban Worker code that uses this timezone to send a "Starting Now"
-#push notification exactly when the clock strikes 10:00 AM in the event's local zone?
+# push notification exactly when the clock strikes 10:00 AM in the event's local zone?
 
 # "Starting Now" notification
 
-#To trigger a "Starting Now" notification exactly when the event begins in its local time, you use an
-#Oban Worker.
-#Since you stored the start_time as a utc_datetime, the worker will wake up at that exact moment
-#regardless of whether the event is in India (IST) or Europe (CET).
+# To trigger a "Starting Now" notification exactly when the event begins in its local time, you use an
+# Oban Worker.
+# Since you stored the start_time as a utc_datetime, the worker will wake up at that exact moment
+# regardless of whether the event is in India (IST) or Europe (CET).
 
-#1. The Oban Worker
-#This worker handles the "Fan-out" of notifications to all accepted participants
-#at the moment the event starts.
+# 1. The Oban Worker
+# This worker handles the "Fan-out" of notifications to all accepted participants
+# at the moment the event starts.
 
 defmodule Kollective.Workers.EventStartWorker do
   use Oban.Worker, queue: :events, unique: [period: 60]
@@ -30,9 +30,12 @@ defmodule Kollective.Workers.EventStartWorker do
     Enum.each(participants, fn participant ->
       # Arguments layout contract: target_user_id, actor_id, type, database_attrs, websocket_payload
       Notifications.notify(
-        participant.user_id,   # The recipient (The attendee)
-        event.created_by,      # The actor (The event organizer/creator)
-        "event_reminder",      # Maps safely to your verified @notification_types registry
+        # The recipient (The attendee)
+        participant.user_id,
+        # The actor (The event organizer/creator)
+        event.created_by,
+        # Maps safely to your verified @notification_types registry
+        "event_reminder",
         %{
           event_id: event.id,
           target_id: event.id,
@@ -41,7 +44,8 @@ defmodule Kollective.Workers.EventStartWorker do
           metadata: %{
             event_title: event.name,
             local_time: formatted_time,
-            sub_type: "event_starting_now" # Helps React parse specialized template icons
+            # Helps React parse specialized template icons
+            sub_type: "event_starting_now"
           }
         },
         %{
@@ -63,7 +67,7 @@ defmodule Kollective.Workers.EventStartWorker do
   end
 end
 
-#3. Why this works for India/Europe/Global:
+# 3. Why this works for India/Europe/Global:
 
 #    UTC Synchronization: Oban runs on the server's clock (UTC). If an event is at 10:00 AM Asia/Kolkata, your DB stores 04:30 AM UTC. Oban wakes up at 04:30 UTC, which is exactly when the clock in India strikes 10:00 AM.
 #    Reliability: If your server crashes at 9:59 AM, Oban will see the "missed" job when it reboots and send the notification immediately.

@@ -6,13 +6,15 @@ defmodule Kollective.Locations.Locations do
   alias Kollective.Locations.PoliticalDistrict
 
   @base_url "http://api.geonames.org/getJSON"
-  @username "your_geonames_username"  # Replace with your actual GeoNames username
+  # Replace with your actual GeoNames username
+  @username "your_geonames_username"
 
   def get_or_import_city(geoname_id) do
     case Repo.get_by(City, external_id: geoname_id) do
       nil ->
         # Fetch from GeoNames API and create local record
         fetch_and_create_city_from_geonames(geoname_id)
+
       city ->
         {:ok, city}
     end
@@ -39,8 +41,10 @@ defmodule Kollective.Locations.Locations do
          {:ok, lng} <- parse_float(payload["lng"]) do
       attrs = %{
         name: payload["name"],
-        state: payload["adminCode1"],      # e.g., "TX" or "MH"
-        country: payload["countryCode"],   # e.g., "US" or "IN"
+        # e.g., "TX" or "MH"
+        state: payload["adminCode1"],
+        # e.g., "US" or "IN"
+        country: payload["countryCode"],
         external_id: to_string(payload["geonameId"]),
         latitude: lat,
         longitude: lng
@@ -77,6 +81,6 @@ defmodule Kollective.Locations.Locations do
 
   # Helper to ensure we always get the full stack
   defp all_hierarchy(district) do
-    Repo.preload(district, [parent: :parent])
+    Repo.preload(district, parent: :parent)
   end
 end
