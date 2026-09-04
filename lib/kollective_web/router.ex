@@ -17,10 +17,11 @@ defmodule KollectiveWeb.Router do
   # Enforces an active session token before allowing access
   pipeline :api_authenticated do
     # 1. First, decode the Bearer token header and assign :current_user
-    plug KollectiveWeb.Plugs.APIAuth
+    #  plug KollectiveWeb.Plugs.APIAuth
 
     # 2. Second, run the helper to map :current_user onto the structural domain :current_scope
     plug :fetch_current_scope_for_user
+    plug :require_authenticated_user
   end
 
   pipeline :api_rate_limited do
@@ -54,10 +55,26 @@ defmodule KollectiveWeb.Router do
     pipe_through [:api, :api_authenticated]
 
     get "/me", UserController, :me
+    post "/clear-feed-badge", UserController, :clear_feed_badge
+
+    put "/user/location", UserController, :update_location
+    patch "/user/location", UserController, :update_location
+    put "/me/political-location", UserController, :update_location
+    patch "/me/political-location", UserController, :update_location
+    delete "/user/location", UserController, :delete_location
+  end
+
+  scope "/api", KollectiveWeb do
+    pipe_through [:api, :api_authenticated]
+
+    get "/me", UserController, :me
+    put "/me/political-location", UserController, :update_location
+    patch "/me/political-location", UserController, :update_location
   end
 
   scope "/api/v1", KollectiveWeb do
-    pipe_through [:api] # Public pipeline (No require_authenticated_user plug)
+    # Public pipeline (No require_authenticated_user plug)
+    pipe_through [:api]
 
     # 🚀 REAL-TIME REGISTRATION AVAILABILITY CHECKER
     get "/auth/check-username", AuthController, :check_username
@@ -91,8 +108,8 @@ defmodule KollectiveWeb.Router do
   scope "/api/v1", KollectiveWeb do
     pipe_through [:api, :api_authenticated]
 
-    get "/users/settings",                      SettingsController, :edit
-    put "/users/settings",                      SettingsController, :update
+    get "/users/settings", SettingsController, :edit
+    put "/users/settings", SettingsController, :update
     get "/users/settings/confirm-email/:token", SettingsController, :confirm_email
   end
 
@@ -169,30 +186,30 @@ defmodule KollectiveWeb.Router do
     # Resource Protection: It ensures that a single user cannot fill your oban_jobs or review-queue with thousands of "Pending" posts in seconds.
     # Configurability: You can easily change the "5 posts per minute" threshold based on whether the user is verified or new.
 
-    post "/posts",                   PostController, :create
+    post "/posts", PostController, :create
 
     # /api/v1/posts/:id/replies -> Creates a new reply to the specified post, with content and optional image
-    post "/posts/:id/replies",       PostController, :create_reply
+    post "/posts/:id/replies", PostController, :create_reply
     post "/posts/:post_id/bookmark", BookmarkController, :toggle
 
     # Grassroots Registrations & Launch Wizards
-    post "/businesses",         BusinessController, :create
+    post "/businesses", BusinessController, :create
     post "/business_proposals", BusinessController, :create_proposal
     # Wizard Terminal Trigger (Step 2 "Launch Action" Button Click)
     # POST /api/v1/actions
     # JSON Payload Body fields: %{"action" => %{"name" => "Action Title", "category" => "protest", ...}}
     post "/actions", ActionController, :create
-    post "/events",  EventController,  :create
+    post "/events", EventController, :create
 
     # Interactive Chat Threads & Media Presigns
     post "/events_comments/:event_id/comment", EventCommentController, :create
-    get  "/event_comments/image/presign",      EventCommentController, :presign_image
-    get  "/media/presign",                     MediaController,        :presign
+    get "/event_comments/image/presign", EventCommentController, :presign_image
+    get "/media/presign", MediaController, :presign
 
     # Governance Flags & Geo-Service Handshakes
     # Regular citizens can report posts safely here
-    post  "/posts/:post_id/report", ReportController, :create
-    patch "/profile/districts",     UserController, :update_districts
+    post "/posts/:post_id/report", ReportController, :create
+    patch "/profile/districts", UserController, :update_districts
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -210,9 +227,9 @@ defmodule KollectiveWeb.Router do
     pipe_through [:api, :api_authenticated]
 
     # User Mute Phrase Curation Directories
-    get    "/filters",     FilterController, :index
-    post   "/filters",     FilterController, :create
-    delete "/filters/:id", FilterController, :delete
+    get "/filters", FilterController, :index
+    post "/filters", FilterController, :create
+    delete "/filters/:id", FilterController, :delete_filter
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -233,9 +250,8 @@ defmodule KollectiveWeb.Router do
     pipe_through [:api, :api_authenticated]
 
     # Interact with an existing poll
-    resources "/polls", PollController, only: [:show] do
-      post "/votes", PollController, :vote
-    end
+    get "/polls/:id", PollController, :show
+    post "/polls/:poll_id/votes", PollController, :vote
 
     # POST 	/api/v1/posts 	Publishes a new post. If poll parameters are included, it attaches the poll.
     # GET	  /api/v1/polls/:id  Returns the current state of a poll (counts, expiry, etc.).
@@ -246,37 +262,47 @@ defmodule KollectiveWeb.Router do
     # Ensure user is logged in
     pipe_through [:api, :api_authenticated]
 
-    get "/events",             EventController, :index
-    get "/events/:id",         EventController, :show
-    get "/events/joined",      EventController, :joined_events
+    get "/events", EventController, :index
+    get "/events/:id", EventController, :show
+    get "/events/joined", EventController, :joined_events
 
-    put "/events/:id",         EventController, :update
+    put "/events/:id", EventController, :update
 
-    delete "/events/:id",      EventController, :delete
+    delete "/events/:id", EventController, :delete
 
     post "/events/:id/invite", EventController, :invite
   end
 
   scope "/api/v1", KollectiveWeb do
+    pipe_through [:api, :api_authenticated]
+
+    get "/events/:event_id/media/presign", EventMediaController, :presign_upload
+    get "/events/:event_id/media", EventMediaController, :index
+    delete "/events/media/:comment_id/hide", EventMediaController, :hide
+  end
+
+  scope "/api/v1", KollectiveWeb do
+    pipe_through [:api, :api_authenticated]
+
     # React UI Query Toggles: ?category=town_hall&scope=state
-    get "/actions",        ActionController, :index
+    get "/actions", ActionController, :index
 
     # GET /api/v1/events/:id
     # Feeds individual protest, meeting, rally, or town hall detail pages
-    get "/actions/:id",    EventController, :show
+    get "/actions/:id", EventController, :show
 
     # 4. Action Logistics & Time Remodifier Engine
     # PUT /api/v1/actions/:id
     # Wipes and updates Oban countdown reminder queues automatically on date updates
-    put "/actions/:id",    EventController, :update
+    put "/actions/:id", EventController, :update
   end
 
   scope "/api/v1", KollectiveWeb do
     # Ensure user is logged in
     pipe_through [:api, :api_authenticated]
 
-    get "/event_comments",                   EventCommentController, :index
-    get "/event_comments/:id",               EventCommentController, :show
+    get "/event_comments", EventCommentController, :index
+    get "/event_comments/:id", EventCommentController, :show
 
     post "/event_comments/:comment_id/like", EventCommentController, :like
   end
@@ -285,19 +311,18 @@ defmodule KollectiveWeb.Router do
     # Ensure user is logged in
     pipe_through [:api, :api_authenticated]
 
-    get    "/businesses",             BusinessController, :index
-    get    "/business_proposals",     BusinessController, :index
+    get "/businesses", BusinessController, :index
+    get "/business_proposals", BusinessController, :index
 
     # Individual Detail View Mappings
-    get    "/businesses/:id",         BusinessController, :show_business
-    get    "/business_proposals/:id", BusinessController, :show_proposal
-
-    put    "/businesses/:id",         BusinessController, :update
-    delete "/businesses/:id",         BusinessController, :delete_business
+    get "/businesses/:id", BusinessController, :show_business
+    get "/business_proposals/:id", BusinessController, :show_proposal
+    put "/businesses/:id", BusinessController, :update
+    delete "/businesses/:id", BusinessController, :delete_business
 
     # Map both methods directly to the exact same controller function
-    put    "/business_proposals/:id", BusinessController, :update_proposal
-    patch  "/business_proposals/:id", BusinessController, :update_proposal
+    put "/business_proposals/:id", BusinessController, :update_proposal
+    patch "/business_proposals/:id", BusinessController, :update_proposal
     delete "/business_proposals/:id", BusinessController, :delete_proposal
   end
 
@@ -308,7 +333,7 @@ defmodule KollectiveWeb.Router do
     # 1. Unified Omnibox Lookup (Runs parallel streams over all components)
     # React URL: /api/v1/search?q=austin
     # React Tab Override URL: /api/v1/search?q=austin&type=events
-    get "/search",          SearchController, :search
+    get "/search", SearchController, :search
 
     # GET /api/v1/search/accounts?q=superman -> Returns targeted account search results
     # 2. Targeted Accounts Dropdown Picker Autocomplete
@@ -325,7 +350,7 @@ defmodule KollectiveWeb.Router do
     # Endpoint for jurors to securely post their decision
     post "/voting/applications/:application_id/votes", JuryVoteController, :cast_vote
 
-    post "/scholar-verify",    ScholarController,    :verify_orcid
+    post "/scholar-verify", ScholarController, :verify_orcid
     post "/journalist-verify", JournalistController, :verify_portfolio
   end
 
@@ -334,7 +359,7 @@ defmodule KollectiveWeb.Router do
     pipe_through [:api, :api_authenticated, :require_admin_authenticated]
 
     # Restrictive overrides reserved strictly for staff members
-    post "/reports/:id/resolve",     ReportController, :resolve
+    post "/reports/:id/resolve", ReportController, :resolve
     post "/reports/:report_id/kill", ReportController, :kill_flagged_event
 
     get "/audit_logs", LogController, :index
@@ -345,14 +370,14 @@ defmodule KollectiveWeb.Router do
     pipe_through [:api, :api_authenticated, :require_admin_authenticated]
 
     # RAM IP Blacklist Monitoring Panel Lookups
-    get    "/security/blacklist",      SecurityController, :index
-    delete "/security/blacklist/:ip",  SecurityController, :pardon
+    get "/security/blacklist", SecurityController, :index
+    delete "/security/blacklist/:ip", SecurityController, :pardon
 
     # Bulk Cooldown Wipes
-    post "/security/lift-cooldowns",   SecurityController, :lift_all
+    post "/security/lift-cooldowns", SecurityController, :lift_all
 
     # Emergency Kill Switch Actions
-    post "/security/lockdown/enable",  SecurityController, :enable_lockdown
+    post "/security/lockdown/enable", SecurityController, :enable_lockdown
     post "/security/lockdown/disable", SecurityController, :disable_lockdown
   end
 
@@ -370,11 +395,11 @@ defmodule KollectiveWeb.Router do
 
     # Generates the temporary Cloudflare R2 upload ticket
     # GET /api/v1/admin/custom_emojis/presign
-    get  "/custom_emojis/presign", AdminEmojiController, :presign
+    get "/custom_emojis/presign", AdminEmojiController, :presign
 
     # Finalizes the DB record once browser upload succeeds
     # POST /api/v1/admin/custom_emojis
-    post "/custom_emojis",         AdminEmojiController, :create
+    post "/custom_emojis", AdminEmojiController, :create
   end
 
   # 🛠️ Protected Central Administration Scope
@@ -418,6 +443,77 @@ defmodule KollectiveWeb.Router do
     get "/notifications", NotificationController, :index
     get "/notifications/unread_count", NotificationController, :unread_count
     post "/notifications/mark_as_read", NotificationController, :mark_as_read
+  end
+
+  scope "/api", KollectiveWeb do
+    # Ensure your auth plug runs here
+    pipe_through [:api, :api_authenticated]
+
+    # 📥 Inbox List: Fetch the user's active DM list / sidebar conversations
+    get "/conversations", ConversationController, :index
+
+    # 📁 Message History: Pull older historical texts for a specific conversation thread
+    get "/conversations/:conversation_id/messages", MessageController, :index
+
+    # ✉️ Create Message: Your existing endpoint route
+    post "/conversations/:conversation_id/messages", MessageController, :create
+  end
+
+  scope "/api/v1", KollectiveWeb do
+    pipe_through [:api, :api_authenticated]
+
+    post "/campaigns/apply/vouch", CandidacyAuthController, :cast_vouch
+    post "/campaigns/apply/approve", CandidacyAuthController, :approve_application
+    # POST /api/v1/campaigns/pitches
+    # JSON Payload Body fields: %{"candidate" => %{"office_level" => "municipal", ...}, "video" => %{}}
+    # 🗳️ Handles all candidate registration video posts (Municipal, County, Federal)
+    post "/campaigns/declare", CampaignController, :declare_pitch
+
+    # GET /api/v1/campaigns/pitches?level=municipal&code=austin_tx&stage=booth
+    get "/campaigns/pitches", CampaignController, :index_pitches
+
+    # POST /api/v1/campaigns/pitches/:id/vote
+    # JSON Payload Body fields: %{"delta" => 1}  OR  %{"delta" => -1}
+    post "/campaigns/pitches/:id/vote", CampaignController, :vote_pitch
+  end
+
+  # lib/kollective_web/router.ex
+  scope "/api/v1", KollectiveWeb do
+    pipe_through [:api, :api_authenticated]
+
+    # 🗳️ Debate Logistics & Town Hall Operations
+    get "/campaigns/debates", DebateController, :index_debates
+    post "/campaigns/debates/shifts/:id/claim", DebateController, :claim_shift
+  end
+
+  # lib/kollective_web/router.ex
+  scope "/api/v1", KollectiveWeb do
+    pipe_through [:api, :api_authenticated]
+
+    # ⏱️ Crowdsourced Civic Ledgers & Municipal Ballots Deadlines
+    get "/campaigns/deadlines", DeadlineController, :index_deadlines
+    post "/campaigns/deadlines", DeadlineController, :create_deadline
+  end
+
+  scope "/api", KollectiveWeb do
+    # Use your application's auth plug
+    pipe_through [:api, :api_authenticated]
+
+    post "/civic/update_precinct_node", CivicController, :update_precinct_node
+  end
+
+  scope "/api/cities", KollectiveWeb do
+    pipe_through [:api]
+
+    get "/search", CityController, :search
+  end
+
+  # ─── LOCATION RESOLUTION (GEOGRAPHY ROUTE) ───
+  # Public facing endpoint (no authentication required) to find offices via address/coordinates/PIN
+  scope "/api/v1", KollectiveWeb do
+    pipe_through :api
+
+    post "/resolve-offices", LocationController, :resolve_offices
   end
 
   # District Auto-Suggest

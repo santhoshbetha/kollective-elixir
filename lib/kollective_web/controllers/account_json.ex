@@ -64,7 +64,7 @@ defmodule KollectiveWeb.AccountJSON do
     %{
       id: to_string(user.id),
       username: user.username,
-      display_name: user.name || user.username,
+      display_name: user.display_name || user.username,
       bio: user.bio || "",
       avatar: user.avatar_url || "/default-avatar.jpg",
       cover_image: user.cover_image_url || "/default-banner-bg.jpg",
@@ -72,7 +72,7 @@ defmodule KollectiveWeb.AccountJSON do
       # Counts caches synchronized natively via our atomic context counters
       followers_count: user.follower_count || 0,
       following_count: user.following_count || 0,
-      posts_count: user.posts_count || 0,
+      posts_count: user.note_count || 0,
 
       # Meta state parameters
       is_verified: user.is_verified || false,

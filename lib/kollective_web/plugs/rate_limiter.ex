@@ -18,9 +18,12 @@ defmodule KollectiveWeb.Plugs.RateLimiter do
   # 20+ hits inside a minute marks them as a malicious script
   @bot_threshold_count 20
 
-  def init(opts), do: opts
+  # Allow the action prefix to be configured per route plug declaration
+  def init(opts) do
+    Keyword.get(opts, :action, "default_action")
+  end
 
-  def call(conn, _opts) do
+  def call(conn, action_prefix) do
     # Identify by User ID if logged in, otherwise default to the client IP address
     user = conn.assigns[:current_user]
 
@@ -28,13 +31,12 @@ defmodule KollectiveWeb.Plugs.RateLimiter do
     if user && (user.is_admin || user.is_moderator) do
       conn
     else
-      check_limit(conn, user)
+      check_limit(conn, user, action_prefix)
     end
   end
 
   # ─── SECTION 1: TIERED SYSTEM DEFENSE GATEWAY ───
-
-  defp check_limit(conn, user) do
+  defp check_limit(conn, user, action_prefix) do
     ip = guest_ip(conn)
     id = if user, do: "user:#{user.id}", else: "ip:#{ip}"
 
@@ -53,15 +55,15 @@ defmodule KollectiveWeb.Plugs.RateLimiter do
       # TIER 3: SLIDING-WINDOW PERFORMANCE EVALUATION
       # Fallback to structural Hammer counting metrics execution
       true ->
-        perform_hammer_check(conn, id, ip, user)
+        perform_hammer_check(conn, id, ip, user, action_prefix)
     end
   end
 
   # ─── SECTION 2: SLIDING-WINDOW ACCUMULATOR CHECKS ───
 
-  defp perform_hammer_check(conn, id, ip, user) do
-    # Create a unique action bucket namespace based on the route or function context
-    bucket_key = "create_post:#{id}"
+  defp perform_hammer_check(conn, id, ip, user, action_prefix) do
+    # 🟢 FIXED: The metric bucket is now fully contextualized by route type
+    bucket_key = "#{action_prefix}:#{id}"
 
     case Hammer.check_rate(bucket_key, @time_window_ms, @max_allowed_requests) do
       {:allow, _count} ->
@@ -82,13 +84,8 @@ defmodule KollectiveWeb.Plugs.RateLimiter do
             # 2. Return a FAKE SUCCESS to drop their traffic without letting them know
             black_hole_response(conn)
 
-          {:ok, _} ->
-            # Standard human frustration clicking; log it and send a standard 429 halt
-            log_rate_limit_trigger(id, conn)
-            render_standard_rate_limit_error(conn)
-
           _fallback_error ->
-            # Fallback wrapper if bucket inspect fails
+            log_rate_limit_trigger(id, conn)
             render_standard_rate_limit_error(conn)
         end
     end

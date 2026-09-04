@@ -21,13 +21,19 @@ defmodule KollectiveWeb.AuthController do
     # Guard Clause: Enforce minimal character thresholds and reject illegal URL characters
     cond do
       String.length(cleaned_username) < 2 ->
-        conn |> put_status(:unprocessable_entity) |> json(%{status: "error", code: "too_short", available: false})
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{status: "error", code: "too_short", available: false})
 
       String.length(cleaned_username) > 30 ->
-        conn |> put_status(:unprocessable_entity) |> json(%{status: "error", code: "too_long", available: false})
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{status: "error", code: "too_long", available: false})
 
       not String.match?(cleaned_username, ~r/^[a-zA-Z0-9_]+$/) ->
-        conn |> put_status(:unprocessable_entity) |> json(%{status: "error", code: "invalid_characters", available: false})
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{status: "error", code: "invalid_characters", available: false})
 
       true ->
         # Execute the high-speed index scan pass
@@ -44,5 +50,6 @@ defmodule KollectiveWeb.AuthController do
   end
 
   # Fallback catch-all guard matching empty input actions
-  def check_username(conn, _), do: conn |> put_status(:bad_request) |> json(%{error: "Missing username parameter."})
+  def check_username(conn, _),
+    do: conn |> put_status(:bad_request) |> json(%{error: "Missing username parameter."})
 end

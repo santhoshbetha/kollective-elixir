@@ -13,7 +13,7 @@ defmodule KollectiveWeb.EventJSON do
   def data(event) do
     %{
       id: event.id,
-      name: event.name,
+      title: event.title,
       description: event.description,
       start_time: event.start_time,
       end_time: event.end_time,
@@ -33,12 +33,14 @@ defmodule KollectiveWeb.EventJSON do
       # Geography (Preloaded)
       location: %{
         name: event.location_name,
-        city: event.origin_city.name,
+        city: city_name(event.origin_city),
         address: event.street,
         state: event.origin_state,
         country: event.origin_country,
         # Recursive District Stack (National > State > Local)
-        district_hierarchy: PoliticalDistrictJSON.data(event.origin_district)
+        district_l1: PoliticalDistrictJSON.data(event.origin_district_l1),
+        district_l2: PoliticalDistrictJSON.data(event.origin_district_l2),
+        district_l3: PoliticalDistrictJSON.data(event.origin_district_l3)
       },
 
       # Author/Candidate Info
@@ -50,6 +52,12 @@ defmodule KollectiveWeb.EventJSON do
       inserted_at: event.inserted_at
     }
   end
+
+  # Helper: Handles the case where the association is fully preloaded and loaded
+  defp city_name(%Kollective.Locations.City{} = city), do: city.name
+
+  # Helper: Fallback if no city is assigned (null) or if it wasn't preloaded
+  defp city_name(_), do: nil
 
   defp default_banner, do: "https://media.kollective.app"
 

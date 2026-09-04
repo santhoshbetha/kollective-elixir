@@ -18,14 +18,19 @@ defmodule KollectiveWeb.Admin.StaffController do
         |> put_status(:ok)
         |> json(%{
           status: "success",
-          message: "Account @#{user.username} successfully promoted to Moderator. Access desk keys generated."
+          message:
+            "Account @#{user.username} successfully promoted to Moderator. Access desk keys generated."
         })
 
       {:error, :not_found} ->
-        conn |> put_status(:not_found) |> json(%{error: "Targeted username does not exist on platform registers."})
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "Targeted username does not exist on platform registers."})
 
       {:error, %Ecto.Changeset{} = changeset} ->
-        conn |> put_status(:unprocessable_entity) |> json(ChangesetJSON.error(%{changeset: changeset}))
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(ChangesetJSON.error(%{changeset: changeset}))
     end
   end
 
@@ -46,10 +51,14 @@ defmodule KollectiveWeb.Admin.StaffController do
         })
 
       {:error, :not_found} ->
-        conn |> put_status(:not_found) |> json(%{error: "Targeted username does not exist on platform registers."})
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "Targeted username does not exist on platform registers."})
 
       {:error, %Ecto.Changeset{} = changeset} ->
-        conn |> put_status(:unprocessable_entity) |> json(ChangesetJSON.error(%{changeset: changeset}))
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(ChangesetJSON.error(%{changeset: changeset}))
     end
   end
 end

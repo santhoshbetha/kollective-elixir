@@ -54,27 +54,49 @@ defmodule Kollective.Workers.AuditJournalistLinks do
   end
 
   defp flag_corrupted_journalist(user, structural_reason) do
+    # FIX: Clean the map safely since Ecto guarantees metadata is never nil
     updated_metadata =
       user.metadata
       |> Map.put("under_investigation", true)
       |> Map.put("flag_reason", structural_reason)
+      |> Map.put("penalized_at", DateTime.utc_now())
 
     # Atomic downgrade write action block
-    {:ok, _user} =
+    {:ok, updated_user} =
       user
-      |> User.changeset(%{badge_type: "ClassicBlue", metadata: updated_metadata})
+      |> User.changeset(%{
+        # Strips corporate privileges atomically to secure district targeting bounds
+        type: :citizen,
+        badge_type: "ClassicBlue",
+        metadata: updated_metadata
+      })
       |> Repo.update()
 
-    # ⚡ Real-time web alert broadcast block to pull the teal badge from active client browser views instantly
-    KollectiveWeb.Endpoint.broadcast("timeline:global", "badge_demotion", %{
-      user_id: user.id,
-      demoted_to: "ClassicBlue",
-      incident_type: "JOURNALIST_LINK_BROKEN"
-    })
-
-    # Trigger admin ticket tracking dispatch
-    IO.puts(
-      "⚠️ SECURITY MODERATION ALERT // JOURNALIST_ID: #{user.id} // REASON: #{structural_reason}"
+    # ─── UNIVERSAL REAL-TIME COMPLIANCE SIGNALLING BUS ───
+    # FIX: Route through your unified PubSub broker onto your lightweight signaling bus channel
+    Phoenix.PubSub.broadcast(
+      Kollective.PubSub,
+      # 🟢 Correct channel target for account modifications
+      "feed:public",
+      {"badge_demotion",
+       %{
+         "user_id" => to_string(updated_user.id),
+         "demoted_to" => "ClassicBlue",
+         "incident_type" => "JOURNALIST_LINK_BROKEN"
+       }}
     )
+
+    # Trigger administrative log tracking entry
+    %Kollective.Admins.Log{
+      action: "journalist_quarantine_auto_flag",
+      target_id: updated_user.id,
+      target_type: "User",
+      # Automated system rule self-trigger marker
+      user_id: updated_user.id,
+      metadata: %{reason: structural_reason, timestamp: DateTime.utc_now()}
+    }
+    |> Kollective.Repo.insert!()
+
+    {:ok, updated_user}
   end
 end

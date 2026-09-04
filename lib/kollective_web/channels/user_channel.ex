@@ -1,9 +1,12 @@
+# For user presence tracking and real-time notifications, we use Phoenix Channels and Presence.
 defmodule KollectiveWeb.UserChannel do
   use KollectiveWeb, :channel
   alias KollectiveWeb.Presence
+  # Only include handle_out if you explicitly use intercept
+  intercept ["some_event"]
 
   @impl true
-  def join("user_notifications:" <> user_id, _payload, socket) do
+  def join("user:" <> user_id, _payload, socket) do
     # SECURITY GUARD: Guarantee users can only subscribe to their own rooms
     if to_string(socket.assigns.user_id) == user_id do
       # Async side-effect task: Registers the online marker immediately
@@ -16,19 +19,21 @@ defmodule KollectiveWeb.UserChannel do
 
   @impl true
   def handle_info(:after_join, socket) do
-    user_id = socket.assigns.user_id
+    # Stringify the ID cleanly to use as the unique presence tracker tracking key
+    user_id_string = to_string(socket.assigns.user_id)
 
-    # 1. Register user metrics securely into Cachex or the Phoenix Presence tracker
+    # 🟢 FIXED: The second argument is now the isolated tracking key (the user's ID)
     {:ok, _} =
-      Presence.track(socket, "user:#{user_id}", %{
+      Presence.track(socket, user_id_string, %{
         online_at: System.system_time(:second)
       })
 
-    # 2. Push the global active room count out to the React frontend client
+    # Push the current presence state snapshot out to the React frontend client
     push(socket, "presence_state", Presence.list(socket))
     {:noreply, socket}
   end
 
+  # Keep this if you are using handle_out/3 to intercept and modify broadcasts sitewide
   @impl true
   def handle_out(event, payload, socket) do
     push(socket, event, payload)

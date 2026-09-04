@@ -11,7 +11,7 @@ defmodule Kollective.Locations.City do
     field :latitude, :float
     field :longitude, :float
 
-    # Unique ID from Geoapify/Google
+    # Unique ID from Geoapify/Google #geoname_id
     field :external_id, :string
 
     # Reverse associations: Useful if you ever want to see everyone in a city

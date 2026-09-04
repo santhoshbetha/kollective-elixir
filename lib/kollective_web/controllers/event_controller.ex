@@ -113,7 +113,7 @@ defmodule KollectiveWeb.EventController do
     PRODID:-//Kollective//NONSGML Standalone Calendar Engine//EN
     CALSCALE:GREGORIAN
     BEGIN:VEVENT
-    SUMMARY:#{event.name}
+    SUMMARY:#{event.title}
     DTSTART;TZID=#{tz_str}:#{start_str}
     DTEND;TZID=#{tz_str}:#{end_str}
     DESCRIPTION:#{String.replace(event.description || "", "\n", "\\n")}
@@ -126,7 +126,7 @@ defmodule KollectiveWeb.EventController do
 
     conn
     |> put_resp_content_type("text/calendar")
-    |> put_resp_header("content-disposition", "attachment; filename=\"#{event.name}.ics\"")
+    |> put_resp_header("content-disposition", "attachment; filename=\"#{event.title}.ics\"")
     |> send_resp(200, String.trim(ics_content))
   end
 

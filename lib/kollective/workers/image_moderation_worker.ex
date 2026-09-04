@@ -32,24 +32,27 @@ defmodule Kollective.Workers.ImageModerationWorker do
   end
 
   defp approve_image(id) do
-    Repo.get!(Comment, id)
-    |> Ecto.Changeset.change(moderation_status: "approved")
-    |> Repo.update!()
+    comment =
+      Repo.get!(Comment, id)
+      |> Ecto.Changeset.change(moderation_status: "approved")
+      |> Repo.update!()
 
     # Broadcast to the channel so the UI unblurs the image
-    KollectiveWeb.Endpoint.broadcast("event_chat", "image_moderated", %{
+    # 🟢 FIXED: Scope the broadcast string dynamically by room/event topic structure
+    KollectiveWeb.Endpoint.broadcast("event_chat:#{comment.event_id}", "image_moderated", %{
       id: id,
       status: "approved"
     })
   end
 
   defp reject_image(id) do
-    Repo.get!(Comment, id)
-    |> Ecto.Changeset.change(moderation_status: "rejected")
-    |> Repo.update!()
+    comment =
+      Repo.get!(Comment, id)
+      |> Ecto.Changeset.change(moderation_status: "rejected")
+      |> Repo.update!()
 
     # Broadcast to the channel so the UI can hide the image
-    KollectiveWeb.Endpoint.broadcast("event_chat", "image_moderated", %{
+    KollectiveWeb.Endpoint.broadcast("event_chat:#{comment.event_id}", "image_moderated", %{
       id: id,
       status: "rejected"
     })

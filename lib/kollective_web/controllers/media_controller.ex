@@ -6,6 +6,7 @@ defmodule KollectiveWeb.MediaController do
   alias Kollective.Repo
   alias Kollective.Posts.Posts
   alias Kollective.Posts.PostAttachment
+  @s3_engine Application.compile_env(:kollective, :s3_engine, ExAws.S3)
 
   @bucket_name "your-r2-attachments-bucket"
   # Or your custom CDN domain
@@ -16,16 +17,15 @@ defmodule KollectiveWeb.MediaController do
   # Expected params: ?filename=vacation.png&content_type=image/png
   def presign(conn, %{"filename" => filename, "content_type" => content_type}) do
     user = conn.assigns.current_user
-    config = ExAws.Config.new(:s3)
+    config = s3_config()
 
-    # Secure isolation architecture: attachments/USER_ID/timestamp_filename.ext
     cleaned_ext = Path.extname(filename) |> String.downcase()
     unique_name = "media_#{System.system_time(:second)}#{cleaned_ext}"
     file_key = "attachments/#{user.id}/#{unique_name}"
 
-    # Generate a short-lived 15-minute secure write token to R2 edge pools
+    # ⚡ FIXED: Swapped ExAws.S3 for @s3_engine
     {:ok, upload_url} =
-      ExAws.S3.presigned_url(config, :put, @bucket_name, file_key,
+      @s3_engine.presigned_url(config, :put, @bucket_name, file_key,
         expires_in: 900,
         query_params: [{"Content-Type", content_type}]
       )
@@ -35,6 +35,14 @@ defmodule KollectiveWeb.MediaController do
       upload_url: upload_url,
       final_asset_url: "#{@cdn_domain}/#{file_key}"
     })
+  end
+
+  defp s3_config do
+    if @s3_engine == ExAws.S3 do
+      ExAws.Config.new(:s3)
+    else
+      %{}
+    end
   end
 
   # ─── ACTION 2: TRACK AND INSERT FINAL METADATA BINDINGS ───

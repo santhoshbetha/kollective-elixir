@@ -7,8 +7,9 @@ defmodule Kollective.Repo.Migrations.AddSearchToPosts do
 
   def change do
     alter table(:posts) do
-      add :language, :string, default: "english", null: false
-      add :content, :text
+      # Keep this migration compatible whether fields exist in CreatePosts or not.
+      add_if_not_exists :language, :string, default: "english", null: false
+      add_if_not_exists :content, :text
     end
 
     # 1. Create a custom function marked as IMMUTABLE
@@ -26,12 +27,12 @@ defmodule Kollective.Repo.Migrations.AddSearchToPosts do
     # 2. Use that custom immutable function in your generated column definition
     execute """
     ALTER TABLE posts
-    ADD COLUMN searchable tsvector GENERATED ALWAYS AS (
+    ADD COLUMN IF NOT EXISTS searchable tsvector GENERATED ALWAYS AS (
       to_tsvector(immutable_ts_regconfig(language), coalesce(content, ''))
     ) STORED;
     """
 
-    execute "CREATE INDEX posts_searchable_idx ON posts USING GIN(searchable);"
+    execute "CREATE INDEX IF NOT EXISTS posts_searchable_idx ON posts USING GIN(searchable);"
   end
 end
 

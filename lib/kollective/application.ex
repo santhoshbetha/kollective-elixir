@@ -22,6 +22,18 @@ defmodule Kollective.Application do
       KollectiveWeb.Presence,
       {DNSCluster, query: Application.get_env(:kollective, :dns_cluster_query) || :ignore},
 
+      # 🛡️ THE CACHEX FIREWALL BUCKET:
+      # Configures an in-memory cache explicitly for IP blacklisting
+      # 🛡️ 2. THE BLACKLIST FIREWALL CACHE (FIXED FOR CACHEX v3.4)
+      # We define a custom worker map to safely override the process ID
+      # and force the supervisor to invoke start_link/2 cleanly
+      %{
+        id: :kollective_cache_worker,
+        start:
+          {Cachex, :start_link, [:kollective_cache, [janitor: [interval: :timer.minutes(5)]]]},
+        type: :worker
+      },
+
       # Start a worker by calling: Kollective.Worker.start_link(arg)
       # {Kollective.Worker, arg},
       # Start to serve requests, typically the last entry

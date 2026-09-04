@@ -5,6 +5,7 @@ defmodule KollectiveWeb.PollJSON do
       expires_at: poll.expires_at,
       expired: DateTime.compare(DateTime.utc_now(), poll.expires_at) == :gt,
       multiple: poll.multiple,
+      non_anonymous: poll.non_anonymous,
       votes_count: poll.votes_count,
       voted: poll.voted,
       own_votes: poll.own_votes,

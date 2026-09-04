@@ -42,6 +42,8 @@ defmodule Kollective.Accounts.User do
       values: [:citizen, :scholar, :journalist, :activist, :organization],
       default: :citizen
 
+    field :badge_type, :string, default: "ClassicBlue"
+
     # For Scholars/Journalists: Specialized bio or verification notes
     field :professional_credentials, :string
 
@@ -82,6 +84,16 @@ defmodule Kollective.Accounts.User do
     # Smallest local unit (optional)
     field :precinct, :string
 
+    field :street_address, :string
+    field :county, :string
+    field :school_district_code, :string
+    field :city_council_district_code, :string
+
+    field :precinct_number, :string
+    field :town_name, :string
+    field :is_inside_city, :boolean, default: false
+    field :applicable_office_ids, {:array, :string}, default: []
+
     # Internal City ID
     # field :city_id, :integer
     belongs_to :city, Kollective.Locations.City, foreign_key: :city_id
@@ -111,6 +123,9 @@ defmodule Kollective.Accounts.User do
     field :avatar_url, :string, default: "/default-avatar.jpg"
     field :cover_image_url, :string, default: "/default-banner-bg.jpg"
 
+    # Virtual ranking score used by user search subqueries/order clauses.
+    field :search_rank, :float, virtual: true
+
     # --- SOCIAL COUNTERS (Cached for performance) ---
     field :note_count, :integer, default: 0
     field :follower_count, :integer, default: 0
@@ -120,6 +135,9 @@ defmodule Kollective.Accounts.User do
     field :is_admin, :boolean, default: false
     field :role, Ecto.Enum, values: [:user, :moderator, :admin], default: :user
     field :is_moderator, :boolean, default: false
+    field :account_tier, :integer, default: 0
+    field :metadata, :map, default: %{}
+    field :origin_state, :string
 
     # --- PREFERENCES ---
     field :settings, :map, default: %{}
@@ -265,7 +283,16 @@ defmodule Kollective.Accounts.User do
 
   def changeset(user, attrs) do
     user
-    |> cast(attrs, [:username, :display_name, :is_verified, :identity_hash, :experience_mode])
+    |> cast(attrs, [
+      :username,
+      :display_name,
+      :is_verified,
+      :identity_hash,
+      :experience_mode,
+      :account_tier,
+      :metadata,
+      :origin_state
+    ])
     |> validate_required([:username, :identity_hash, :experience_mode])
     |> validate_inclusion(:experience_mode, ["social_only", "civic_active"])
     |> validate_length(:username, min: 2, max: 20)
@@ -389,13 +416,39 @@ defmodule Kollective.Accounts.User do
   """
   def email_changeset(user, attrs, opts \\ []) do
     user
-    |> cast(attrs, [:email])
+    |> cast(attrs, [:email, :username])
+    |> put_default_username()
     |> update_change(:email, fn email ->
       if is_binary(email), do: String.downcase(email), else: email
     end)
-
     # 👈 Force email to lowercase before validation happens
     |> validate_email(opts)
+    |> validate_length(:username, min: 2, max: 20)
+    |> unique_constraint(:username)
+  end
+
+  defp put_default_username(changeset) do
+    case get_field(changeset, :username) do
+      nil ->
+        email = get_field(changeset, :email)
+
+        username =
+          if email do
+            email
+            |> String.split("@")
+            |> List.first()
+            |> String.replace(~r/[^a-zA-Z0-9_]/, "")
+            |> then(fn prefix -> "#{prefix}_#{System.unique_integer([:positive])}" end)
+          else
+            "user_#{System.unique_integer([:positive])}"
+          end
+          |> String.slice(0, 20)
+
+        put_change(changeset, :username, username)
+
+      _ ->
+        changeset
+    end
   end
 
   defp validate_email(changeset, opts) do
@@ -536,10 +589,75 @@ defmodule Kollective.Accounts.User do
     |> validate_required([:state])
   end
 
+  @doc """
+  Changeset explicitly dedicated to mutating political district mappings.
+  """
+  def political_bounds_changeset(user, attrs) do
+    user
+    |> cast(attrs, [
+      :street_address,
+      :county,
+      :city_name,
+      :school_district_code,
+      :city_council_district_code,
+      :district_l1_id,
+      :district_l2_id,
+      :district_l3_id,
+      :origin_state,
+      :state
+    ])
+    |> validate_required([:street_address, :district_l1_id])
+  end
+
   def settings_changeset(user, attrs) do
     user
     # Add other settings here
     |> cast(attrs, [:auto_play_emails, :auto_play_gifs])
+  end
+
+  # Political Location Changeset used exclusively on the Settings Page
+  def political_location_changeset(user, attrs) do
+    user
+    |> cast(attrs, [
+      :street_address,
+      :country,
+      :state,
+      :county,
+      :city_id,
+      :district_l1_id,
+      :district_l2_id,
+      :district_l3_id
+    ])
+    # Guard: If they opt-in, they must supply a valid 3-tier concentric stack
+    |> validate_complete_political_stack()
+  end
+
+  defp validate_complete_political_stack(changeset) do
+    l1 = get_field(changeset, :district_l1_id)
+    l2 = get_field(changeset, :district_l2_id)
+    l3 = get_field(changeset, :district_l3_id)
+
+    case {l1, l2, l3} do
+      {nil, _, _} ->
+        add_error(changeset, :district_l1_id, "National boundary could not be resolved.")
+
+      {_, nil, _} ->
+        add_error(
+          changeset,
+          :district_l2_id,
+          "State Upper Chamber boundary could not be resolved."
+        )
+
+      {_, _, nil} ->
+        add_error(
+          changeset,
+          :district_l3_id,
+          "Hyper-local Lower Chamber boundary could not be resolved."
+        )
+
+      _all_present ->
+        changeset
+    end
   end
 end
 

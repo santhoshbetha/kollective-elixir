@@ -19,24 +19,25 @@ defmodule KollectiveWeb.Admin.ReportController do
     |> put_status(:ok)
     |> json(%{
       status: "success",
-      data: Enum.map(reports, fn r ->
-        %{
-          id: to_string(r.id),
-          category: r.category || "content_violation",
-          status: r.status,
-          preview_text: r.preview_text || "Flagged timeline item.",
-          comment: r.comment || "",
-          inserted_at: Calendar.strftime(r.inserted_at, "%Y-%m-%dT%H:%M:%SZ"),
+      data:
+        Enum.map(reports, fn r ->
+          %{
+            id: to_string(r.id),
+            category: r.category || "content_violation",
+            status: r.status,
+            preview_text: r.preview_text || "Flagged timeline item.",
+            comment: r.comment || "",
+            inserted_at: Calendar.strftime(r.inserted_at, "%Y-%m-%dT%H:%M:%SZ"),
 
-          # Associated account metadata card tracking parameters
-          reporter: if(r.reporter, do: r.reporter.username, else: "anonymous"),
-          target_account: if(r.target_user, do: r.target_account.username, else: "unknown"),
+            # Associated account metadata card tracking parameters
+            reporter: if(r.reporter, do: r.reporter.username, else: "anonymous"),
+            target_account: if(r.target_user, do: r.target_account.username, else: "unknown"),
 
-          # Target item identification markers
-          target_id: to_string(r.target_id),
-          target_type: r.target_type || "Post"
-        }
-      end),
+            # Target item identification markers
+            target_id: to_string(r.target_id),
+            target_type: r.target_type || "Post"
+          }
+        end),
       next_cursor: to_string(next_cursor)
     })
   end
@@ -48,7 +49,11 @@ defmodule KollectiveWeb.Admin.ReportController do
       nil ->
         conn
         |> put_status(:not_found)
-        |> json(%{status: "error", error: "ticket_not_found", message: "Compliance report record does not exist."})
+        |> json(%{
+          status: "error",
+          error: "ticket_not_found",
+          message: "Compliance report record does not exist."
+        })
 
       report ->
         conn
@@ -116,7 +121,8 @@ defmodule KollectiveWeb.Admin.ReportController do
 
   # --- Private Logging Helper ---
   defp insert_compliance_log(admin_id, action, target_id) do
-    %Kollective.Admins.Log{ # FIX: Updated namespace mapping path configuration cleanly
+    # FIX: Updated namespace mapping path configuration cleanly
+    %Kollective.Admins.Log{
       action: action,
       target_id: target_id,
       target_type: "Report",

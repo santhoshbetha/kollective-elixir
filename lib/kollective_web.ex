@@ -42,6 +42,7 @@ defmodule KollectiveWeb do
       use Gettext, backend: KollectiveWeb.Gettext
 
       import Plug.Conn
+      import KollectiveWeb.ChangesetJSON, only: [translate_error: 1]
 
       unquote(verified_routes())
     end

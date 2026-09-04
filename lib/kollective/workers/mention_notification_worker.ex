@@ -1,6 +1,5 @@
 # Mention processing involves regex and multiple DB lookups. Use Oban to keep your API response times fast.
 # lib/kollective/workers/mention_notification_worker.ex
-# lib/kollective/workers/mention_notification_worker.ex
 defmodule Kollective.Workers.MentionNotificationWorker do
   use Oban.Worker, queue: :notifications, max_attempts: 3
 

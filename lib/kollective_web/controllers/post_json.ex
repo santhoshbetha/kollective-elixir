@@ -9,9 +9,21 @@ defmodule KollectiveWeb.PostJSON do
     Enum.map(entries, &show/1)
   end
 
-  @doc "Serializes a single post wrapper entry with full interaction states and media logs."
+  def show(%Kollective.Posts.Post{} = post) do
+    show(%{
+      post: post,
+      likes_count: 0,
+      reblogs_count: 0,
+      has_liked: false,
+      has_reblogged: false
+    })
+  end
+
   def show(item) do
     post = item.post
+    # Dynamically interpolate your base canonical domain path with the row's ULID key [INDEX]
+    base_domain = KollectiveWeb.Endpoint.url()
+    computed_permalink = "#{base_domain}/posts/#{to_string(post.id)}"
 
     %{
       id: to_string(post.id),
@@ -20,6 +32,9 @@ defmodule KollectiveWeb.PostJSON do
       category: Map.get(post, :category),
       # Standard ISO string
       inserted_at: Calendar.strftime(post.inserted_at, "%Y-%m-%dT%H:%M:%SZ"),
+
+      # 🟢 PASSES A CLEAN COMPUTED RUNTIME PERMALINK STRAIGHT TO REACT [INDEX]
+      permalink: computed_permalink,
 
       # Social engagement metrics and flags
       likes_count: item.likes_count,
@@ -51,8 +66,69 @@ defmodule KollectiveWeb.PostJSON do
         end,
 
       # MEDIA ATTACHMENTS PORTFOLIO ARRAY: Serializes S3/R2 picture data maps
-      media_attachments: serialize_attachments(Map.get(post, :attachments))
+      media_attachments: serialize_attachments(Map.get(post, :attachments)),
+
+      # POLL: Serializes the poll if attached
+      poll: serialize_poll(Map.get(post, :poll)),
+
+      # Additional Mastodon-like fields
+      in_reply_to_id: (post.in_reply_to_id && to_string(post.in_reply_to_id)) || nil,
+      replies_count: Map.get(post, :replies_count) || Map.get(item, :replies_count) || 0,
+      muted: Map.get(post, :muted) || Map.get(item, :muted) || false,
+      sensitive: Map.get(post, :sensitive) || false,
+      spoiler_text: Map.get(post, :spoiler_text) || "",
+      mentions: serialize_mentions(Map.get(post, :mentions)),
+      tags: serialize_tags(Map.get(post, :hashtags)),
+      language: Map.get(post, :language) || "english",
+      emojis: Map.get(post, :emojis) || [],
+      created_at: Calendar.strftime(post.inserted_at, "%Y-%m-%dT%H:%M:%SZ"),
+      edited_at:
+        (post.edited_at && Calendar.strftime(post.edited_at, "%Y-%m-%dT%H:%M:%SZ")) || nil,
+      visibility: Map.get(post, :visibility) || "public",
+      reblog: serialize_reblog(Map.get(post, :reblog_of))
     }
+  end
+
+  defp serialize_reblog(%Ecto.Association.NotLoaded{}), do: nil
+  defp serialize_reblog(nil), do: nil
+
+  defp serialize_reblog(reblog_post) do
+    reblog_post =
+      Kollective.Repo.preload(reblog_post, [:author, :attachments, :hashtags, poll: :options])
+
+    KollectiveWeb.PostJSON.show(reblog_post)
+  end
+
+  defp serialize_tags(%Ecto.Association.NotLoaded{}), do: []
+  defp serialize_tags(nil), do: []
+
+  defp serialize_tags(hashtags) when is_list(hashtags) do
+    Enum.map(hashtags, fn tag ->
+      %{
+        name: tag.name,
+        url: "#{KollectiveWeb.Endpoint.url()}/tag/#{URI.encode(tag.name)}"
+      }
+    end)
+  end
+
+  defp serialize_mentions(nil), do: []
+
+  defp serialize_mentions(mentions) when is_list(mentions) do
+    Enum.map(mentions, fn mention ->
+      %{
+        id: to_string(Map.get(mention, :id) || Map.get(mention, "id")),
+        username: Map.get(mention, :username) || Map.get(mention, "username")
+      }
+    end)
+  end
+
+  # Safe preloading fallback checker blocks
+  defp serialize_poll(%Ecto.Association.NotLoaded{}), do: nil
+  defp serialize_poll(nil), do: nil
+
+  defp serialize_poll(poll) do
+    poll = Kollective.Repo.preload(poll, :options)
+    KollectiveWeb.PollJSON.data(poll)
   end
 
   # Safe preloading fallback checker blocks

@@ -13,7 +13,7 @@ defmodule Kollective.Workers.FeedFanoutWorker do
 
     # 1. Gather all follower IDs for this author
     follower_ids =
-      from(r in "user_relationships",
+      from(r in Kollective.Accounts.UserRelationship,
         where: r.target_id == ^author_id and r.type == "follow",
         select: r.source_id
       )

@@ -1,16 +1,25 @@
+# lib/kollective/voting/scholar_integrity.ex
 defmodule Kollective.Voting.ScholarIntegrity do
   @moduledoc """
   Audits scholar metric deltas during background updates and reports system compliance failures.
+  Operates transaction-safely to enforce systemic accountability trails.
   """
+  import Ecto.Query, warn: false
+  alias Ecto.Multi
   alias Kollective.Repo
   alias Kollective.Accounts.User
-  alias KollectiveWeb.Endpoint
+  require Logger
 
   @doc """
   Evaluates old metadata values against newly scraped records to spot red flags.
   """
-  def evaluate_sync_metrics(user, old_metadata, new_publication_count) do
-    old_count = Map.get(old_metadata, "publication_count", 0)
+  def evaluate_sync_metrics(%User{} = user, old_metadata, new_publication_count) do
+    # Gracefully match atom or string key variants natively from metadata JSONB maps
+    old_metadata_map = old_metadata || %{}
+
+    old_count =
+      Map.get(old_metadata_map, "publication_count") ||
+        Map.get(old_metadata_map, :publication_count) || 0
 
     cond do
       # 🚨 CASE 1: Drastic decrease in publications (indicates records wiped or hidden)
@@ -31,35 +40,69 @@ defmodule Kollective.Voting.ScholarIntegrity do
   end
 
   defp flag_account(user, violation_type, details_text) do
-    # 1. Update account metadata to lock badge visibility
+    # 1. Clean and modify the user's nested metadata jsonb map safely in memory
+    current_metadata = user.metadata || %{}
+
     updated_metadata =
-      user.metadata
+      current_metadata
       |> Map.put("under_investigation", true)
       |> Map.put("flag_reason", details_text)
+      |> Map.put("flagged_at", DateTime.utc_now() |> DateTime.truncate(:second))
 
-    # Freeze badge to prevent misinformation propagation across your social app
-    {:ok, _user} =
-      user
-      |> User.changeset(%{badge_type: "ClassicBlue", metadata: updated_metadata})
-      |> Repo.insert_or_update()
+    Multi.new()
+    # Step A: Shift target structural privileges and alter badge parameters natively
+    |> Multi.update(:user_downgrade, fn _repo ->
+      Ecto.Changeset.change(user, %{
+        # Downgrade account permissions to stop scholar target overrides
+        type: :citizen,
+        badge_type: "ClassicBlue",
+        metadata: updated_metadata
+      })
+    end)
 
-    # ⚡ BROADCAST INSTANT TEARDOWN SYSTEM SIGNAL OVER CHANNELS
-    Endpoint.broadcast("timeline:global", "badge_demotion", %{
-      user_id: user.id,
-      demoted_to: "ClassicBlue",
-      incident_type: to_string(violation_type)
-    })
+    # Step B: Record the transaction inside your centralized compliance incidents table
+    |> Multi.insert(:compliance_incident, fn _changes ->
+      %Kollective.Admins.Log{
+        action: "scholar_integrity_auto_quarantine",
+        target_id: user.id,
+        target_type: "User",
+        # Automated system rule self-trigger marker
+        user_id: user.id,
+        metadata: %{violation: to_string(violation_type), details: details_text}
+      }
+    end)
 
-    # 2. Fire telemetry/incident log to your app's moderation team
-    dispatch_moderation_ticket(user.id, violation_type, details_text)
+    # Step C: Execute the full atomic database transaction pool safely
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{user_downgrade: updated_user}} ->
+        # ─── UNIVERSAL REAL-TIME COMPLIANCE SIGNALLING BUS ───
+        # Step D: Route through your unified PubSub broker onto your lightweight signaling bus channel
+        Phoenix.PubSub.broadcast(
+          Kollective.PubSub,
+          # 🟢 Correct channel target for account modifications
+          "feed:public",
+          {"badge_demotion",
+           %{
+             "user_id" => to_string(updated_user.id),
+             "demoted_to" => "ClassicBlue",
+             "incident_type" => to_string(violation_type)
+           }}
+        )
 
-    {:error, :flagged_for_investigation}
+        # Trigger asynchronous notifications alert to your app's moderator dashboard desk
+        dispatch_moderation_ticket(updated_user.id, violation_type, details_text)
+
+        {:error, :flagged_for_investigation}
+
+      {:error, _failed_step, changeset, _changes_so_far} ->
+        {:error, changeset}
+    end
   end
 
   defp dispatch_moderation_ticket(user_id, violation_type, details_text) do
-    # Connect this block to your app's internal security center/moderator dashboard
-    IO.puts(
-      "⚠️ SECURITY MODERATION ALERT // USER_ID: #{user_id} // VIOLATION: #{violation_type} // DETAILS: #{details_text}"
+    Logger.warning(
+      "🛡️ COMPLIANCE DESK RUNTIME WARNING // USER_ID: #{user_id} // VIOLATION: #{violation_type} // DETAILS: #{details_text}"
     )
   end
 end

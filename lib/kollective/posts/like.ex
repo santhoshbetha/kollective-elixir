@@ -3,8 +3,8 @@ defmodule Kollective.Posts.Like do
   import Ecto.Changeset
 
   schema "likes" do
-    belongs_to :user, Kollective.Accounts.User
-    belongs_to :post, Kollective.Posts.Post
+    belongs_to :user, Kollective.Accounts.User, type: Ecto.ULID
+    belongs_to :post, Kollective.Posts.Post, type: Ecto.ULID
     timestamps()
   end
 

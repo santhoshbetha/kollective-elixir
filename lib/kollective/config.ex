@@ -1,5 +1,4 @@
 defmodule Kollective.Config do
-  import Ecto.Query
   alias Kollective.Repo
   alias Kollective.Config.Config
 

@@ -30,10 +30,11 @@ defmodule Kollective.Media.MediaAttachment do
       open(image_path)
       |> custom("resize", "32x32!")
       |> format("rgb")
-      |> save(in_place: true) # 💡 Use in_place: true to avoid creating orphan temp files
+      # 💡 Use in_place: true to avoid creating orphan temp files
+      |> save(in_place: true)
 
     # 🔄 FIX 2: Extract the string path (.path) out of the struct before reading bytes
-        # 🔄 FIX: Remove the tuple wrapper. bin_to_list/1 returns a plain [byte()] list directly.
+    # 🔄 FIX: Remove the tuple wrapper. bin_to_list/1 returns a plain [byte()] list directly.
     pixels =
       processed_image.path
       |> File.read!()
@@ -42,5 +43,4 @@ defmodule Kollective.Media.MediaAttachment do
     # 2. Encode to Blurhash string (4x3 components is standard)
     BlurHash.encode(pixels, 32, 32, 4, 3)
   end
-
 end

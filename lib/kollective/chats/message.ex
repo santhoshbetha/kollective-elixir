@@ -4,7 +4,7 @@ defmodule Kollective.Chats.Message do
   schema "messages" do
     # The cipher text # Text content (encrypted via RSA)
     field :encrypted_content, :binary
-    field :sender_id, :id
+    belongs_to :sender, Kollective.Accounts.User, type: Ecto.ULID
 
     # Path to R2 bucket
     field :file_url, :string
@@ -15,7 +15,7 @@ defmodule Kollective.Chats.Message do
     # Encrypted name
     field :file_name, :string
 
-    belongs_to :conversation, Kollective.Chats.Conversation
+    belongs_to :conversation, Kollective.Chats.Conversation, type: Ecto.ULID
     timestamps()
   end
 

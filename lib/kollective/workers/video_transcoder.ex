@@ -133,6 +133,7 @@ defmodule Kollective.Workers.VideoTranscoder do
         {:error, reason} ->
           handle_processing_failure(att.post_id, "Upload Failure")
           {:error, "Storage Engine Write Exception: #{inspect(reason)}"}
+
         {err, _} ->
           handle_processing_failure(att.post_id, "FFmpeg Error: #{err}")
           {:error, "FFmpeg Transcoding Exception: #{err}"}
@@ -152,6 +153,6 @@ defmodule Kollective.Workers.VideoTranscoder do
 
   defp handle_processing_failure(post_id, _reason) do
     update_post_processing_status(post_id, "failed")
-    #IO.inspect(reason, label: "Video Processing Pipeline Error Intercept")
+    # IO.inspect(reason, label: "Video Processing Pipeline Error Intercept")
   end
 end

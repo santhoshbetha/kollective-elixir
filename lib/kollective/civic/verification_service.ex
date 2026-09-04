@@ -2,7 +2,7 @@
 defmodule Kollective.Civic.VerificationService do
   @moduledoc """
   Manages fluid overlapping multi-district peer-to-peer vouch networks.
-  Enforces state consistency and requires a minimum of one matching district tier [INDEX].
+  Enforces state consistency and requires a minimum of one matching district tier .
   """
   import Ecto.Query
   alias Kollective.Repo
@@ -30,6 +30,7 @@ defmodule Kollective.Civic.VerificationService do
 
       # 🚨 GUARD 3: Evaluate overlapping constituency criteria
       matched_tier_attrs = determine_matching_tier(voucher, vouchee)
+
       if is_nil(matched_tier_attrs) do
         Repo.rollback("No overlapping district boundaries found between voucher and vouchee.")
       end
@@ -38,7 +39,9 @@ defmodule Kollective.Civic.VerificationService do
 
       # 🚨 GUARD 4: Anti-Collusion check
       if has_reverse_vouch?(vouchee_id, voucher_id, voucher.origin_state) do
-        Repo.rollback("Collusive verification circle detected. Mutual back-vouching is forbidden.")
+        Repo.rollback(
+          "Collusive verification circle detected. Mutual back-vouching is forbidden."
+        )
       end
 
       params = %{
@@ -67,7 +70,9 @@ defmodule Kollective.Civic.VerificationService do
           vouch_count
 
         {:error, _changeset} ->
-          Repo.rollback("Duplicate vouch signature detected or schema validation parameters failed.")
+          Repo.rollback(
+            "Duplicate vouch signature detected or schema validation parameters failed."
+          )
       end
     end)
   end
@@ -75,10 +80,10 @@ defmodule Kollective.Civic.VerificationService do
   # --- Internal Overlap Evaluation Engine ---
   defp determine_matching_tier(v1, v2) do
     cond do
-      # Prioritize matching down lines sequentially: L1 -> L2 -> L3 [INDEX]
-      v1.district_l1 && v1.district_l1 == v2.district_l1 -> {"l1", v1.district_l1}
-      v1.district_l2 && v1.district_l2 == v2.district_l2 -> {"l2", v1.district_l2}
-      v1.district_l3 && v1.district_l3 == v2.district_l3 -> {"l3", v1.district_l3}
+      # Prioritize matching down lines sequentially: L1 -> L2 -> L3
+      v1.district_l1_id && v1.district_l1_id == v2.district_l1_id -> {"l1", v1.district_l1_id}
+      v1.district_l2_id && v1.district_l2_id == v2.district_l2_id -> {"l2", v1.district_l2_id}
+      v1.district_l3_id && v1.district_l3_id == v2.district_l3_id -> {"l3", v1.district_l3_id}
       true -> nil
     end
   end
@@ -86,7 +91,9 @@ defmodule Kollective.Civic.VerificationService do
   defp has_reverse_vouch?(vouchee_id, voucher_id, origin_state) do
     Repo.exists?(
       from v in Vouch,
-        where: v.voucher_id == ^vouchee_id and v.vouchee_id == ^voucher_id and v.origin_state == ^origin_state
+        where:
+          v.voucher_id == ^vouchee_id and v.vouchee_id == ^voucher_id and
+            v.origin_state == ^origin_state
     )
   end
 end

@@ -28,9 +28,25 @@ defmodule Kollective.Businesses.Businesses do
     # Step 1: Ensure the city records are fetched or dynamically instantiated via GeoNames
     |> Multi.run(:resolved_city, fn _repo, _changes ->
       if is_nil(geoname_id) do
-        {:error, :city_required}
+        changeset =
+          %Business{}
+          |> Ecto.Changeset.change()
+          |> Ecto.Changeset.add_error(:city_id, "is required")
+
+        {:error, changeset}
       else
-        Locations.get_or_import_city(geoname_id)
+        case Locations.get_or_import_city(geoname_id) do
+          {:ok, city} ->
+            {:ok, city}
+
+          {:error, reason} ->
+            changeset =
+              %Business{}
+              |> Ecto.Changeset.change()
+              |> Ecto.Changeset.add_error(:city_id, "could not be imported: #{inspect(reason)}")
+
+            {:error, changeset}
+        end
       end
     end)
     # Step 2: Bind the user metadata, type metrics, and city structural values to the attributes
@@ -47,7 +63,7 @@ defmodule Kollective.Businesses.Businesses do
         # Queue for postcard/OTP review
         |> Map.put("verification_status", "pending")
 
-      Business.creation_changeset(%Business{}, base_attrs)
+      Business.creation_changeset(%Business{user_id: user.id}, base_attrs)
     end)
     |> Ecto.Multi.run(:enqueue_geocode, fn _repo, %{business: business} ->
       if (not has_coordinates? and address_text) && String.trim(address_text) != "" do
@@ -73,7 +89,7 @@ defmodule Kollective.Businesses.Businesses do
 
         {:ok, hydrated_business}
 
-      {:error, :business, changeset, _changes} ->
+      {:error, _failed_step, changeset, _changes} ->
         {:error, changeset}
     end
   end
@@ -129,7 +145,7 @@ defmodule Kollective.Businesses.Businesses do
         )
 
       # FIXED: Pipes into your specific crowdfunding validation rules
-      Business.proposal_changeset(%Business{}, base_attrs)
+      Business.proposal_changeset(%Business{user_id: user.id}, base_attrs)
     end)
 
     # Step 3: Enqueue the asynchronous polymorphic Oban GeocodeWorker
@@ -244,7 +260,7 @@ defmodule Kollective.Businesses.Businesses do
         # Step D: Conditionally queue the polymorphic Oban GeocodeWorker
         |> Multi.run(:enqueue_geocode, fn _repo, %{business: updated_business} ->
           # FIX: Only queue a background request if the address actually changed!
-          if address_changed? and not has_new_coordinates? do
+          if address_changed? && not has_new_coordinates? do
             %{
               "target_id" => updated_business.id,
               "schema_type" => "Business",
@@ -484,17 +500,19 @@ defmodule Kollective.Businesses.Businesses do
           end)
 
           # Step C: Log the administrative user action for compliance logs
-          |> Multi.insert(:audit_log, %Kollective.Admins.Log{
-            action: "proposal_modification",
-            target_id: proposal.id,
-            target_type: "Business",
-            user_id: user.id,
-            metadata: %{modified_at: DateTime.utc_now()}
-          })
+          |> Multi.insert(:audit_log, fn _changes ->
+            %Kollective.Admins.Log{
+              action: "proposal_modification",
+              target_id: proposal.id,
+              target_type: "Business",
+              user_id: user.id,
+              metadata: %{modified_at: DateTime.utc_now()}
+            }
+          end)
 
           # Step D: FIX - Conditionally enqueue the polymorphic Oban GeocodeWorker
           |> Multi.run(:enqueue_geocode, fn _repo, %{proposal: updated_proposal} ->
-            if address_changed? and not has_new_coordinates? do
+            if address_changed? && not has_new_coordinates? do
               %{
                 "target_id" => updated_proposal.id,
                 "schema_type" => "Business",
@@ -562,39 +580,62 @@ defmodule Kollective.Businesses.Businesses do
     # Initialize the base database query structure
     query = from(b in Business, where: b.type == ^type)
 
+    user_geo =
+      case user.location do
+        "POINT(" <> _ = wkt ->
+          case Geo.WKT.decode(wkt) do
+            {:ok, %Geo.Point{} = point} -> %{point | srid: 4326}
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
     # 1. TIERED GEOGRAPHY SCOPING MATRIX
     query =
       case scope do
         "federal" ->
-          where(query, [b], b.district_l1 == ^user.district_l1 and b.state == ^user.state)
+          where(query, [b], b.district_l1 == ^user.district_l1_id and b.state == ^user.state)
 
         "state_senate" ->
-          where(query, [b], b.district_l2 == ^user.district_l2 and b.state == ^user.state)
+          where(query, [b], b.district_l2 == ^user.district_l2_id and b.state == ^user.state)
 
         "city" ->
           where(query, [b], b.city_id == ^user.city_id)
 
         _all ->
           # Broad regional discovery sweep combining political structures OR physical distance
-          where(
-            query,
-            [b],
-            b.city_id == ^user.city_id or
-              (b.district_l3 == ^user.district_l3 and b.state == ^user.state) or
-              (b.district_l2 == ^user.district_l2 and b.state == ^user.state) or
-              (b.district_l1 == ^user.district_l1 and b.state == ^user.state) or
-              fragment("ST_DWithin(?, ?, ?)", b.location, ^user.location, ^radius_meters)
-          )
+          if user_geo do
+            where(
+              query,
+              [b],
+              b.city_id == ^user.city_id or
+                (b.district_l3 == ^user.district_l3_id and b.state == ^user.state) or
+                (b.district_l2 == ^user.district_l2_id and b.state == ^user.state) or
+                (b.district_l1 == ^user.district_l1_id and b.state == ^user.state) or
+                fragment("ST_DWithin(?, ?, ?)", b.location, ^user_geo, ^radius_meters)
+            )
+          else
+            where(
+              query,
+              [b],
+              b.city_id == ^user.city_id or
+                (b.district_l3 == ^user.district_l3_id and b.state == ^user.state) or
+                (b.district_l2 == ^user.district_l2_id and b.state == ^user.state) or
+                (b.district_l1 == ^user.district_l1_id and b.state == ^user.state)
+            )
+          end
       end
 
     # 2. DYNAMIC FRONTEND CATEGORY FILTER TAB
     query =
-      if (category && category != "") and category != "all",
+      if category && category != "" && category != "all",
         do: where(query, [b], b.category == ^category),
         else: query
 
     query =
-      if (opts[:sub_category] && opts[:sub_category] != "") and opts[:sub_category] != "all",
+      if opts[:sub_category] && opts[:sub_category] != "" && opts[:sub_category] != "all",
         do: where(query, [b], b.sub_category == ^to_string(opts[:sub_category])),
         else: query
 

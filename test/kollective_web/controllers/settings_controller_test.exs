@@ -6,6 +6,18 @@ defmodule KollectiveWeb.SettingsControllerTest do
 
   setup :authenticate_user
 
+  setup %{conn: conn, user: user} do
+    user =
+      user
+      |> Ecto.Changeset.change(%{
+        authenticated_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+      |> Kollective.Repo.update!()
+
+    conn = assign(conn, :current_user, user)
+    {:ok, conn: conn, user: user}
+  end
+
   describe "GET /api/v1/users/settings - JSON API" do
     test "returns user settings for authenticated user", %{conn: conn, user: user} do
       # ➕ Step 1: Generate a fresh valid session token for your user fixture

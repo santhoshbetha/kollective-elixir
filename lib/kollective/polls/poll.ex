@@ -29,19 +29,12 @@ defmodule Kollective.Polls.Poll do
     timestamps()
   end
 
-  def changesetX(poll, attrs) do
-    poll
-    |> cast(attrs, [:multiple, :expires_at, :non_anonymous])
-    |> cast_assoc(:options, with: &Kollective.Polls.PollOption.changeset/2, required: true)
-    |> validate_required([:expires_at])
-  end
-
   # validation to ensure a poll has between 2 and 4 options, which is the standard Mastodon constraint
   # dd a custom validation to your Poll.changeset. This prevents users from creating "polls" with only one choice or
   # overwhelming the UI with 50 options
   def changeset(poll, attrs) do
     poll
-    |> cast(attrs, [:multiple, :expires_at])
+    |> cast(attrs, [:multiple, :expires_at, :non_anonymous])
     |> cast_assoc(:options, required: true, with: &Kollective.Polls.PollOption.changeset/2)
     |> validate_required([:expires_at])
     # <--- Custom validation

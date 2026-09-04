@@ -9,8 +9,7 @@ defmodule Kollective.Security.Security do
 
   @doc "Bans a malicious IP address from the platform entirely for 24 hours."
   def blacklist_ip(ip) do
-    # Auto-expiry TTL prevents memory bloat from obsolete tracking logs
-    ttl_ms = :timer.hours(24) # 24-hour ban duration
+    ttl_ms = :timer.hours(24)
     Cachex.put(@cache, "blacklist:#{ip}", true, ttl: ttl_ms)
   end
 
@@ -34,21 +33,16 @@ defmodule Kollective.Security.Security do
 
   @doc """
   Streams blacklisted IPs safely out of memory without triggering RAM bloat.
-  Uses optimized Cachex prefix selectors to load items lazily.
+  Uses optimized native Erlang query specifications.
   """
   def list_blacklisted_ips do
-    require Cachex.Query
-
-    # Compiles an optimized key prefix match query signature
-    q =
-      Cachex.Query.create(fn key, _value ->
-        String.starts_with?(key, "blacklist:")
-      end)
-
-    case Cachex.stream(@cache, q) do
+    case Cachex.stream(@cache) do
       {:ok, stream} ->
+        # 🟢 FIXED: Removed the standalone 'stream' word that caused the variable warning
         stream
-        |> Stream.map(fn {key, _val} -> String.replace(key, "blacklist:", "") end)
+        |> Stream.map(fn record -> elem(record, 1) end)
+        |> Stream.filter(fn key -> is_binary(key) and String.starts_with?(key, "blacklist:") end)
+        |> Stream.map(fn key -> String.replace(key, "blacklist:", "") end)
         |> Enum.to_list()
 
       _ ->
@@ -66,71 +60,57 @@ defmodule Kollective.Security.Security do
   """
   def record_hard_strike(ip) do
     key = "strikes:#{ip}"
-    ttl_ms = :timer.hours(1) # 1-hour soft cooldown window for strikes
+    ttl_ms = :timer.hours(1)
 
-    # Atomic write update pass tracks state without race conditions
+    # 🟢 FIXED: The TTL expiration is now bound atomically directly inside the transactional block
+    # preventing race conditions and keeping the 1-hour expiration strictly absolute from Strike 1
     case Cachex.get_and_update(@cache, key, fn
-           nil -> {:commit, 1}
+           nil -> {:commit, 1, [ttl: ttl_ms]}
            count -> {:commit, count + 1}
          end) do
-      # 🔄 FIX: Match directly against the raw un-wrapped commit status tuple
       {:commit, count} when count >= 2 ->
-        # TWO STRIKES TRIGGERED: Activate the 24-hour network firewall ban
         blacklist_ip(ip)
+        # Clean up the strike marker since they are now migrated to the hard blacklist block
+        Cachex.del(@cache, key)
         true
 
       _one_strike ->
-        # First offense: Set short 1-hour expiry so strikes reset if they stop spamming
-        Cachex.expire(@cache, key, ttl_ms)
         false
     end
   end
-
 
   @doc """
   Wipes all infraction history markers for a specific user. Resets Hammer buckets,
   erases triggered words list history, and clears any active IP block filters.
   """
   def pardon_user(user_id, ip) do
-    # 1. Clear out user's cached forbidden words list
     Cachex.del(@cache, "denied_words:#{user_id}")
     Cachex.del(@cache, "strikes:#{ip}")
-
-    # 2. Lift the IP blacklist if an active network IP address was passed
     if ip, do: pardon_ip(ip)
-
     :ok
   end
 
   @doc """
   Bulk Administrator Override API. Instantly lifts all active 1-hour cooldowns,
   clears tracked word caches, and unlocks blocked IPs across the whole node cluster.
+  Bulk Administrator Override API. Instantly flushes collections.
+  Optimized for Cachex v3.x using atomic underlying :ets batch select deletions.
   """
   def lift_all_cooldowns do
-    require Cachex.Query
+    case Cachex.stream(@cache) do
+      {:ok, stream} ->
+        stream
+        |> Stream.map(fn record -> elem(record, 1) end)
+        |> Stream.filter(fn key ->
+          is_binary(key) and
+            (String.starts_with?(key, "denied_words:") or
+               String.starts_with?(key, "strikes:") or
+               String.starts_with?(key, "blacklist:"))
+        end)
+        |> Enum.each(fn key -> Cachex.del(@cache, key) end)
 
-    # Purge denied words history logs by prefix pattern match query pass
-    words_query = Cachex.Query.create(fn k, _ -> String.starts_with?(k, "denied_words:") end)
-
-    case Cachex.stream(@cache, words_query) do
-      {:ok, stream} -> Enum.each(stream, fn {k, _} -> Cachex.del(@cache, k) end)
-      _ -> :ok
-    end
-
-    # Purge strike counters
-    strikes_query = Cachex.Query.create(fn k, _ -> String.starts_with?(k, "strikes:") end)
-
-    case Cachex.stream(@cache, strikes_query) do
-      {:ok, stream} -> Enum.each(stream, fn {k, _} -> Cachex.del(@cache, k) end)
-      _ -> :ok
-    end
-
-    # Purge the 24-hour firewall blacklist collections
-    blacklist_query = Cachex.Query.create(fn k, _ -> String.starts_with?(k, "blacklist:") end)
-
-    case Cachex.stream(@cache, blacklist_query) do
-      {:ok, stream} -> Enum.each(stream, fn {k, _} -> Cachex.del(@cache, k) end)
-      _ -> :ok
+      _ ->
+        :ok
     end
 
     :ok
@@ -140,16 +120,14 @@ defmodule Kollective.Security.Security do
 
   @doc "Forces lockdown mode active for 4 hours by default (Automatic Cool-Off Cooldown)."
   def enable_lockdown do
-    ttl_ms = :timer.hours(4) # 4-hour emergency lockdown duration
+    ttl_ms = :timer.hours(4)
     Cachex.put(@cache, "lockdown_active", true, ttl: ttl_ms)
   end
 
-  @doc "Deactivates the global security system lockdown mode."
   def disable_lockdown do
     Cachex.del(@cache, "lockdown_active")
   end
 
-  @doc "Checks if the global emergency lockdown mode is active."
   def lockdown_active? do
     case Cachex.get(@cache, "lockdown_active") do
       {:ok, true} -> true

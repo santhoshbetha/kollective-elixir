@@ -32,7 +32,13 @@ defmodule KollectiveWeb.SearchController do
       timeout = Keyword.get(Repo.config(), :timeout, 15_000)
 
       # 1. Expand standard templates to support your new grassroots "events" dashboard grid!
-      default_values = %{"posts" => %{results: []}, "accounts" => [], "hashtags" => [], "events" => []}
+      default_values = %{
+        "posts" => %{results: []},
+        "accounts" => [],
+        "hashtags" => [],
+        "events" => []
+      }
+
       target_type = params["type"]
 
       result =
@@ -45,7 +51,9 @@ defmodule KollectiveWeb.SearchController do
           end
         end)
         |> Task.async_stream(
-          fn {resource, lambda_func} -> {resource, with_fallback(lambda_func, default_values[resource])} end,
+          fn {resource, lambda_func} ->
+            {resource, with_fallback(lambda_func, default_values[resource])}
+          end,
           timeout: timeout,
           on_timeout: :kill_task
         )
@@ -71,7 +79,8 @@ defmodule KollectiveWeb.SearchController do
 
   defp execute_resource_search("accounts", query, options, _params) do
     users = UserSearch.search(query, options)
-    AccountJSON.index(%{users: users}) # Uniform serialization contract layout
+    # Uniform serialization contract layout
+    AccountJSON.index(%{users: users})
   end
 
   defp execute_resource_search("posts", query, options, params) do
@@ -90,13 +99,16 @@ defmodule KollectiveWeb.SearchController do
     # 📅 TARGETED GRASSROOTS ACTIONS SEARCH UPGRADE
     # Connects your dashboard searches straight into your geofenced actions engine
     scope_toggle = params["scope"] || "local"
-    actions = Kollective.Events.Events.list_collective_actions(options[:for_user], "all", scope_toggle)
+
+    actions =
+      Kollective.Events.Events.list_collective_actions(options[:for_user], "all", scope_toggle)
 
     # Filter text matches inside RAM for optimal sub-millisecond responsiveness
-    filtered_actions = Enum.filter(actions, fn act ->
-      String.contains?(String.downcase(act.name), String.downcase(query)) ||
-      String.contains?(String.downcase(act.description || ""), String.downcase(query))
-    end)
+    filtered_actions =
+      Enum.filter(actions, fn act ->
+        String.contains?(String.downcase(act.name), String.downcase(query)) ||
+          String.contains?(String.downcase(act.description || ""), String.downcase(query))
+      end)
 
     Enum.map(filtered_actions, fn item ->
       %{
@@ -112,7 +124,12 @@ defmodule KollectiveWeb.SearchController do
 
   defp execute_resource_search("hashtags", query, _options, _params) do
     tags_path = KollectiveWeb.Endpoint.url() <> "/api/discovery/hashtag?tag="
-    tags = preprocess_uri_query(query) |> String.split(~r/[^#\w]+/u, trim: true) |> Enum.uniq_by(&String.downcase/1)
+
+    tags =
+      preprocess_uri_query(query)
+      |> String.split(~r/[^#\w]+/u, trim: true)
+      |> Enum.uniq_by(&String.downcase/1)
+
     cleaned_tags = Enum.map(tags, fn t -> String.trim_leading(t, "#") |> String.downcase() end)
 
     from(h in Kollective.Hashtags.Hashtag, where: h.name in ^cleaned_tags, select: h.name)
@@ -123,7 +140,9 @@ defmodule KollectiveWeb.SearchController do
   # ─── LOGISTICAL COMPILER HELPERS ───
   defp compile_search_options(params, user) do
     limit_param = params["limit"] || 20
-    parsed_limit = if is_binary(limit_param), do: String.to_integer(limit_param), else: limit_param
+
+    parsed_limit =
+      if is_binary(limit_param), do: String.to_integer(limit_param), else: limit_param
 
     [
       following: Map.get(params, "following") == "true",
@@ -134,7 +153,24 @@ defmodule KollectiveWeb.SearchController do
   end
 
   defp preprocess_uri_query(query) do
-    if query =~ ~r/https?:\/\//, do: List.last(String.split(String.trim_trailing(query, "/"), "/")), else: query
+    decoded_query = URI.decode_www_form(query)
+
+    if decoded_query =~ ~r/https?:\/\// do
+      uri = URI.parse(decoded_query)
+
+      cond do
+        is_binary(uri.fragment) and uri.fragment != "" ->
+          "##{uri.fragment}"
+
+        is_binary(uri.path) and uri.path != "" ->
+          List.last(String.split(String.trim_trailing(uri.path, "/"), "/"))
+
+        true ->
+          decoded_query
+      end
+    else
+      decoded_query
+    end
   end
 
   defp with_fallback(f, fallback) do
@@ -150,11 +186,14 @@ defmodule KollectiveWeb.SearchController do
   # GET /api/v1/search/location (Targeted geographical coordinate locator lookup)
   @spec location(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def location(conn, %{"q" => query} = params) do
-    result = with_fallback(fn ->
-      Geospatial.Service.service().search(String.trim(query), Map.to_list(params))
-    end, [])
+    result =
+      with_fallback(
+        fn ->
+          Geospatial.Service.service().search(String.trim(query), Map.to_list(params))
+        end,
+        []
+      )
 
     json(conn, %{locations: result})
   end
-
 end

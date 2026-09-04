@@ -38,24 +38,40 @@ defmodule KollectiveWeb.VouchController do
             # FIX: Catch all standard Ecto Multi three-part rollback tuples cleanly
             conn
             |> put_status(:unprocessable_entity)
-            |> json(%{status: "error", error: "database_rollback", message: to_string(db_rollback_reason)})
+            |> json(%{
+              status: "error",
+              error: "database_rollback",
+              message: to_string(db_rollback_reason)
+            })
 
           {:error, db_rollback_reason} ->
             # Secondary catch-all fallback guard ensures absolute safety against crashes
             conn
             |> put_status(:unprocessable_entity)
-            |> json(%{status: "error", error: "transaction_failed", message: to_string(db_rollback_reason)})
+            |> json(%{
+              status: "error",
+              error: "transaction_failed",
+              message: to_string(db_rollback_reason)
+            })
         end
 
       {:error, :token_expired} ->
         conn
         |> put_status(:gone)
-        |> json(%{status: "error", error: "token_expired", message: "Validation session has timed out. Please refresh QR code."})
+        |> json(%{
+          status: "error",
+          error: "token_expired",
+          message: "Validation session has timed out. Please refresh QR code."
+        })
 
       {:error, :token_invalid} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{status: "error", error: "token_invalid", message: "Invalid or already consumed token signature."})
+        |> json(%{
+          status: "error",
+          error: "token_invalid",
+          message: "Invalid or already consumed token signature."
+        })
     end
   end
 end

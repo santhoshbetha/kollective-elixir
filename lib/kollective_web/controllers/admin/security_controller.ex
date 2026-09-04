@@ -19,20 +19,19 @@ defmodule KollectiveWeb.Admin.SecurityController do
   def pardon(conn, %{"ip" => ip}) do
     admin = conn.assigns.current_admin
 
-    case Security.pardon_ip(ip) do
-      {:ok, true} ->
-        # Log the manual override security pardon for audit transparency
-        insert_security_audit_log(admin.id, "ip_pardoned", %{ip: ip})
+    if Security.ip_blacklisted?(ip) do
+      Security.pardon_ip(ip)
+      # Log the manual override security pardon for audit transparency
+      insert_security_audit_log(admin.id, "ip_pardoned", %{ip: ip})
 
-        json(conn, %{
-          status: "success",
-          message: "IP address #{ip} has been pardoned and can now interact again."
-        })
-
-      _ ->
-        conn
-        |> put_status(:not_found)
-        |> json(%{status: "error", error: "IP address not found inside active blacklist stores."})
+      json(conn, %{
+        status: "success",
+        message: "IP address #{ip} has been pardoned and can now interact again."
+      })
+    else
+      conn
+      |> put_status(:not_found)
+      |> json(%{status: "error", error: "IP address not found inside active blacklist stores."})
     end
   end
 

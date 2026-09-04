@@ -7,9 +7,6 @@ defmodule Kollective.Posts.UserFilter do
   alias Kollective.Repo
   alias Kollective.Accounts.User
 
-  @primary_key {:id, :binary_id, autogenerate: true}
-  @foreign_key_type :binary_id
-
   schema "user_filters" do
     field :phrase, :string
     field :whole_word, :boolean, default: true

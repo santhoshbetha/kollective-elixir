@@ -2,9 +2,6 @@ defmodule Kollective.Accounts.OrganizationMembership do
   use Kollective.Schemas.Schema
   import Ecto.Changeset
 
-  @primary_key {:id, :binary_id, autogenerate: true}
-  @foreign_key_type :binary_id
-
   schema "organization_memberships" do
     field :role, Ecto.Enum, values: [:admin, :member], default: :member
     field :status, Ecto.Enum, values: [:pending, :approved, :rejected], default: :pending

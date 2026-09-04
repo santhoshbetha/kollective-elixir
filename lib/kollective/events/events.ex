@@ -1,5 +1,6 @@
 defmodule Kollective.Events.Events do
   import Ecto.Query, warn: false
+
   alias Ecto.Multi
   alias Kollective.Repo
   alias Kollective.Accounts.User
@@ -169,10 +170,10 @@ defmodule Kollective.Events.Events do
         |> Ecto.Changeset.put_change(:origin_country, user.country || "US")
         |> Ecto.Changeset.put_change(:origin_state, user.state)
         # Standard city relation foreign key matching your schema
-        |> Ecto.Changeset.put_change(:city_id, user.city_id)
-        |> Ecto.Changeset.put_change(:origin_district_l1, user.district_l1)
-        |> Ecto.Changeset.put_change(:origin_district_l2, user.district_l2)
-        |> Ecto.Changeset.put_change(:origin_district_l3, user.district_l3)
+        |> Ecto.Changeset.put_change(:origin_city_id, user.city_id)
+        |> Ecto.Changeset.put_change(:origin_district_l1, user.district_l1_id)
+        |> Ecto.Changeset.put_change(:origin_district_l2, user.district_l2_id)
+        |> Ecto.Changeset.put_change(:origin_district_l3, user.district_l3_id)
 
       _privileged_or_org_actor ->
         # ─── PRIVILEGED ACTOR DECORATOR ───
@@ -186,7 +187,7 @@ defmodule Kollective.Events.Events do
           :target_scope,
           :origin_state,
           :origin_country,
-          :city_id,
+          :origin_city_id,
           :origin_district_l1,
           :origin_district_l2,
           :origin_district_l3
@@ -195,10 +196,10 @@ defmodule Kollective.Events.Events do
 
         |> default_changeset_value(:origin_country, user.country || "US")
         |> default_changeset_value(:origin_state, user.state)
-        |> default_changeset_value(:city_id, user.city_id)
-        |> default_changeset_value(:origin_district_l1, user.district_l1)
-        |> default_changeset_value(:origin_district_l2, user.district_l2)
-        |> default_changeset_value(:origin_district_l3, user.district_l3)
+        |> default_changeset_value(:origin_city_id, user.city_id)
+        |> default_changeset_value(:origin_district_l1, user.district_l1_id)
+        |> default_changeset_value(:origin_district_l2, user.district_l2_id)
+        |> default_changeset_value(:origin_district_l3, user.district_l3_id)
     end
   end
 
@@ -214,18 +215,19 @@ defmodule Kollective.Events.Events do
     end
   end
 
-  defp handle_event_lifecycle({:ok, %{event: event}}, user) do
+  defp handle_event_lifecycle({:ok, event}, _user) do
     # Trigger text mentions parsing and user pings asynchronously
-    Task.start(fn -> trigger_event_notifications(user, event) end)
+    # Task.start(fn -> trigger_event_notifications(user, event) end)
+    %{"event_id" => event.id}
+    |> Kollective.Workers.EventMentionsWorker.new()
+    |> Oban.insert()
 
     # 1. CRITICAL PRELOAD: Hydrate all relational fields required by EventJSON.data/1
     hydrated_event =
       event
       |> Repo.preload([
         :user,
-        :origin_city,
-        # Walks up the recursive district relationship stack (Local > State > National)
-        origin_district: [parent: :parent]
+        :origin_city
       ])
 
     # 2. Broadcast the fully populated event struct over WebSockets for live feed updates
@@ -243,10 +245,51 @@ defmodule Kollective.Events.Events do
   #  {:error, changeset}
   # end
 
-  defp trigger_event_notifications(_user, _event) do
-    # Reuses your standard Post mention extraction regex and notification logic
-    :ok
-  end
+  # defp trigger_event_notifications(_user, event) do
+  # Reuses your standard Post mention extraction regex and notification logic
+  #  mentioned_usernames = parse_mention_strings(event.description)
+
+  # Register structural notify hooks for mentions
+  #  register_mention_notifications(event, mentioned_usernames, event.user_id)
+
+  #  :ok
+  # end
+
+  # defp parse_mention_strings(text) do
+  #  Regex.scan(~r/@[[:alnum:]_]+/, text)
+  #  |> List.flatten()
+  #  |> Enum.map(&String.replace(&1, "@", ""))
+  #  |> Enum.uniq()
+  # end
+
+  # defp register_mention_notifications(event, verified_mentions, parent_author_id) do
+  #  Enum.each(verified_mentions, fn recipient ->
+  #    if recipient.id != event.user_id && recipient.id != parent_author_id do
+  #      {:ok, notification} =
+  #         Notifications.notify(
+  #            recipient.id,
+  #            event.user_id,
+  #            "mention",
+  #            %{
+  #              event_id: event.id,
+  #              target_id: event.id,
+  #              target_type: "Event"
+  #            },
+  #            %{
+  #              event_id: event.id,
+  #              preview:
+  #                "mentioned you in an event: \"#{String.slice(event.description || "", 0, 30)}...\""
+  #            }
+  #        )
+
+  #      KollectiveWeb.Endpoint.broadcast(
+  #        "user_notifications:#{recipient.id}",
+  #        "new_notification",
+  #        %{notification: notification}
+  #      )
+  #    end
+  #  end)
+  # end
 
   @doc """
   The unified community event modifier engine.
@@ -255,7 +298,8 @@ defmodule Kollective.Events.Events do
   """
   def update_event(%User{} = user, event_id, attrs) do
     # 1. Fetch the existing record with the standard city relation preloaded
-    event = Repo.get!(Event, event_id) |> Repo.preload([:city])
+    # ⚡ CORRECT: Aligns with your belongs_to :origin_city schema definition
+    event = Repo.get!(Event, event_id) |> Repo.preload([:origin_city])
 
     # Strict ownership guard pass: Protect against malicious cross-user alterations
     if event.created_by != user.id and not (user.is_admin or user.is_moderator) do
@@ -292,7 +336,8 @@ defmodule Kollective.Events.Events do
       Multi.new()
       # Step A: Conditional Location Resolution Node
       |> Multi.run(:resolved_attrs, fn _repo, _changes ->
-        existing_external_id = if event.city, do: to_string(event.city.external_id), else: nil
+        existing_external_id =
+          if event.origin_city, do: to_string(event.origin_city.external_id), else: nil
 
         if is_nil(geoname_id) || to_string(geoname_id) == "" ||
              to_string(geoname_id) == existing_external_id do
@@ -303,7 +348,7 @@ defmodule Kollective.Events.Events do
             {:ok, city} ->
               updated_attrs =
                 attrs
-                |> Map.put("city_id", city.id)
+                |> Map.put("origin_city_id", city.id)
                 |> Map.put("city_name", city.name)
                 |> Map.put("origin_state", city.state)
                 |> Map.put("origin_country", city.country)
@@ -359,7 +404,12 @@ defmodule Kollective.Events.Events do
           end
 
           # 3. Offload email alerts to attendees safely in a detached execution task
-          Task.start(fn -> notify_attendees_of_time_change(updated_event) end)
+          # Task.start(fn -> notify_attendees_of_time_change(updated_event) end)
+          # 🚀 FIX: Instead of Task.start/1, insert a new Oban job transactionally
+          # Use repo.insert! so it joins the Ecto.Multi transaction natively
+          %{"event_id" => updated_event.id}
+          |> Kollective.Workers.NotifyAttendeesWorker.new()
+          |> Oban.insert!()
         end
 
         {:ok, :lifecycle_processed}
@@ -383,7 +433,7 @@ defmodule Kollective.Events.Events do
       |> case do
         {:ok, %{event: updated_event}} ->
           # 3. REAL-TIME MULTI-CHANNEL BROADCASTS
-          hydrated = Repo.preload(updated_event, [:user, :city])
+          hydrated = Repo.preload(updated_event, [:user, :origin_city])
 
           # Global feed timeline scroller updates
           Phoenix.PubSub.broadcast(Kollective.PubSub, "feed:public", {:event_updated, hydrated})
@@ -400,7 +450,7 @@ defmodule Kollective.Events.Events do
           changeset =
             Ecto.Changeset.add_error(
               %Ecto.Changeset{data: event},
-              :city_id,
+              :origin_city_id,
               "Location update failed: #{inspect(reason)}"
             )
 
@@ -413,7 +463,7 @@ defmodule Kollective.Events.Events do
   end
 
   # ─── SECTION 2: DISK CLEANUP & AUDIT NOTIFICATION PIPELINES ───
-  defp notify_attendees_of_time_change(event) do
+  def notify_attendees_of_time_change(event) do
     participants = list_accepted_participants(event.id)
     # Replace with your dynamic timezone helper: EventHelpers.local_time_string(event)
     formatted_time = "10:00 AM IST"
@@ -1750,10 +1800,6 @@ defmodule Kollective.Events.Events do
            |> Kollective.Events.CommentLike.changeset(%{user_id: user_id, comment_id: comment_id})
            |> Repo.insert() do
         {:ok, _like} ->
-          # 2. ATOMIC COUNTER INCREMENT
-          from(c in Comment, where: c.id == ^comment_id)
-          |> Repo.update_all(inc: [likes_count: 1])
-
           # 3. NOTIFICATION DISPATCH (Fetch fresh comment metrics out of the transaction)
           comment = Repo.get!(Comment, comment_id) |> Repo.preload([:user])
 
@@ -1812,7 +1858,7 @@ defmodule Kollective.Events.Events do
   Verifies organizational identity contexts, blocks boundary spoofing, and schedules async tasks.
   """
   def create_action(%Kollective.Accounts.User{} = current_user, attrs \\ %{}) do
-    now = DateTime.utc_now()
+    _now = DateTime.utc_now()
     has_coordinates? = not is_nil(attrs["latitude"] || attrs[:latitude])
     address_text = attrs["street"] || attrs[:street] || attrs["address"] || attrs[:address]
 
@@ -1824,7 +1870,7 @@ defmodule Kollective.Events.Events do
       if organization_id do
         is_member? =
           Repo.exists?(
-            from(m in "organization_memberships",
+            from(m in Kollective.Accounts.OrganizationMembership,
               where:
                 m.organization_id == ^organization_id and m.user_id == ^current_user.id and
                   m.status == :approved
@@ -1945,22 +1991,53 @@ defmodule Kollective.Events.Events do
         "local" ->
           # Grassroots Local Scope: Fall back to shared structural political districts,
           # municipal city boundaries, OR a precise 60-mile physical radius sweep
-          if user.location do
-            from(e in query,
-              # High-speed PostGIS spatial geometry index scanner avoids CPU trigonometry load
-              where:
-                e.city_id == ^user.city_id or
-                  (e.origin_district_l1 == ^user.district_l1 and e.origin_state == ^user.state) or
-                  (e.origin_district_l2 == ^user.district_l2 and e.origin_state == ^user.state) or
+          conditions = []
+
+          conditions =
+            if user.city_id,
+              do: [dynamic([e], e.origin_city_id == ^user.city_id) | conditions],
+              else: conditions
+
+          conditions =
+            if user.district_l1_id && user.state,
+              do: [
+                dynamic(
+                  [e],
+                  e.origin_district_l1 == ^user.district_l1_id and e.origin_state == ^user.state
+                )
+                | conditions
+              ],
+              else: conditions
+
+          conditions =
+            if user.district_l2_id && user.state,
+              do: [
+                dynamic(
+                  [e],
+                  e.origin_district_l2 == ^user.district_l2_id and e.origin_state == ^user.state
+                )
+                | conditions
+              ],
+              else: conditions
+
+          conditions =
+            if user.location,
+              do: [
+                dynamic(
+                  [e],
                   fragment("ST_DWithin(?, ?, ?)", e.location, ^user.location, ^radius_meters)
-            )
+                )
+                | conditions
+              ],
+              else: conditions
+
+          if conditions == [] do
+            from(e in query, where: false)
           else
-            # Fallback if the user profile does not contain active GPS metadata records
-            from(e in query,
-              where:
-                e.city_id == ^user.city_id or
-                  (e.origin_district_l1 == ^user.district_l1 and e.origin_state == ^user.state)
-            )
+            or_conditions =
+              Enum.reduce(conditions, fn cond_expr, acc -> dynamic([e], ^cond_expr or ^acc) end)
+
+            from(e in query, where: ^or_conditions)
           end
 
         _all_fallback ->

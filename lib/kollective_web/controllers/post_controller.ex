@@ -7,7 +7,6 @@ defmodule KollectiveWeb.PostController do
   alias Kollective.Moderation.Moderation
   alias Kollective.Accounts.Accounts
   alias Kollective.Security.Security
-  alias Kollective.Notifications.Notifications
   alias KollectiveWeb.PostJSON
 
   # GET /api/v1/posts
@@ -28,7 +27,7 @@ defmodule KollectiveWeb.PostController do
   end
 
   # POST /api/v1/posts
-  def create(conn, %{"post" => post_params}) do
+  def create(conn, %{"post" => post_params} = params) do
     user = conn.assigns.current_user
     ip = conn.remote_ip |> :inet.ntoa() |> to_string()
 
@@ -88,7 +87,10 @@ defmodule KollectiveWeb.PostController do
 
       {:ok, status} ->
         # SOFT PASS / CLEAN: Inject the returned status (:published or :pending) into params
-        post_params = Map.put(post_params, "status", Atom.to_string(status))
+        post_params =
+          post_params
+          |> Map.put("status", Atom.to_string(status))
+          |> Map.put_new("poll", params["poll"])
 
         # 2. DYNAMIC PIPELINE ROUTING ENGINE
         # Check if the incoming request specifies a voice layout
@@ -186,7 +188,7 @@ defmodule KollectiveWeb.PostController do
   def handle_like(conn, %{"id" => post_id}) do
     user = conn.assigns.current_user
 
-    case Posts.toggle_like(post_id, user.id) do
+    case Posts.toggle_like(user.id, post_id) do
       {:ok, :liked} ->
         conn
         |> put_status(:ok)
@@ -332,9 +334,17 @@ defmodule KollectiveWeb.PostController do
                 )
 
                 # Also alert the parent author securely via the ThreadMute protected notification engine
-                Task.start(fn ->
-                  Notifications.notify_reply(parent_post.user_id, user.id, hydrated_reply)
-                end)
+                # Task.start(fn ->
+                #  Notifications.notify_reply(parent_post.user_id, user.id, hydrated_reply)
+                # end)
+
+                %{
+                  "recipient_id" => parent_post.user_id,
+                  "actor_id" => user.id,
+                  "reply_id" => hydrated_reply.id
+                }
+                |> Kollective.Workers.ReplyNotificationWorker.new()
+                |> Oban.insert()
 
                 conn
                 |> put_status(:created)

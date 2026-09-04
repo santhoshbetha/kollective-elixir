@@ -9,15 +9,11 @@ defmodule Kollective.Admins.Log do
 
   @type t :: %__MODULE__{}
 
-  # Standardize primary and foreign key definitions to match your system-wide ULID/Binary specifications
-  @primary_key {:id, :binary_id, autogenerate: true}
-  @foreign_key_type :binary_id
-
   schema "admin_logs" do
     # "event_cancelled", "post_deleted", "user_shadow_banned"
     field :action, :string
     # The specific ID of the mutated Event, Post, or Comment
-    field :target_id, :binary_id
+    field :target_id, Ecto.ULID
     # "Event", "Post", "User"
     field :target_type, :string, default: "Event"
 

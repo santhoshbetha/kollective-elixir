@@ -34,15 +34,28 @@ defmodule KollectiveWeb.UserJSON do
 
       # READABLE NAMES (For UI Labels/Breadcrumbs)
       district_names: %{
-        l1: (user.district_l1 && user.district_l1.name) || "National",
-        l2: (user.district_l2 && user.district_l2.name) || "State",
-        l3: (user.district_l3 && user.district_l3.name) || "Local"
+        l1:
+          (Ecto.assoc_loaded?(user.district_l1) && user.district_l1 && user.district_l1.name) ||
+            "National",
+        l2:
+          (Ecto.assoc_loaded?(user.district_l2) && user.district_l2 && user.district_l2.name) ||
+            "State",
+        l3:
+          (Ecto.assoc_loaded?(user.district_l3) && user.district_l3 && user.district_l3.name) ||
+            "Local"
       },
 
       # GEOGRAPHY
-      city: if(user.origin_city, do: user.origin_city.name),
-      state_code: user.state,
+      city_name: user.city_name || (Ecto.assoc_loaded?(user.city) && user.city && user.city.name),
+      state: user.state,
+      country: user.country,
       country_code: user.country,
+      street_address: user.street_address,
+      county: user.county,
+      school_district_code: user.school_district_code,
+      city_council_district_code: user.city_council_district_code,
+      is_candidate: user.is_candidate,
+      is_verified_candidate: user.is_verified_candidate,
       settings: %{
         auto_play_gifs: user.auto_play_gifs
       }

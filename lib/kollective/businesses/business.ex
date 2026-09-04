@@ -11,9 +11,6 @@ defmodule Kollective.Businesses.Business do
   use Kollective.Schemas.Schema
   import Ecto.Changeset
 
-  @primary_key {:id, :binary_id, autogenerate: true}
-  @foreign_key_type :binary_id
-
   @categories ~w(food_beverage technology retail services manufacturing construction healthcare education online other)
 
   @sub_categories ~w(

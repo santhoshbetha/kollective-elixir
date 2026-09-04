@@ -1,5 +1,6 @@
 defmodule Kollective.Civic.Vouch do
-  use Kollective.Schemas.Schema # Injects chronological ULIDs and UTC timestamps [INDEX]
+  # Injects chronological ULIDs and UTC timestamps
+  use Kollective.Schemas.Schema
 
   schema "user_vouches" do
     belongs_to :voucher, Kollective.Accounts.User, foreign_key: :voucher_id
@@ -17,7 +18,13 @@ defmodule Kollective.Civic.Vouch do
   def changeset(vouch, attrs) do
     vouch
     |> cast(attrs, [:voucher_id, :vouchee_id, :origin_state, :matched_tier, :district_value])
-    |> validate_required([:voucher_id, :vouchee_id, :origin_state, :matched_tier, :district_value])
+    |> validate_required([
+      :voucher_id,
+      :vouchee_id,
+      :origin_state,
+      :matched_tier,
+      :district_value
+    ])
     |> validate_inclusion(:matched_tier, ~w(l1 l2 l3))
     |> validate_identity_separation()
     # A voucher can only vouch for a vouchee once per specific state tier
@@ -32,7 +39,11 @@ defmodule Kollective.Civic.Vouch do
     v2 = get_field(changeset, :vouchee_id)
 
     if v1 && v1 == v2 do
-      add_error(changeset, :vouchee_id, "Self-verification signatures are structurally impossible.")
+      add_error(
+        changeset,
+        :vouchee_id,
+        "Self-verification signatures are structurally impossible."
+      )
     else
       changeset
     end

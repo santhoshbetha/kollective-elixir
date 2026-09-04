@@ -20,5 +20,6 @@ defmodule Kollective.Repo.Migrations.CreatePostReactions do
            )
 
     create index(:post_reactions, [:post_id])
+    create index(:post_reactions, [:user_id])
   end
 end

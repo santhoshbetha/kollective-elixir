@@ -97,7 +97,7 @@ defmodule KollectiveWeb.FeedChannel do
 
   # --- In-Memory Batch Hydration Query Helper ---
   defp fetch_initial_comments_payload(event_id, user_id) do
-    raw_comments = Events.list_comments(event_id, [limit: 30])
+    raw_comments = Events.list_comments(event_id, limit: 30)
 
     # Pre-calculate user liked markers using a single MapSet lookup pass to avoid N+1 query loops
     comment_ids = Enum.map(raw_comments, & &1.id)

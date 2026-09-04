@@ -14,6 +14,7 @@ defmodule Kollective.Accounts.Accounts do
 
   alias Kollective.Accounts.OrganizationMembership
   alias Kollective.Workers.OrgNotificationWorker
+  alias Kollective.Locations.Locations
 
   ## Database getters
 
@@ -758,7 +759,8 @@ defmodule Kollective.Accounts.Accounts do
 
   def blocks?(%Kollective.Accounts.User{} = source, %Kollective.Accounts.User{} = target) do
     Kollective.Repo.exists?(
-      from(r in "user_relationships",
+      # ⚡ FIXED: Swapped raw string "user_relationships" for your actual Ecto schema module
+      from(r in Kollective.Accounts.UserRelationship,
         where: r.source_id == ^source.id and r.target_id == ^target.id and r.type == "block"
       )
     )
@@ -904,20 +906,83 @@ defmodule Kollective.Accounts.Accounts do
         |> Multi.update(:user, Ecto.Changeset.change(user, role_changes))
         # Step B: Record the transaction inside your centralized Admin Log table rows
         |> Multi.insert(:audit_log, fn _changes ->
-            %Kollective.Admins.Log{
-              action: "staff_role_promotion_#{Atom.to_string(role_type)}",
-              target_id: user.id,
-              target_type: "User",
-              user_id: admin_id,
-              metadata: %{promoted_username: user.username, timestamp: DateTime.utc_now()}
-            }
-          end)
+          %Kollective.Admins.Log{
+            action: "staff_role_promotion_#{Atom.to_string(role_type)}",
+            target_id: user.id,
+            target_type: "User",
+            user_id: admin_id,
+            metadata: %{promoted_username: user.username, timestamp: DateTime.utc_now()}
+          }
+        end)
         |> Repo.transaction()
         |> case do
-            {:ok, %{user: updated_user}} -> {:ok, updated_user}
-            {:error, _failed_step, changeset, _changes} -> {:error, changeset}
-          end
+          {:ok, %{user: updated_user}} -> {:ok, updated_user}
+          {:error, _failed_step, changeset, _changes} -> {:error, changeset}
+        end
     end
   end
 
+  def update_political_location(user, attrs) do
+    # 1. Parse high-precision coordinates passed from the frontend geocoder
+    lon = attrs["exact_lon"] || attrs["lng"] || attrs["longitude"]
+    lat = attrs["exact_lat"] || attrs["lat"] || attrs["latitude"]
+    country = attrs["country"] || user.country || "US"
+
+    # 2. Extract and format the administrative district string (County/District)
+    geo_meta = attrs["geocoder_metadata"] || %{}
+
+    raw_admin =
+      geo_meta["county"] || geo_meta["district"] || attrs["county"] || attrs["district"]
+
+    clean_admin =
+      if raw_admin do
+        raw_admin
+        |> to_string()
+        |> String.replace(~r/\b(County|District)\b/i, "")
+        |> String.trim()
+      else
+        user.county
+      end
+
+    # 3. Compute spatial intersections on-demand using PostGIS GIST indexes
+    l1_dist = Locations.find_district_by_coords(lon, lat, 1, country)
+    l2_dist = Locations.find_district_by_coords(lon, lat, 2, country)
+    l3_dist = Locations.find_district_by_coords(lon, lat, 3, country)
+
+    # 4. Compile attributes and apply the strict location changeset validation
+    enriched_attrs = %{
+      "street_address" => attrs["street_address"] || attrs["street"] || user.street_address,
+      "country" => country,
+      "state" => attrs["state"] || user.state,
+      "county" => clean_admin,
+      "city_id" => attrs["city_id"] || attrs["origin_city_id"] || user.city_id,
+      "district_l1_id" =>
+        (l1_dist && l1_dist.id) || attrs["district_l1_id"] || user.district_l1_id,
+      "district_l2_id" =>
+        (l2_dist && l2_dist.id) || attrs["district_l2_id"] || user.district_l2_id,
+      "district_l3_id" =>
+        (l3_dist && l3_dist.id) || attrs["district_l3_id"] || user.district_l3_id
+    }
+
+    user
+    |> User.political_location_changeset(enriched_attrs)
+    |> Repo.update()
+  end
+
+  def clear_political_location(user) do
+    user
+    |> Ecto.Changeset.change(%{
+      street_address: nil,
+      county: nil,
+      city_name: nil,
+      school_district_code: nil,
+      city_council_district_code: nil,
+      district_l1_id: nil,
+      district_l2_id: nil,
+      district_l3_id: nil,
+      city_id: nil,
+      state: nil
+    })
+    |> Repo.update()
+  end
 end

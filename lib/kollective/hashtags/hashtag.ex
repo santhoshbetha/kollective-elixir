@@ -10,6 +10,7 @@ defmodule Kollective.Hashtags.Hashtag do
   # TODO check later : linking to Post instead of Object, since hashtags are more post-centric in our design. We can always add a separate join table for objects if needed.
 
   schema "hashtags" do
+    # Caches downcase lowercase string keys (e.g. "grassroots")
     field :name, :string
 
     many_to_many :posts, Kollective.Posts.Post, join_through: "posts_hashtags"

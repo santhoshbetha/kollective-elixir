@@ -42,7 +42,7 @@ defmodule Kollective.Workers.EventStartWorker do
           target_type: "Event",
           # Save dynamic variables securely inside your single JSONB metadata column
           metadata: %{
-            event_title: event.name,
+            event_title: event.title,
             local_time: formatted_time,
             # Helps React parse specialized template icons
             sub_type: "event_starting_now"
@@ -51,7 +51,7 @@ defmodule Kollective.Workers.EventStartWorker do
         %{
           # Transient WebSocket properties read instantly by React Toast alert popups
           post_id: nil,
-          preview: "🚨 '#{event.name}' is starting now! (Time: #{formatted_time})"
+          preview: "🚨 '#{event.title}' is starting now! (Time: #{formatted_time})"
         }
       )
     end)
@@ -61,9 +61,15 @@ defmodule Kollective.Workers.EventStartWorker do
 
   @doc "Converts UTC start time to the event's local string"
   def local_time_string(event) do
-    event.start_time
-    |> DateTime.shift_zone!(event.timezone)
-    |> Calendar.strftime("%Y-%m-%d %I:%M %p")
+    timezone = event.timezone || "Etc/UTC"
+
+    case DateTime.shift_zone(event.start_time, timezone) do
+      {:ok, shifted_dt} ->
+        Calendar.strftime(shifted_dt, "%Y-%m-%d %I:%M %p")
+
+      _ ->
+        Calendar.strftime(event.start_time, "%Y-%m-%d %I:%M %p") <> " UTC"
+    end
   end
 end
 

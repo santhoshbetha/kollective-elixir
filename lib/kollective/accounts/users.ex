@@ -532,7 +532,7 @@ defmodule Kollective.Accounts.Users do
   end
 
   def load_user_districts(user) do
-    Repo.preload(user, [:district_l1, :district_l2, :district_l3, :origin_city])
+    Repo.preload(user, [:district_l1, :district_l2, :district_l3, :city])
   end
 
   def mark_feed_as_read(user) do
@@ -691,13 +691,105 @@ defmodule Kollective.Accounts.Users do
   Atomic transaction modifier pass to update a profile's verified political boundaries.
   """
   def update_user_districts(%Kollective.Accounts.User{} = user, attrs) do
+    state = attrs[:origin_state] || attrs["origin_state"]
+
+    l1_code = attrs[:district_l1] || attrs["district_l1"]
+    l2_code = attrs[:district_l2] || attrs["district_l2"]
+    l3_code = attrs[:district_l3] || attrs["district_l3"]
+
+    l1_id =
+      if l1_code,
+        do:
+          Map.get(
+            Kollective.Locations.Locations.get_or_create_district(1, state, l1_code) || %{},
+            :id
+          ),
+        else: nil
+
+    l2_id =
+      if l2_code,
+        do:
+          Map.get(
+            Kollective.Locations.Locations.get_or_create_district(2, state, l2_code) || %{},
+            :id
+          ),
+        else: nil
+
+    l3_id =
+      if l3_code,
+        do:
+          Map.get(
+            Kollective.Locations.Locations.get_or_create_district(3, state, l3_code) || %{},
+            :id
+          ),
+        else: nil
+
+    attrs =
+      attrs
+      |> Map.new(fn {k, v} -> {to_string(k), v} end)
+      |> Map.put("district_l1_id", l1_id)
+      |> Map.put("district_l2_id", l2_id)
+      |> Map.put("district_l3_id", l3_id)
+
     user
-    # Cast into your flat standalone columns natively to protect table sizes
-    |> Ecto.Changeset.cast(attrs, [:origin_state, :district_l1, :district_l2, :district_l3])
-    # Enforce state and tier-1 federal values to maintain core timeline visibility routing
-    |> Ecto.Changeset.validate_required([:origin_state, :district_l1])
+    |> Ecto.Changeset.cast(attrs, [
+      :origin_state,
+      :district_l1_id,
+      :district_l2_id,
+      :district_l3_id
+    ])
+    |> Ecto.Changeset.validate_required([:origin_state, :district_l1_id])
     |> Kollective.Repo.update()
   end
 
+  @doc """
+  Updates the user's geographical and political boundaries after address validation.
+  """
+  def update_user_political_bounds(%User{} = user, attrs) do
+    state = attrs[:state] || attrs["state"] || user.state
 
+    l1_code = attrs[:district_l1_code] || attrs["district_l1_code"]
+    l2_code = attrs[:district_l2_code] || attrs["district_l2_code"]
+    l3_code = attrs[:district_l3_code] || attrs["district_l3_code"]
+
+    l1_id =
+      if l1_code,
+        do:
+          Map.get(
+            Kollective.Locations.Locations.get_or_create_district(1, state, l1_code) || %{},
+            :id
+          ),
+        else: nil
+
+    l2_id =
+      if l2_code,
+        do:
+          Map.get(
+            Kollective.Locations.Locations.get_or_create_district(2, state, l2_code) || %{},
+            :id
+          ),
+        else: nil
+
+    l3_id =
+      if l3_code,
+        do:
+          Map.get(
+            Kollective.Locations.Locations.get_or_create_district(3, state, l3_code) || %{},
+            :id
+          ),
+        else: nil
+
+    attrs =
+      attrs
+      |> Map.new(fn {k, v} -> {to_string(k), v} end)
+      |> Map.put("district_l1_id", l1_id)
+      |> Map.put("district_l2_id", l2_id)
+      |> Map.put("district_l3_id", l3_id)
+      |> Map.put("origin_state", state)
+      |> Map.put("state", state)
+
+    user
+    |> User.political_bounds_changeset(attrs)
+    |> Repo.update()
+  end
 end

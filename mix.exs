@@ -14,7 +14,8 @@ defmodule Kollective.MixProject do
       listeners: [Phoenix.CodeReloader],
       dialyzer: [
         plt_add_apps: [:ex_unit, :mix],
-        plt_file: {:no_warn, "priv/plts/dialyzer.plt"} # Optional: keeps PLT inside project folders
+        # Optional: keeps PLT inside project folders
+        plt_file: {:no_warn, "priv/plts/dialyzer.plt"}
       ]
     ]
   end
@@ -80,6 +81,8 @@ defmodule Kollective.MixProject do
       {:blurhash, "~> 2.0"},
       # Optional: Helps convert images to raw pixels
       {:mogrify, "~> 0.9"},
+      {:mox, "~> 1.0", only: :test},
+      {:ex_machina, "~> 2.4", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]

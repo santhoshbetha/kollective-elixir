@@ -5,10 +5,23 @@ defmodule KollectiveWeb.UserSocket do
   ## Channels
   channel "user:*", KollectiveWeb.UserChannel
   channel "user:public", KollectiveWeb.UserPublicChannel
+  channel "user_notifications:*", KollectiveWeb.NotificationChannel
+
   channel "feed:*", KollectiveWeb.FeedChannel
   channel "voice_alert", KollectiveWeb.FeedChannel
   channel "event:*", KollectiveWeb.FeedChannel
   channel "timeline:*", KollectiveWeb.FeedChannel
+
+  # handle real-time post comment threads
+  channel "post_details:*", KollectiveWeb.PostChannel
+
+  channel "poll:*", KollectiveWeb.PollChannel
+
+  # Routes dynamic chat rooms to the EventChatChannel
+  channel "event_chat:*", KollectiveWeb.EventChatChannel
+
+  # Route to manage secure direct message streams
+  channel "conversation:*", KollectiveWeb.ConversationChannel
 
   # Socket params are passed from the client and can
   # be used to verify and authenticate a user. After
@@ -52,6 +65,6 @@ defmodule KollectiveWeb.UserSocket do
   #
   # Returning `nil` makes this socket anonymous.
   @impl true
-  # This allows us to target a specific user by their UUID
-  def id(socket), do: "users_socket:#{socket.assigns.current_user.id}"
+  # This allows us to target a specific user by their ULID
+  def id(socket), do: "users_socket:#{socket.assigns.user_id}"
 end

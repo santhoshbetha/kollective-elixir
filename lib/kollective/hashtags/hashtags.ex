@@ -98,6 +98,4 @@ defmodule Kollective.Hashtags.Hashtags do
       conflict_target: [:hashtag_id, :bucket]
     )
   end
-
-
 end

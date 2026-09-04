@@ -12,8 +12,10 @@ defmodule Kollective.Repo.Migrations.CreateUserVouches do
 
       # 3. Precise Local Boundary Structural Cache Parameters [INDEX]
       add :origin_state, :string, null: false
-      add :matched_tier, :string, null: false    # Constrained to string options: "l1", "l2", "l3" [INDEX]
-      add :district_value, :string, null: false # Caches the actual string identifier (e.g. "12", "04") [INDEX]
+      # Constrained to string options: "l1", "l2", "l3" [INDEX]
+      add :matched_tier, :string, null: false
+      # Caches the actual string identifier (e.g. "12", "04") [INDEX]
+      add :district_value, :string, null: false
 
       timestamps(type: :utc_datetime)
     end
@@ -22,7 +24,8 @@ defmodule Kollective.Repo.Migrations.CreateUserVouches do
     # Enforces that a resident can only verify a specific neighbor ONCE per political level [INDEX].
     # This acts as an iron-clad security shield blocking duplicate sybil-vouching fraud natively [INDEX].
     create unique_index(:user_vouches, [:voucher_id, :vouchee_id, :origin_state, :matched_tier],
-      name: :vouches_voucher_vouchee_tier_unique_index)
+             name: :vouches_voucher_vouchee_tier_unique_index
+           )
 
     # ─── DISCOVERY FEEDS LOOKUP ACCELERATOR ───
     # Index-driven scanning ensures verification tallies compute in under 0.01ms [INDEX]

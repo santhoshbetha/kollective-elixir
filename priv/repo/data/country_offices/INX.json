@@ -1,0 +1,122 @@
+{
+    "country_code": "IN",
+    "offices": [
+        {
+            "id": "mp_lok_sabha",
+            "category": "Federal",
+            "title": "Member of Parliament, Lok Sabha (MP)",
+            "scope": "national_district",
+            "desc": "Drafts central laws, codes frameworks, and reviews national assembly policies.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "mla_vidhan_sabha",
+            "category": "State Lower",
+            "title": "Member of Legislative Assembly (MLA)",
+            "scope": "state_district",
+            "desc": "Direct provincial representative working inside legislative assemblies.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "mlc",
+            "category": "State Upper",
+            "title": "Member of Legislative Council (MLC)",
+            "scope": "state_district",
+            "desc": "Upper tier review panels active strictly within bicameral states.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "sarpanch",
+            "category": "Governance",
+            "title": "Sarpanch (Gram Panchayat Head)",
+            "scope": "village",
+            "desc": "Leads the village council, implements rural development schemes, and manages local resources.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "gram_panchayat_member",
+            "category": "Governance",
+            "title": "Gram Panchayat Ward Member (Panch)",
+            "scope": "village",
+            "desc": "Directly elected representative of a village ward. Votes on local development plans and beneficiary selection for welfare schemes.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "panchayat_samiti_member",
+            "category": "Governance",
+            "title": "Panchayat Samiti Member",
+            "scope": "block",
+            "desc": "Represents a block-level constituency and coordinates developmental plans across multiple villages.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "block_pramukh",
+            "category": "Governance",
+            "title": "Block Pramukh (Panchayat Samiti President)",
+            "scope": "block",
+            "desc": "Executive head of the intermediate block council who approves and allocates rural funding.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "zila_parishad_member",
+            "category": "Governance",
+            "title": "Zila Parishad Member (District Councillor)",
+            "scope": "district",
+            "desc": "Represents district-level territorial constituencies and shapes macro rural development policies.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "zila_parishad_chairperson",
+            "category": "Governance",
+            "title": "Zila Parishad Chairperson / President",
+            "scope": "district",
+            "desc": "Chief executive of district rural governance, overseeing substantial state and federal development funds.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "municipal_corporator",
+            "category": "Governance",
+            "title": "Municipal Corporator / Councillor",
+            "scope": "city",
+            "desc": "Directly elected ward representative who votes on city budgets, zoning, and urban public health.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "mayor",
+            "category": "Governance",
+            "title": "Mayor",
+            "scope": "city",
+            "desc": "Ceremonial or executive head of a large city corporation presiding over municipal general body meetings.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "nagar_panchayat_chairperson",
+            "category": "Governance",
+            "title": "Nagar Panchayat Chairperson",
+            "scope": "town",
+            "desc": "Heads governance for semi-urban transitional areas, directing local sanitation and street infrastructure.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "adc_member",
+            "category": "Governance",
+            "title": "Autonomous District Council Member",
+            "scope": "district",
+            "desc": "Elected in specialized tribal zones under the 6th Schedule to legislate on land, custom, and local culture.",
+            "state_restriction": null,
+            "district_restriction": null
+        }
+    ]
+}

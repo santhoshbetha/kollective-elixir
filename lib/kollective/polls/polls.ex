@@ -3,9 +3,10 @@ defmodule Kollective.Polls.Polls do
   alias Kollective.Repo
 
   alias Ecto.Multi
-  alias Kollective.Repo
   alias Kollective.Polls.{Poll, PollOption, PollVote}
 
+  # NEW: Fetch a single poll and attach user-specific "I voted" data
+  # GET "/polls/:id" uses this
   def get_poll_results(poll_id, user_id \\ nil) do
     Poll
     |> where([p], p.id == ^poll_id)
@@ -21,6 +22,8 @@ defmodule Kollective.Polls.Polls do
     end
   end
 
+  # NEW: Helper to attach "Has the current user voted on this?"
+  # Used by the API and Socket
   defp populate_user_vote_data(poll, nil), do: poll
 
   defp populate_user_vote_data(poll, user_id) do
@@ -35,9 +38,8 @@ defmodule Kollective.Polls.Polls do
     %{poll | voted: not Enum.empty?(own_votes), own_votes: own_votes}
   end
 
-  # Real-Time Push logic to update these percentages in React as soon as a new vote is cast?
-  # Update your cast_vote function (or wherever you handle the successful Repo.transaction)
-  # to push the updated results.
+  # NEW: Send updates to Phoenix Channels so the UI updates instantly
+  # Place this at the bottom of lib/kollective/polls/polls.ex
   defp broadcast_poll_update(poll_id) do
     # Fetch fresh results (without a specific user_id so it's a generic update)
     poll = get_poll_results(poll_id)
@@ -52,12 +54,14 @@ defmodule Kollective.Polls.Polls do
     })
   end
 
+  # POST /polls/:poll_id/votes uses this
   def cast_votes(user_id, poll_id, option_ids) when is_list(option_ids) do
     poll = Repo.get!(Poll, poll_id)
 
     cond do
       # 1. Check Expiry
-      DateTime.compare(DateTime.utc_now(), poll.expires_at) == :gt ->
+      # 🟢 FIXED: Zone-safe timestamp comparison pattern
+      DateTime.diff(DateTime.utc_now(), poll.expires_at) > 0 ->
         {:error, :poll_expired}
 
       # 2. Check if already voted
@@ -74,14 +78,23 @@ defmodule Kollective.Polls.Polls do
   end
 
   defp execute_voting_transaction(user_id, poll_id, option_ids) do
+    # 🟢 FIXED: Truncate to second for structural database accuracy
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
     Multi.new()
     # 1. Insert vote records for all selected options
-
     |> Multi.insert_all(
       :insert_votes,
       PollVote,
       Enum.map(option_ids, fn id ->
-        %{user_id: user_id, poll_id: poll_id, option_id: id, inserted_at: DateTime.utc_now()}
+        %{
+          user_id: user_id,
+          poll_id: poll_id,
+          option_id: id,
+          inserted_at: now,
+          # 🟢 FIXED: Pad missing timestamp row element to prevent DB constraint crashes
+          updated_at: now
+        }
       end)
     )
 

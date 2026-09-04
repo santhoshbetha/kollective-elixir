@@ -1,0 +1,293 @@
+{
+    "country_code": "US",
+    "offices": [
+        {
+            "id": "congress",
+            "category": "Federal",
+            "title": "Member of Congress (US House)",
+            "scope": "national_district",
+            "term_years": 2,
+            "qualifications": {
+                "min_age": 25,
+                "citizenship_years": 7
+            },
+            "run_note": null,
+            "desc": "Passes national legislation, overrides vetoes, and manages federal budget line-items.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "us_senator",
+            "category": "Legislative",
+            "title": "US Senator",
+            "scope": "national",
+            "term_years": 6,
+            "qualifications": {
+                "min_age": 30
+            },
+            "run_note": null,
+            "desc": "Represents the state at the federal legislature tier structure.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "state_senate",
+            "category": "State Upper",
+            "title": "State Senate (Upper Chamber)",
+            "scope": "state_district",
+            "term_years": 4,
+            "qualifications": {
+                "min_age": 18
+            },
+            "run_note": null,
+            "desc": "Presides over statewide legislation, confirms appointments, and audits governor bills.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "state_rep",
+            "category": "State Lower",
+            "title": "State Assembly Member (Lower Chamber)",
+            "scope": "state_district",
+            "term_years": 2,
+            "qualifications": {
+                "min_age": 21
+            },
+            "run_note": null,
+            "desc": "Drafts regional legislation, introduces budget codes, and sits as the direct voice of your house district.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "state_auditor",
+            "category": "Finance",
+            "title": "State Auditor / Comptroller",
+            "level": "State",
+            "desc": "",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "state_treasurer",
+            "category": "Finance",
+            "title": "State Treasurer",
+            "level": "State",
+            "desc": "",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "sec_state",
+            "category": "Executive",
+            "title": "Secretary of State",
+            "level": "State",
+            "desc": "",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "attorney_general",
+            "category": "Executive",
+            "title": "Attorney General",
+            "level": "State",
+            "desc": "",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "lt_governor",
+            "category": "Executive",
+            "title": "Lieutenant Governor",
+            "level": "State",
+            "desc": "",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "governor",
+            "category": "Executive",
+            "title": "Governor",
+            "level": "State",
+            "desc": "",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "school_board",
+            "category": "Education",
+            "title": "School Board Member",
+            "scope": "county",
+            "term_years": 4,
+            "qualifications": {
+                "min_age": 18
+            },
+            "run_note": "Excellent entry-level position for citizens looking to get involved in local public governance.",
+            "desc": "Oversees school district policies, budgets, and curriculum frameworks.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "sheriff",
+            "category": "Criminal Justice",
+            "title": "County Sheriff",
+            "scope": "county",
+            "term_years": 4,
+            "qualifications": {
+                "min_age": 21,
+                "certifications": "Peace Officer License"
+            },
+            "run_note": "A powerful local role that often sets law enforcement priorities for the whole county.",
+            "desc": "Manages local jails, sets arrest priorities, and guides county law enforcement.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "prosecutor",
+            "category": "Criminal Justice",
+            "title": "District Attorney / Prosecutor",
+            "scope": "county",
+            "term_years": 4,
+            "qualifications": {
+                "bar_status": "Active Law License"
+            },
+            "run_note": "Requires a valid legal background and active state bar membership.",
+            "desc": "Wields broad discretion over charges, bail terms, and sentencing recommendations.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "coroner",
+            "category": "Criminal Justice",
+            "title": "County Coroner",
+            "scope": "county",
+            "term_years": 4,
+            "qualifications": {
+                "min_age": 18
+            },
+            "run_note": "Varies by county; some jurisdictions require medical degree licenses while others do not.",
+            "desc": "Oversees localized forensic death investigations and autopsy audits.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "trial_judge",
+            "category": "Judiciary",
+            "title": "Local Trial Court Judge",
+            "scope": "county",
+            "term_years": 6,
+            "qualifications": {
+                "bar_status": "Active Law License"
+            },
+            "run_note": "Presides over local civil, criminal, family, or landlord-tenant case dockets.",
+            "desc": "Presides over civil, criminal, family, or landlord-tenant case dockets.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "city_council",
+            "category": "Governance",
+            "title": "City Council Member",
+            "scope": "city",
+            "term_years": 2,
+            "qualifications": {
+                "min_age": 18
+            },
+            "run_note": "Great position for local community organizers and grassroots neighborhood activists.",
+            "desc": "Approves municipal budgets, passes local ordinances, and regulates zoning laws.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "mayor",
+            "category": "Governance",
+            "title": "Mayor (Executive)",
+            "scope": "city",
+            "term_years": 4,
+            "qualifications": {
+                "min_age": 18
+            },
+            "run_note": "Acts as the executive leader of the city administration. Manages municipal departments.",
+            "desc": "Appoints department heads (police, sanitation) and manages daily city operations.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "county_supervisor",
+            "category": "Governance",
+            "title": "County Board Supervisor / Commissioner",
+            "scope": "county",
+            "term_years": 4,
+            "qualifications": {
+                "min_age": 18
+            },
+            "run_note": "Manages county property assets, public road maintenance funds, and overall budget allocations.",
+            "desc": "Levies county taxes, issues service contracts, and administers elections.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "public_works",
+            "category": "Infrastructure",
+            "title": "Public Works / Water Commissioner",
+            "scope": "city",
+            "term_years": 4,
+            "qualifications": {
+                "min_age": 18
+            },
+            "run_note": "Focuses heavily on regional resource distribution and civil public utilities.",
+            "desc": "Manages utility rates, water supply, sewage, and public environmental infrastructure.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "comptroller",
+            "category": "Finance",
+            "title": "City Comptroller",
+            "scope": "city",
+            "term_years": 4,
+            "qualifications": {
+                "min_age": 25
+            },
+            "run_note": "Acts as the financial watchdog for city agency budgets and contract allocations.",
+            "desc": "Chief financial officer auditing local agencies, contracts, and municipal pensions.",
+            "state_restriction": null,
+            "district_restriction": null
+        },
+        {
+            "id": "ne_unicameral_senator",
+            "category": "State Legislative",
+            "title": "State Senator (Unicameral)",
+            "scope": "state_district",
+            "term_years": 4,
+            "state_restriction": "NE",
+            "desc": "Serves in the nation's only single-chamber nonpartisan state legislature."
+        },
+        {
+            "id": "tx_commissioner",
+            "category": "County Executive",
+            "title": "County Commissioner",
+            "scope": "county",
+            "desc": "Levies county property taxes and administers local precinct operations.",
+            "state_restriction": "TX"
+        },
+        {
+            "id": "tx_county_judge",
+            "category": "County Executive",
+            "title": "County Judge",
+            "scope": "county",
+            "term_years": 4,
+            "state_restriction": "TX",
+            "run_note": "A powerful executive role in Texas. Despite the name, a law degree is not required.",
+            "desc": "Presides over the County Commissioners Court and manages disaster declarations."
+        },
+        {
+            "id": "parish_president",
+            "category": "County Executive",
+            "title": "Parish President",
+            "scope": "county",
+            "term_years": 4,
+            "state_restriction": "LA",
+            "desc": "Serves as the chief executive head of Louisiana's parish operational grids."
+        }
+    ]
+}

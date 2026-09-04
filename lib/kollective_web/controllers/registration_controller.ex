@@ -31,7 +31,7 @@ defmodule KollectiveWeb.RegistrationController do
 
       {:error, %Ecto.Changeset{} = changeset} ->
         # 3. Formats database validation validation errors into readable JSON key/value pairs
-        errors = Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
+        errors = Ecto.Changeset.traverse_errors(changeset, &translate_error/1)
 
         conn
         # 422

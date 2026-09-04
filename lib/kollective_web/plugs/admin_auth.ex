@@ -11,7 +11,7 @@ defmodule KollectiveWeb.Plugs.AdminAuth do
 
   def call(conn, _opts) do
     case conn.assigns[:current_user] do
-      %Kollective.Accounts.User{role: "admin"} ->
+      %Kollective.Accounts.User{role: :admin} ->
         # Access granted. Proceed downstream safely.
         conn
 

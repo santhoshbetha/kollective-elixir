@@ -11,7 +11,7 @@ defmodule KollectiveWeb.ChangesetJSON do
     %{errors: Ecto.Changeset.traverse_errors(changeset, &translate_error/1)}
   end
 
-  defp translate_error({msg, opts}) do
+  def translate_error({msg, opts}) do
     # If Gettext is loaded in your system architecture, it replaces strings natively
     if Code.ensure_loaded?(KollectiveWeb.Gettext) do
       # Handles pluralization interpolations automatically

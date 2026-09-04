@@ -1,4 +1,4 @@
-defmodule YourApp.Repo.Migrations.CreateUserRelationships do
+defmodule Kollective.Repo.Migrations.CreateUserRelationships do
   use Ecto.Migration
 
   def change do

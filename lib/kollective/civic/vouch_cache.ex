@@ -16,8 +16,11 @@ defmodule Kollective.Civic.VouchCache do
   Generates a cryptographically secure, single-use token valid for 60 seconds.
   """
   def generate_token(user_id) do
-    secure_token = "vouch_tmp_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    expires_at = DateTime.add(DateTime.utc_now(), @ttl_seconds, :second)
+    secure_token =
+      "vouch_tmp_" <> Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+    expires_at =
+      DateTime.add(DateTime.utc_now(), @ttl_seconds, :second) |> DateTime.truncate(:second)
 
     # 1. Write to Postgres immediately so all nodes can see it
     %TokenSchema{token: secure_token, user_id: user_id, expires_at: expires_at}
@@ -37,10 +40,17 @@ defmodule Kollective.Civic.VouchCache do
     # 1. Check local Cachex memory first (Fast Path)
     case Cachex.take(@cache_name, token) do
       {:ok, user_id} when not is_nil(user_id) ->
-        # Found locally! Now delete it from Postgres asynchronously so it can't be replayed
-        Task.start(fn ->
-          from(t in TokenSchema, where: t.token == ^token) |> Repo.delete_all()
-        end)
+        # Define the query payload cleanly
+        delete_query = from(t in TokenSchema, where: t.token == ^token)
+
+        # 🚀 FIX: Execute synchronously in testing to protect the Ecto Sandbox connection pool.
+        # Spawns an unlinked asynchronous background task safely in production only.
+        if Mix.env() == :test do
+          Repo.delete_all(delete_query)
+        else
+          Task.start(fn -> Repo.delete_all(delete_query) end)
+        end
+
         {:ok, user_id}
 
       _fallback ->
@@ -62,9 +72,9 @@ defmodule Kollective.Civic.VouchCache do
           end
         end)
         |> case do
-             {:ok, user_id} -> {:ok, user_id}
-             {:error, reason} -> {:error, reason}
-           end
+          {:ok, user_id} -> {:ok, user_id}
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 end

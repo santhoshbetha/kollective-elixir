@@ -29,6 +29,8 @@ config :kollective,
     sample_binary_id: "01H2E3456789ABCDEFGHJKMNPQ"
   ]
 
+config :kollective, :http_client, Kollective.HTTPClient.Impl
+
 # to ensure binary_id is used by default in all your schemas
 config :kollective, Kollective.Repo,
   migration_primary_key: [name: :id, type: :binary_id, autogenerate: false],
@@ -38,7 +40,13 @@ config :geo, :ecto_repos, [Kollective.Repo]
 
 config :kollective, Oban,
   repo: Kollective.Repo,
-  queues: [default: 10, maintenance: 5, notifications: 10, media_processing: 10],
+  queues: [
+    default: 10,
+    maintenance: 5,
+    # 🔔 High-concurrency queue tailored for mass voice broadcasts & alerts
+    notifications: [limit: 50],
+    media_processing: 10
+  ],
   plugins: [
     # 1. Essential: Cleans up Oban's own internal job history (keeping 24h of data)
     # Recommended: cleans up Oban's own job table
@@ -55,11 +63,10 @@ config :kollective, Oban,
        # Runs at exactly 02:00 every single night
        {"0 2 * * *", Kollective.Workers.ReconcileCountersWorker},
        # Evaluates database checks every single midnight automatically
-       {"0 0 * * *", Kollective.Workers.ScholarCronOrchestrator},
+       # {"0 0 * * *", Kollective.Workers.ScholarCronOrchestrator},
        # Runs automatically at 12:05 AM every single night
-       {"5 0 * * *", Kollective.Workers.OrganizationProbationWorker},
-       {"0 0 * * *", Kollective.Workers.ScholarCronOrchestrator},
-       {"0 0 * * *", Kollective.Workers.JournalistCronOrchestrator},
+       # {"5 0 * * *", Kollective.Workers.OrganizationProbationWorker},
+       # {"0 0 * * *", Kollective.Workers.JournalistCronOrchestrator},
 
        # Runs every night at midnight to delete expired, unconsumed rows
        {"0 0 * * *", Kollective.Workers.DailyPrunerWorker}
@@ -87,6 +94,46 @@ config :kollective, KollectiveWeb.Endpoint,
 # For production it's recommended to configure a different adapter
 # at the `config/runtime.exs`.
 config :kollective, Kollective.Mailer, adapter: Swoosh.Adapters.Local
+
+# -------------------------------------------------------------------
+# Application Architecture Bridge (Application Layer)
+# -------------------------------------------------------------------
+# Registers which structural module handles your global app calls
+# Configures your application's internal wrapper module (Kollective.External.GeospatialService).
+# Instructs this wrapper to route its global requests to the Nominatim provider.
+config :kollective, Kollective.External.GeospatialService, service: Geospatial.Providers.Nominatim
+
+# Creates an application-wide shortcut atom (:geospatial_client).
+# Allows you to call Application.get_env(:kollective, :geospatial_client) in the code to fetch the service module dynamically.
+# This is useful for making your code more flexible and easier to test.
+# This makes it easy to swap out the geospatial service during tests.
+config :kollective, :geospatial_client, Kollective.External.GeospatialService
+
+# -------------------------------------------------------------------
+# Third-Party Library Configuration
+# -------------------------------------------------------------------
+# Configures the third-party Hex provider library explicitly
+# Configures an external dependency library named :geospatial
+# Explicitly tells that library's core system to use Nominatim as its active engine.
+config :geospatial, Geospatial.Service, service: Geospatial.Providers.Nominatim
+
+# Sets the specific connection details for the Nominatim provider.
+# Nominatim provides open-source geocoding services based on OpenStreetMap data.
+config :geospatial, Geospatial.Providers.Nominatim,
+  endpoint: "https://nominatim.openstreetmap.org",
+  api_key: nil
+
+# -------------------------------------------------------------------
+# A custom HTTP configuration for Nominatim requests
+# -------------------------------------------------------------------
+config :geospatial, Geospatial.HTTP,
+  user_agent: fn -> "KollectivePoliticalPlatform/1.0 (admin@kollective.app)" end
+
+# Configures global network headers enforced system-wide by the geospatial runtime
+config :geospatial, :headers, [
+  {"user-agent", "KollectivePoliticalPlatform/1.0 (admin@kollective.app)"},
+  {"accept-language", "en"}
+]
 
 # Configures Elixir's Logger
 config :logger, :default_formatter,

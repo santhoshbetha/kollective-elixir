@@ -51,6 +51,32 @@ defmodule Kollective.Workers.SecurityAlertWorker do
     end
   end
 
+  def perform(%Oban.Job{
+        args: %{"type" => "hard_ban_attempt", "user_id" => user_id, "ip" => ip, "notes" => notes}
+      }) do
+    user = Accounts.get_user!(user_id)
+
+    subject = "SECURITY ALERT: Hard-Ban Attempt"
+
+    body = """
+    A user attempted to submit content with prohibited language.
+
+    User: #{user.username} (ID: #{user.id})
+    IP Address: #{ip}
+    Notes: #{notes}
+    Action Taken: Request rejected.
+    """
+
+    case Mailer.send_admin_alert(subject, body) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("Failed to send security alert: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
   def perform(%Oban.Job{args: %{"type" => "aggressive_spam", "ip" => ip}}) do
     # Logic for IP-based blacklisting alerts
     subject = "🛡️ SECURITY: IP Blacklisted"

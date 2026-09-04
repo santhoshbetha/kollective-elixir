@@ -11,6 +11,11 @@ defmodule Kollective.Locations.PoliticalDistrict do
     # e.g., "IN" or "US"
     field :country, :string
 
+    field :external_id, :string
+
+    # Native PostGIS geometry field type
+    field :geom, Geo.PostGIS.Geometry
+
     # The "Self-Join"
     belongs_to :parent, Kollective.Locations.PoliticalDistrict
 
@@ -18,6 +23,12 @@ defmodule Kollective.Locations.PoliticalDistrict do
     has_many :sub_districts, Kollective.Locations.PoliticalDistrict, foreign_key: :parent_id
 
     timestamps()
+  end
+
+  def changeset(district, attrs) do
+    district
+    |> cast(attrs, [:name, :level, :country, :external_id, :state, :geom, :parent_id])
+    |> validate_required([:name, :level, :country, :external_id, :geom])
   end
 end
 

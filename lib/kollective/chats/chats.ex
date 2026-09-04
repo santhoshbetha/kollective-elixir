@@ -64,9 +64,9 @@ defmodule Kollective.Chats.Chats do
       on: p.conversation_id == c.id,
       where: p.user_id == ^user_id,
       # Preload the messages and the OTHER participants (not me)
-      preload: [messages: ^from(m in Message, order_by: [desc: m.inserted_at], limit: 1)],
+      preload: [messages: ^from(m in Message, order_by: [desc: m.id], limit: 1)],
       preload: [participants: :user],
-      order_by: [desc: c.updated_at]
+      order_by: [desc: c.id]
   end
 
   # "Unread Badges" for specific conversations using the last_read_at field in the Participant schema
@@ -137,7 +137,7 @@ defmodule Kollective.Chats.Chats do
     messages =
       from(m in Message,
         where: m.conversation_id == ^conversation_id,
-        order_by: [asc: m.inserted_at]
+        order_by: [asc: m.id]
       )
       |> Repo.all()
 
@@ -170,5 +170,46 @@ defmodule Kollective.Chats.Chats do
       set: [updated_at: DateTime.utc_now()]
     )
     |> Repo.transaction()
+  end
+
+  @doc """
+  Fetches a single page of historical messages for a conversation thread using cursor pagination.
+  """
+  def list_messages_cursor(conversation_id, current_user_id, opts \\ []) do
+    limit = Keyword.get(opts, :limit, 20)
+    before_id = Keyword.get(opts, :before_id)
+
+    # 1. Fetch the other participant's last read timestamp for UI checkmarks
+    other_last_read =
+      from(p in Participant,
+        where: p.conversation_id == ^conversation_id and p.user_id != ^current_user_id,
+        select: p.last_read_at
+      )
+      |> Repo.one()
+
+    # 2. Build the base query ordered descending to catch newest messages first
+    base_query =
+      from(m in Message,
+        where: m.conversation_id == ^conversation_id,
+        # ID order naturally mirrors chronological entry order
+        order_by: [desc: m.id],
+        limit: ^limit
+      )
+
+    # 3. Apply the cursor filter if 'before_id' is supplied by the React UI
+    query =
+      if before_id do
+        from(m in base_query, where: m.id < ^before_id)
+      else
+        base_query
+      end
+
+    # 4. Fetch records and reverse them so they flow top-to-bottom chronologically in chat
+    messages =
+      query
+      |> Repo.all()
+      |> Enum.reverse()
+
+    {messages, other_last_read}
   end
 end

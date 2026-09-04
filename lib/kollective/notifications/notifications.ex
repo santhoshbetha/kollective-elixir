@@ -16,6 +16,9 @@ defmodule Kollective.Notifications.Notifications do
   and checks user 'notification_mute' rules before executing database inserts or socket broadcasts.
   """
   def notify(target_user_id, actor_id, type, attrs \\ %{}, data_payload \\ %{}) do
+    target_user_id = cast_ulid(target_user_id)
+    actor_id = cast_ulid(actor_id)
+
     # 1. THE "SILENCER": Has the recipient muted notifications from this specific actor?
     is_muted =
       Repo.exists?(
@@ -42,10 +45,17 @@ defmodule Kollective.Notifications.Notifications do
           # Real-time "Debouncing" (Advanced)
           # To avoid spamming Phoenix Channels, you can "debounce" notifications. If 5 people like a post in 10 seconds,
           # you only send one broadcast to the channel saying "5 people liked your post."
-          Kollective.Notifications.Buffer.enqueue(target_user_id, type, notification.target_id)
+          if notification.target_id do
+            Kollective.Notifications.Buffer.enqueue(target_user_id, type, notification.target_id)
+          end
 
           # Fire immediate WebSocket to push the toast popup payload
-          broadcast_raw_toast(target_user_id, type, data_payload)
+          broadcast_raw_toast(
+            target_user_id,
+            type,
+            Map.put(data_payload, :actor_id, actor_id)
+          )
+
           {:ok, notification}
 
         error ->
@@ -55,6 +65,13 @@ defmodule Kollective.Notifications.Notifications do
       {:error, :muted_or_self_action}
     end
   end
+
+  defp cast_ulid(nil), do: nil
+
+  defp cast_ulid(binary) when is_binary(binary) and byte_size(binary) == 26,
+    do: Ecto.ULID.cast!(binary)
+
+  defp cast_ulid(val), do: val
 
   # Thread Muting (also known as Conversation Muting in Mastodon), you allow a user to silence all
   # , update your global notify logic. Before saving a notification or broadcasting
@@ -69,11 +86,9 @@ defmodule Kollective.Notifications.Notifications do
   def notify_reply(recipient_id, actor_id, %Post{} = post) do
     root_id = post.root_post_id || post.id
 
-    # Check if the recipient has actively muted this conversation thread
     is_thread_muted =
       Repo.exists?(
-        # Safely fallback to database string if schema is loose
-        from tm in "thread_mutes",
+        from tm in Kollective.Posts.ThreadMute,
           where: tm.user_id == ^recipient_id and tm.root_post_id == ^root_id
       )
 
@@ -100,10 +115,29 @@ defmodule Kollective.Notifications.Notifications do
   end
 
   # Private DB Insertion Routines
-  defp create_action_object_notification(attrs) do
-    %Notification{}
-    |> Notification.changeset(attrs)
-    |> Repo.insert()
+  def create_action_object_notification(attrs) do
+    # ⚡ FIXED: Cast any potential loose text strings into strict 16-byte binaries
+    # before passing them to the insert pipeline
+    attrs =
+      attrs
+      |> cast_ulid_key(:target_id)
+      |> cast_ulid_key(:post_id)
+      |> cast_ulid_key(:event_id)
+
+    %Kollective.Notifications.Notification{}
+    |> Kollective.Notifications.Notification.changeset(attrs)
+    |> Kollective.Repo.insert()
+  end
+
+  # Private helper to safely convert incoming text variables
+  defp cast_ulid_key(attrs, key) do
+    case Map.get(attrs, key) do
+      binary when is_binary(binary) and byte_size(binary) == 26 ->
+        Map.put(attrs, key, Ecto.ULID.cast!(binary))
+
+      _ ->
+        attrs
+    end
   end
 
   # ─── SECTION 2: READ & LIST RETRIEVALS (Infinite Scroll + RAM Grouping) ───
@@ -139,10 +173,6 @@ defmodule Kollective.Notifications.Notifications do
     }
   end
 
-  @doc """
-  Fetches historical items and aggregates identical user actions on the same target
-  in-memory using Enum.chunk_by/2 to prevent click-alert fatigue inside the React UI.
-  """
   def list_grouped_notifications(user_id) do
     Notification
     |> where([n], n.user_id == ^user_id)
@@ -150,8 +180,16 @@ defmodule Kollective.Notifications.Notifications do
     |> preload([:actor, :post])
     |> Repo.all()
     # Group identically-typed actions mapping to the same target node footprint
-    |> Enum.chunk_by(fn n -> {n.type, n.target_id} end)
+    |> Enum.group_by(fn n -> {n.type, n.target_id} end)
+    |> Map.values()
     |> Enum.map(&summarize_group/1)
+    |> Enum.sort_by(
+      fn
+        %Notification{} = n -> n.inserted_at
+        %{} = map -> map.inserted_at
+      end,
+      {:desc, DateTime}
+    )
   end
 
   defp summarize_group([first | _rest] = group) when length(group) > 1 do

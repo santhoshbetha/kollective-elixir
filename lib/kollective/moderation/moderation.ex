@@ -41,21 +41,22 @@ defmodule Kollective.Moderation.Moderation do
         preload: [:reporter, :target_user, :post, :event]
       )
 
-    # FIX: Implements strict look-ahead keyset cursor pagination matching your primary index [INDEX]
+    # FIX: Implements strict look-ahead keyset cursor pagination matching your primary index
     query =
       if cursor,
         do: from(r in base_query, where: r.id < ^cursor),
         else: base_query
 
     query
-    |> order_by([r], desc: r.id) # Chronological sorting driven natively via sortable Ecto.ULIDs [INDEX]
+    # Chronological sorting driven natively via sortable Ecto.ULIDs
+    |> order_by([r], desc: r.id)
     |> limit(^limit)
     |> Repo.all()
   end
 
   @doc """
   Fetches a specific report record by ID, raising an Ecto.NoResultsError if missing.
-  Hydrates all relevant structural dependencies cleanly for deep admin inspections [INDEX].
+  Hydrates all relevant structural dependencies cleanly for deep admin inspections .
   """
   def get_report!(id) do
     Report
@@ -156,7 +157,7 @@ defmodule Kollective.Moderation.Moderation do
     |> Repo.all()
   end
 
-  #@doc "Fetches a specific report record by ID, raising an Ecto.NoResultsError if missing."
+  # @doc "Fetches a specific report record by ID, raising an Ecto.NoResultsError if missing."
   # def get_report!(id) do
   #   Report
   #   |> preload([:reporter, :post, :event])
@@ -770,9 +771,7 @@ defmodule Kollective.Moderation.Moderation do
     # Store an un-duplicated list of words valid for a rolling 10-minute window
     updated_list = [word | current_list] |> Enum.uniq()
 
-    Cachex.put(:kollective_cache, cache_key, updated_list,
-      ttl: :timer.minutes(10)
-    )
+    Cachex.put(:kollective_cache, cache_key, updated_list, ttl: :timer.minutes(10))
   end
 
   @doc "Retrieves all words triggered by the user in this window for the Oban audit trail."

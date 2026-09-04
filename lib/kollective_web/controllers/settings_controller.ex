@@ -6,7 +6,7 @@ defmodule KollectiveWeb.SettingsController do
   import KollectiveWeb.UserAuth, only: [require_sudo_mode: 2]
 
   plug :require_sudo_mode
-  plug :assign_email_and_password_changesets  when action in [:edit, :update]
+  plug :assign_email_and_password_changesets when action in [:edit, :update]
 
   def edit(conn, _params) do
     user = conn.assigns.current_user

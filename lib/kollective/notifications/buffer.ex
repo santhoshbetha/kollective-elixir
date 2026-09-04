@@ -19,15 +19,20 @@ defmodule Kollective.Notifications.Buffer do
   """
   def enqueue(user_id, type, target_id) do
     # 1. Save this specific item hit to Postgres right away
-    %BufferedNotification{user_id: user_id, type: type, target_id: target_id}
+    %BufferedNotification{}
+    |> BufferedNotification.changeset(%{user_id: user_id, type: type, target_id: target_id})
     |> Repo.insert!()
+
+    # 🚀 FIX: Prevent 5-second delays during tests.
+    # This allows ExUnit to process and drain the buffer immediately.
+    delay = if Mix.env() == :test, do: 0, else: 5
 
     # 2. Instruct Oban to schedule a flush job 5 seconds into the future.
     # By using `unique: [...]`, if 100 hits come in from Node A and Node B,
     # Oban inserts exactly ONE job into the DB queue. The other 99 are ignored safely.
     %{user_id: user_id, type: type, target_id: target_id}
     |> __MODULE__.new(
-      scheduled_at: DateTime.add(DateTime.utc_now(), 5, :second),
+      scheduled_at: DateTime.add(DateTime.utc_now(), delay, :second),
       unique: [
         period: 5,
         fields: [:args],

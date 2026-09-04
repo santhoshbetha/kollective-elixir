@@ -14,7 +14,7 @@ defmodule Kollective.Events.Event do
 
     # Event details
     # Form Input: "Action Title"
-    field(:name, :string)
+    field(:title, :string)
     # Form Input: "Core Objective"
     field(:description, :string)
 
@@ -31,7 +31,7 @@ defmodule Kollective.Events.Event do
     # 3. Organization Identity Context Layer (Enables the "OFFICIAL" verification badge)
     belongs_to :organization, Kollective.Accounts.User,
       foreign_key: :organization_id,
-      type: :binary_id
+      type: Ecto.ULID
 
     # e.g., "America/New_York"
     field(:timezone, :string)
@@ -112,7 +112,7 @@ defmodule Kollective.Events.Event do
       :post_id,
       :created_by,
       # Form Input: "Action Title"
-      :name,
+      :title,
       # Form Input: "Core Objective"
       :description,
       # "protest", "town_hall", "rally", "meeting", "standard"
@@ -148,17 +148,17 @@ defmodule Kollective.Events.Event do
       :origin_district_l2,
       :origin_district_l3,
       # Standardized to match your unified schema foreign key relationship name
-      :city_id
+      :origin_city_id
     ])
     # 1. OPTIMIZATION: Extract capacity limits and stash them directly into the JSONB map buffer
     |> put_capacity_metadata(attrs)
 
     # 2. CORE INTEGRITY VALIDATIONS
     # Removed :city_id to support rural/unincorporated onboarding seamlessly
-    |> validate_required([:name, :created_by, :join_mode])
+    |> validate_required([:title, :created_by, :join_mode])
     |> validate_required([:description, :category, :participation_format, :start_time])
     |> validate_inclusion(:join_mode, @join_modes)
-    |> validate_length(:name, min: 1, max: 255)
+    |> validate_length(:title, min: 1, max: 255)
     |> validate_length(:description, max: 5000)
     |> validate_conditional_logistics()
 
@@ -172,7 +172,7 @@ defmodule Kollective.Events.Event do
     |> foreign_key_constraint(:post_id)
     |> foreign_key_constraint(:created_by)
     # Standard database safety constraints path
-    |> foreign_key_constraint(:city_id)
+    |> foreign_key_constraint(:origin_city_id)
 
     # 5. GEOSPATIAL POSTGIS COORDINATE CONVERTER
     # Automatically packs incoming lat/lng inputs into a single spatial POINT location column

@@ -93,19 +93,28 @@ defmodule KollectiveWeb.EventCommentController do
 
       {:ok, status} ->
         # 2. NORMAL CREATION PIPELINE
-        # Inject the soft-ban status into attributes ("published" or "pending")
+        # Inject the soft-ban status into attributes ("approved" or "pending")
+        db_status =
+          case status do
+            :published -> "approved"
+            other -> Atom.to_string(other)
+          end
+
         final_params =
           comment_params
           |> Map.put("event_id", event_id)
           |> Map.put("user_id", user.id)
-          |> Map.put("status", Atom.to_string(status))
+          |> Map.put("moderation_status", db_status)
 
         case Events.create_comment(final_params) do
           {:ok, comment} ->
             hydrated_comment = Repo.preload(comment, [:user])
 
             # 3. TRIGGER TEXT MENTIONS AND IMAGES SCANS IN THE BACKGROUND VIA OBAN
-            Task.start(fn -> Events.process_comment_mentions(hydrated_comment) end)
+            # Task.start(fn -> Events.process_comment_mentions(hydrated_comment) end)
+            %{"comment_id" => hydrated_comment.id}
+            |> Kollective.Workers.CommentMentionsWorker.new()
+            |> Oban.insert()
 
             if final_params["image_url"], do: enqueue_image_moderation_worker(hydrated_comment)
 
@@ -125,7 +134,10 @@ defmodule KollectiveWeb.EventCommentController do
           {:error, changeset} ->
             conn
             |> put_status(:unprocessable_entity)
-            |> json(%{error: "Failed to create comment.", details: changeset})
+            |> json(%{
+              error: "Failed to create comment.",
+              details: KollectiveWeb.ChangesetJSON.error(%{changeset: changeset})
+            })
         end
     end
   end
@@ -153,7 +165,7 @@ defmodule KollectiveWeb.EventCommentController do
       {:ok, {:ok, :liked}} ->
         json(conn, %{status: "success", message: "Comment liked successfully."})
 
-      {:ok, {:error, :already_liked}} ->
+      {:error, :already_liked} ->
         conn
         |> put_status(:conflict)
         |> json(%{error: "already_liked", message: "You have already liked this comment."})

@@ -1,3 +1,4 @@
+# lib/kollective_web/controllers/poll_controller.ex
 defmodule KollectiveWeb.PollController do
   use KollectiveWeb, :controller
   alias Kollective.Polls.Polls
@@ -13,7 +14,9 @@ defmodule KollectiveWeb.PollController do
         |> json(%{error: "Poll not found"})
 
       poll ->
-        render(conn, :show, poll: poll)
+        conn
+        |> put_status(:ok)
+        |> json(%{status: "success", poll: serialize_poll(poll)})
     end
   end
 
@@ -21,12 +24,13 @@ defmodule KollectiveWeb.PollController do
   def vote(conn, %{"poll_id" => poll_id, "choices" => choices}) do
     user_id = conn.assigns.current_user.id
 
-    # 'choices' is an array of option IDs [12, 14]
     case Polls.cast_votes(user_id, poll_id, choices) do
       {:ok, _result} ->
-        # Return the fresh results so React updates immediately
         poll = Polls.get_poll_results(poll_id, user_id)
-        render(conn, :show, poll: poll)
+
+        conn
+        |> put_status(:ok)
+        |> json(%{status: "success", poll: serialize_poll(poll)})
 
       {:error, :already_voted} ->
         conn
@@ -38,5 +42,13 @@ defmodule KollectiveWeb.PollController do
         |> put_status(:unprocessable_entity)
         |> json(%{error: "Poll has expired"})
     end
+  end
+
+  defp serialize_poll(poll) do
+    %{
+      id: to_string(poll.id),
+      expires_at: poll.expires_at,
+      expired: poll.expired
+    }
   end
 end

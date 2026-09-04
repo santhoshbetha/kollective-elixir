@@ -1,0 +1,17 @@
+{
+    "country_code": "DE",
+    "offices": [
+        {
+            "id": "bundestag",
+            "category": "Federal",
+            "title": "Bundestag Member",
+            "scope": "national_district"
+        },
+        {
+            "id": "landtag",
+            "category": "State",
+            "title": "Landtag Representative",
+            "scope": "state_district"
+        }
+    ]
+}

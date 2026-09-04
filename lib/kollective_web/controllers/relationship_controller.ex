@@ -70,5 +70,8 @@ defmodule KollectiveWeb.RelationshipController do
   end
 
   def toggle(conn, _),
-    do: conn |> put_status(:bad_request) |> json(%{error: "Prohibited configuration signature."})
+    do:
+      conn
+      |> put_status(:bad_request)
+      |> json(%{error: "Prohibited configuration signature."})
 end

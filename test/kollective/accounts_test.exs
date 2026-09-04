@@ -401,7 +401,12 @@ defmodule Kollective.AccountsTest do
 
     test "raises when unconfirmed user has password set" do
       user = unconfirmed_user_fixture()
-      {1, nil} = Repo.update_all(User, set: [hashed_password: "hashed"])
+
+      {1, nil} =
+        Repo.update_all(from(u in User, where: u.id == ^user.id),
+          set: [hashed_password: "hashed"]
+        )
+
       {encoded_token, _hashed_token} = generate_user_magic_link_token(user)
 
       assert_raise RuntimeError, ~r/magic link log in is not allowed/, fn ->
@@ -441,6 +446,25 @@ defmodule Kollective.AccountsTest do
   describe "inspect/2 for the User module" do
     test "does not include password" do
       refute inspect(%User{password: "123456"}) =~ "password: \"123456\""
+    end
+  end
+
+  describe "political_bounds_changeset/2" do
+    test "validates and casts political boundaries" do
+      user = user_fixture()
+
+      attrs = %{
+        street_address: "123 Main St",
+        county: "Travis",
+        school_district_code: "Austin ISD",
+        city_council_district_code: "District 9",
+        district_l1_id: Ecto.ULID.generate(),
+        district_l2_id: Ecto.ULID.generate(),
+        district_l3_id: Ecto.ULID.generate()
+      }
+
+      changeset = User.political_bounds_changeset(user, attrs)
+      assert changeset.valid?
     end
   end
 end

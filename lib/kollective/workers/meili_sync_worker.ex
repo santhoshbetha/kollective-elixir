@@ -15,7 +15,10 @@ defmodule Kollective.Workers.MeiliSyncWorker do
     }
 
     # Transmit asynchronously straight to your decoupled Meilisearch node
-    case Req.post("http://meilisearch:7700/indexes/users/documents", json: [document], headers: [{"Authorization", "Bearer SECRET_KEY"}]) do
+    case Req.post("http://meilisearch:7700/indexes/users/documents",
+           json: [document],
+           headers: [{"Authorization", "Bearer SECRET_KEY"}]
+         ) do
       {:ok, %{status: 202}} -> :ok
       _error_failure -> {:error, :sync_retry_triggered}
     end

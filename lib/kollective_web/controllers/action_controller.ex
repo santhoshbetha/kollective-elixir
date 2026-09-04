@@ -20,11 +20,15 @@ defmodule KollectiveWeb.ActionController do
         Enum.map(actions, fn item ->
           %{
             id: to_string(item.id),
-            name: item.name,
+            name: item.title,
             description: item.description,
             category: item.category,
             participation_format: item.participation_format,
-            start_time: Calendar.strftime(item.start_time, "%Y-%m-%dT%H:%M:%SZ"),
+            start_time:
+              if(item.start_time,
+                do: Calendar.strftime(item.start_time, "%Y-%m-%dT%H:%M:%SZ"),
+                else: nil
+              ),
             location_name: item.location_name,
             participants_count: item.participants_count,
             # Renders the "OFFICIAL" badge in React
@@ -46,7 +50,7 @@ defmodule KollectiveWeb.ActionController do
         |> json(%{
           status: "success",
           message: "Grassroots action successfully initiated onto local perimeters.",
-          data: %{id: to_string(action.id), name: action.name, category: action.category}
+          data: %{id: to_string(action.id), name: action.title, category: action.category}
         })
 
       {:error, changeset} ->

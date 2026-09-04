@@ -1,39 +1,31 @@
 defmodule Kollective.Schemas.ULIDType do
   @moduledoc """
-  Ecto type for ULIDs using Ecto.ULID from ecto_ulid_next.
+  Custom wrapper type delegating safely to Ecto.ULID.
   """
-
   use Ecto.Type
 
+  # Ecto.ULID treats the underlying DB field as a binary :uuid type
   @impl true
-  def type, do: :uuid
+  def type, do: Ecto.ULID.type()
 
   @impl true
-  def cast(binary) when is_binary(binary), do: {:ok, binary}
-  def cast(_), do: :error
+  def cast(value), do: Ecto.ULID.cast(value)
 
   @impl true
-  def load(binary) when is_binary(binary), do: {:ok, binary}
+  def load(value), do: Ecto.ULID.load(value)
 
   @impl true
-  def dump(binary) when is_binary(binary), do: {:ok, binary}
+  def dump(value), do: Ecto.ULID.dump(value)
 
   @impl true
-  def autogenerate do
-    # Use Ecto.ULID.generate() for ULID generation
-    Ecto.ULID.generate()
-  end
+  def autogenerate, do: Ecto.ULID.autogenerate()
 
   @impl true
-  def embed_as(_), do: :self
+  def embed_as(format), do: Ecto.ULID.embed_as(format)
 
   @impl true
-  def equal?(a, b), do: a == b
+  def equal?(a, b), do: Ecto.ULID.equal?(a, b)
 
-  def generate do
-    # Replace this with the actual underlying generation function of your library
-    # For example, if you use the 'ecto_ulid' library, it is usually Ecto.ULID.generate()
-    # if it's explicitly supported, or you generate a raw string value here.
-    Ecto.ULID.generate()
-  end
+  # Your helper function
+  def generate, do: Ecto.ULID.generate()
 end

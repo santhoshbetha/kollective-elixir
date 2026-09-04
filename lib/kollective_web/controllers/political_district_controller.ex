@@ -14,7 +14,8 @@ defmodule KollectiveWeb.PoliticalDistrictController do
         "state" -> Posts.list_state_feed(user, conn.params)
         "country" -> Posts.list_country_feed(user, conn.params)
         "world" -> Posts.list_world_feed(user, conn.params)
-        _ -> Posts.list_local_feed(user, conn.params)
+        # Default safe fallback
+        _ -> Posts.list_country_feed(user, params)
       end
 
     # Update timestamp silently whenever they fetch the first page
@@ -24,13 +25,16 @@ defmodule KollectiveWeb.PoliticalDistrictController do
       Kollective.Accounts.Users.mark_feed_as_read(user)
     end
 
-    render(conn, :news,
-      posts: page.entries,
-      meta: page,
-      # Pass this so PostJSON can use it
-      current_user: user,
-      district_id: id,
-      scope: scope
-    )
+    data =
+      KollectiveWeb.PostJSON.news(%{
+        posts: page.entries,
+        meta: page,
+        # Pass this so PostJSON can use it
+        current_user: user,
+        district_id: id,
+        scope: scope
+      })
+
+    json(conn, data)
   end
 end

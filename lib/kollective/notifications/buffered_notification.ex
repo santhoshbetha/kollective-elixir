@@ -3,9 +3,9 @@ defmodule Kollective.Notifications.BufferedNotification do
   import Ecto.Changeset
 
   schema "buffered_notifications" do
-    belongs_to :user, Kollective.Accounts.User
+    belongs_to :user, Kollective.Accounts.User, foreign_key: :user_id
     field :type, :string
-    belongs_to :target, Kollective.Accounts.User
+    field :target_id, Ecto.ULID
 
     timestamps()
   end

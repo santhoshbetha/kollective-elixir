@@ -14,8 +14,13 @@ defmodule KollectiveWeb.NotificationJSON do
       id: to_string(notification.id),
       # "mention", "reply", "follow", "upvote"
       type: notification.type,
-      is_read: notification.is_read || false,
-      preview_text: notification.preview || "interacted with your profile.",
+      is_read: notification.read || false,
+      preview_text:
+        Map.get(notification.metadata || %{}, "preview") ||
+          Map.get(notification.metadata || %{}, "message") ||
+          Map.get(notification.metadata || %{}, :preview) ||
+          Map.get(notification.metadata || %{}, :message) ||
+          "interacted with your profile.",
       inserted_at: Calendar.strftime(notification.inserted_at, "%Y-%m-%dT%H:%M:%SZ"),
 
       # Actor Metadata profile footprint

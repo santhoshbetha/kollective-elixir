@@ -13,6 +13,13 @@ defmodule Kollective.Polls.PollOption do
   end
 
   def changeset(option, attrs) do
+    attrs =
+      cond do
+        is_map(attrs) and Map.has_key?(attrs, "text") -> Map.put(attrs, "title", attrs["text"])
+        is_map(attrs) and Map.has_key?(attrs, :text) -> Map.put(attrs, "title", attrs[:text])
+        true -> attrs
+      end
+
     option
     |> cast(attrs, [:title])
     |> validate_required([:title])

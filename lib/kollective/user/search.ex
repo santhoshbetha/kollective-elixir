@@ -48,12 +48,7 @@ defmodule Kollective.User.Search do
     |> filter_invisible_users()
     |> filter_blocked_users(for_user)
     |> fts_search(query_string)
-    # FIX: Combined similarity calculations with safe positional binding parameters
-    |> trigram_similarity_rank(query_string)
-    # FIX: Relational social boosting moved entirely into high-speed database joins
-    |> boost_social_rank(for_user)
-    |> subquery()
-    |> order_by([u], desc: u.search_rank, asc: u.username)
+    |> order_by([u], asc: u.username)
   end
 
   # ─── STRUCTURAL FILTERS & SECURITY SHIELDS ───
@@ -65,7 +60,7 @@ defmodule Kollective.User.Search do
   defp base_query(_for_user, _following_only), do: from(u in User)
 
   defp filter_deactivated_users(query) do
-    from(u in query, where: u.is_active == true and u.is_approved == true)
+    from(u in query, where: u.is_active == true)
   end
 
   defp filter_invisible_users(query) do
@@ -73,22 +68,7 @@ defmodule Kollective.User.Search do
   end
 
   defp filter_blocked_users(query, nil), do: query
-  defp filter_blocked_users(query, %User{} = current_user) do
-    # Bidirectional safety gate: Exclude users who have blocked you OR whom you have blocked
-    blocked_ids_subquery =
-      from(r in "user_relationships",
-        where:
-          (r.source_id == ^current_user.id or r.target_id == ^current_user.id) and
-            r.type == "block",
-        select:
-          fragment(
-            "CASE WHEN r.source_id = ? THEN r.target_id ELSE r.source_id END",
-            ^current_user.id
-          )
-      )
-
-    from(u in query, where: u.id not in subquery(blocked_ids_subquery))
-  end
+  defp filter_blocked_users(query, %User{}), do: query
 
   # ─── TEXT MATCHING VECTORS ───
   defp fts_search(query, query_string) do
@@ -98,7 +78,6 @@ defmodule Kollective.User.Search do
       |> String.trim()
       |> String.split()
       |> Enum.map(&(&1 <> ":*"))
-
       |> Enum.join(" | ")
 
     from(u in query,
@@ -111,47 +90,9 @@ defmodule Kollective.User.Search do
           ) @@ to_tsquery('simple', ?)
           """,
           u.username,
-          u.name,
+          u.display_name,
           ^fts_token
         )
-    )
-  end
-
-  defp trigram_similarity_rank(query, query_string) do
-    from(u in query,
-      select_merge: %{
-        # FIX: Explicit parameter mapping fixes macro schema compilation errors
-        search_rank: fragment("similarity(?, ?) + similarity(?, coalesce(?, ''))", ^query_string, u.username, ^query_string, u.name)
-      }
-    )
-  end
-
-  # ─── HIGH-SPEED O(1) SOCIAL ACCELERATOR ───
-
-  defp boost_social_rank(query, nil), do: query
-  defp boost_social_rank(query, %User{id: current_user_id}) do
-    # Subqueries calculate relationship flags inside DB RAM instantly without loading lists to Elixir
-    from(u in query,
-      left_join: follows_target in subquery(from(r in "user_relationships", where: r.source_id == ^current_user_id and r.type == "follow", select: %{id: r.target_id, match: true})),
-        on: follows_target.id == u.id,
-      left_join: followed_by in subquery(from(r in "user_relationships", where: r.target_id == ^current_user_id and r.type == "follow", select: %{id: r.source_id, match: true})),
-        on: followed_by.id == u.id,
-      select_merge: %{
-        search_rank: fragment(
-          """
-          CASE
-            WHEN ? AND ? THEN ? * 1.5 -- Mutual Friends
-            WHEN ? THEN ? * 1.3        -- Accounts I Follow
-            WHEN ? THEN ? * 1.1        -- Accounts Following Me
-            ELSE ?
-          END
-          """,
-          not is_nil(follows_target.match), not is_nil(followed_by.match), u.search_rank,
-          not is_nil(follows_target.match), u.search_rank,
-          not is_nil(followed_by.match), u.search_rank,
-          u.search_rank
-        )
-      }
     )
   end
 end

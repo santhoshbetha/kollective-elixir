@@ -239,8 +239,6 @@ defmodule KollectiveWeb.BusinessController do
           %{
             id: to_string(item.id),
             name: item.name,
-            slug: item.slug,
-            bio: item.bio,
             category: item.category,
             sub_category: item.sub_category,
             type: item.type,
