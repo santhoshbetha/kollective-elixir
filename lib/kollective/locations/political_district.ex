@@ -27,7 +27,7 @@ defmodule Kollective.Locations.PoliticalDistrict do
 
   def changeset(district, attrs) do
     district
-    |> cast(attrs, [:name, :level, :country, :external_id, :state, :geom, :parent_id])
+    |> cast(attrs, [:name, :level, :country, :external_id, :state, :geom, :parent_id, :type_label])
     |> validate_required([:name, :level, :country, :external_id, :geom])
   end
 end

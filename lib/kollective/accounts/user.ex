@@ -16,6 +16,8 @@ defmodule Kollective.Accounts.User do
     field :display_name, :string
     # For pseudonyms or pen names or to hide caste/religion guessing in India
     field :alias_name, :string
+    # For organizations: human contact / representative name
+    field :representative_name, :string
 
     # ISO 639-1 code #preferred language
     field :locale, :string, default: "en"
@@ -304,36 +306,46 @@ defmodule Kollective.Accounts.User do
 
   # Fallback helper function to keep your data layer consistent
   defp default_display_name(changeset) do
-    case get_change(changeset, :display_name) do
-      nil ->
-        # If no custom name was passed, mirror the username value automatically
-        if username = get_change(changeset, :username) do
-          put_change(changeset, :display_name, username)
-        else
-          changeset
-        end
+    if get_field(changeset, :type) == :organization do
+      changeset
+    else
+      case get_change(changeset, :display_name) do
+        nil ->
+          # If no custom name was passed, mirror the username value automatically
+          if username = get_change(changeset, :username) do
+            put_change(changeset, :display_name, username)
+          else
+            changeset
+          end
 
-      _ ->
-        changeset
+        _ ->
+          changeset
+      end
     end
   end
 
   def registration_changeset(user, attrs, opts \\ []) do
+    attrs = normalize_attrs(attrs)
+
     user
     |> cast(attrs, [
       :email,
       :password,
-      :password_confirmation,
-      :first_name,
-      :last_name,
+      :display_name,
+      :username,
       :date_of_birth,
-      :country
+      :country,
+      :type,
+      :representative_name
     ])
+    |> default_display_name()
     |> validate_email(opts)
     |> validate_password(opts)
-    |> validate_required([:first_name, :last_name, :email, :date_of_birth, :country])
-    |> validate_length(:first_name, max: 100)
-    |> validate_length(:last_name, max: 100)
+    |> validate_required([:username, :email])
+    |> validate_length(:display_name, max: 100)
+    |> validate_length(:username, min: 2, max: 20)
+    |> validate_length(:representative_name, max: 100)
+    |> validate_organization_attributes()
     # Example country codes
     |> validate_inclusion(:country, [
       "US",
@@ -361,23 +373,131 @@ defmodule Kollective.Accounts.User do
   end
 
   defp normalize_registration_age_fields(changeset) do
-    today = Date.utc_today()
-    birthday = get_change(changeset, :date_of_birth)
-    age = get_change(changeset, :age)
+    if get_field(changeset, :type) == :organization do
+      changeset
+      |> delete_change(:date_of_birth)
+      |> delete_change(:age)
+      |> delete_change(:birth_year)
+    else
+      today = Date.utc_today()
+      birthday = get_change(changeset, :date_of_birth)
+      age = get_change(changeset, :age)
 
-    cond do
-      birthday ->
-        calculated_age = Date.diff(today, birthday) |> div(365)
+      cond do
+        birthday ->
+          calculated_age = Date.diff(today, birthday) |> div(365)
 
-        changeset
-        |> put_change(:age, calculated_age)
-        |> put_change(:birth_year, birthday.year)
+          changeset
+          |> put_change(:age, calculated_age)
+          |> put_change(:birth_year, birthday.year)
 
-      is_integer(age) and age >= 0 ->
-        put_change(changeset, :birth_year, today.year - age)
+        is_integer(age) and age >= 0 ->
+          put_change(changeset, :birth_year, today.year - age)
 
-      true ->
-        changeset
+        true ->
+          changeset
+      end
+    end
+  end
+
+  defp validate_organization_attributes(changeset) do
+    if get_field(changeset, :type) == :organization do
+      validate_required(changeset, [:display_name])
+    else
+      changeset
+    end
+  end
+
+  defp normalize_attrs(attrs) when is_map(attrs) do
+    use_atom_keys? = Enum.any?(Map.keys(attrs), &is_atom/1)
+
+    attrs
+    |> maybe_copy_attr("displayname", :displayname, "display_name", :display_name, use_atom_keys?)
+    |> maybe_copy_attr("org_name", :org_name, "display_name", :display_name, use_atom_keys?)
+    |> maybe_copy_attr("org name", nil, "display_name", :display_name, use_atom_keys?)
+    |> maybe_copy_attr("Org name", nil, "display_name", :display_name, use_atom_keys?)
+    |> maybe_copy_attr(
+      "organization_name",
+      :organization_name,
+      "display_name",
+      :display_name,
+      use_atom_keys?
+    )
+    |> maybe_copy_attr(
+      "representative name",
+      nil,
+      "representative_name",
+      :representative_name,
+      use_atom_keys?
+    )
+    |> maybe_copy_attr(
+      "Representative name",
+      nil,
+      "representative_name",
+      :representative_name,
+      use_atom_keys?
+    )
+    |> maybe_copy_attr(
+      "representative_name",
+      :representative_name,
+      "representative_name",
+      :representative_name,
+      use_atom_keys?
+    )
+    |> maybe_copy_attr("birthday", :birthday, "date_of_birth", :date_of_birth, use_atom_keys?)
+    |> maybe_copy_attr("show_birthday", :show_birthday, "show_age", :show_age, use_atom_keys?)
+    |> normalize_registration_type(use_atom_keys?)
+  end
+
+  defp normalize_attrs(attrs), do: attrs
+
+  defp normalize_registration_type(attrs, use_atom_keys?) do
+    raw_type = Map.get(attrs, "type") || Map.get(attrs, :type)
+
+    if raw_type != nil do
+      normalized_type =
+        case raw_type do
+          type when type in ["organization", :organization] -> :organization
+          _ -> :citizen
+        end
+
+      if use_atom_keys? do
+        attrs
+        |> Map.delete("type")
+        |> Map.put(:type, normalized_type)
+      else
+        attrs
+        |> Map.delete(:type)
+        |> Map.put("type", to_string(normalized_type))
+      end
+    else
+      attrs
+    end
+  end
+
+  defp maybe_copy_attr(
+         map,
+         old_string_key,
+         old_atom_key,
+         new_string_key,
+         new_atom_key,
+         use_atom_keys?
+       ) do
+    val = Map.get(map, old_string_key) || (old_atom_key && Map.get(map, old_atom_key))
+
+    if val != nil and Map.get(map, new_string_key) == nil and Map.get(map, new_atom_key) == nil do
+      map =
+        map
+        |> Map.delete(old_string_key)
+        |> then(fn m -> if old_atom_key, do: Map.delete(m, old_atom_key), else: m end)
+
+      if use_atom_keys? do
+        Map.put(map, new_atom_key, val)
+      else
+        Map.put(map, new_string_key, val)
+      end
+    else
+      map
     end
   end
 
@@ -415,8 +535,11 @@ defmodule Kollective.Accounts.User do
       Defaults to `true`.
   """
   def email_changeset(user, attrs, opts \\ []) do
+    attrs = normalize_attrs(attrs)
+
     user
-    |> cast(attrs, [:email, :username])
+    |> cast(attrs, [:email, :username, :type, :display_name, :representative_name])
+    |> default_display_name()
     |> put_default_username()
     |> update_change(:email, fn email ->
       if is_binary(email), do: String.downcase(email), else: email
@@ -424,6 +547,9 @@ defmodule Kollective.Accounts.User do
     # 👈 Force email to lowercase before validation happens
     |> validate_email(opts)
     |> validate_length(:username, min: 2, max: 20)
+    |> validate_length(:display_name, max: 100)
+    |> validate_length(:representative_name, max: 100)
+    |> validate_organization_attributes()
     |> unique_constraint(:username)
   end
 
@@ -531,7 +657,7 @@ defmodule Kollective.Accounts.User do
   """
   def confirm_changeset(user) do
     now = DateTime.utc_now(:second)
-    change(user, confirmed_at: now)
+    change(user, confirmed_at: now, is_confirmed: true)
   end
 
   @doc """
@@ -552,6 +678,8 @@ defmodule Kollective.Accounts.User do
 
   # Profile Updates
   def profile_changeset(%__MODULE__{} = user, attrs) do
+    attrs = normalize_attrs(attrs)
+
     user
     # STRICT WHITE-LIST CASTING: Only allow modification of standard layout fields
     |> Ecto.Changeset.cast(attrs, [
@@ -561,10 +689,12 @@ defmodule Kollective.Accounts.User do
       :location,
       :avatar_url,
       :cover_image_url,
-      :show_birthday,
-      :accepts_chat_messages
+      :show_age,
+      :accepts_chat_messages,
+      :representative_name
     ])
     |> Ecto.Changeset.validate_length(:display_name, max: 100)
+    |> Ecto.Changeset.validate_length(:representative_name, max: 100)
     # Traditional "Twitter-style" bio limit
     |> Ecto.Changeset.validate_length(:bio, max: 160)
     |> Ecto.Changeset.validate_length(:location, max: 255)

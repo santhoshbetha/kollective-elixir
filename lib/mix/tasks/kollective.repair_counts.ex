@@ -39,6 +39,26 @@ defmodule Mix.Tasks.Kollective.RepairCounts do
           ) sub
           WHERE u.id = sub.target_id;
         """)
+
+        # Recalculate and synchronize note_count (posts + replies + reblogs)
+        Kollective.Repo.query!("""
+          UPDATE users u
+          SET note_count = COALESCE(sub.cnt, 0)
+          FROM (
+            SELECT user_id, count(*) as cnt
+            FROM posts
+            GROUP BY user_id
+          ) sub
+          WHERE u.id = sub.user_id;
+        """)
+
+        Kollective.Repo.query!("""
+          UPDATE users
+          SET note_count = 0
+          WHERE id NOT IN (
+            SELECT DISTINCT user_id FROM posts WHERE user_id IS NOT NULL
+          );
+        """)
       end,
       timeout: :infinity
     )

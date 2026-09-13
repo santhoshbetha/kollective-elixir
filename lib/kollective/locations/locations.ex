@@ -5,6 +5,7 @@ defmodule Kollective.Locations.Locations do
   alias Kollective.Repo
   alias Kollective.Locations.City
   alias Kollective.Locations.PoliticalDistrict
+  import Kollective.Locations.SpatialQueries
 
   @base_url "http://api.geonames.org/getJSON"
   # Replace with your actual GeoNames username
@@ -169,5 +170,16 @@ defmodule Kollective.Locations.Locations do
     else
       _ -> nil
     end
+  end
+
+  @doc """
+  Finds the political boundary that contains a specific coordinate point.
+  """
+  def find_district_by_point(%Geo.Point{} = point, level) do
+    PoliticalDistrict
+    |> where([d], d.level == ^level)
+    # Clean, descriptive syntax
+    |> where([d], st_contains(d.geom, ^point))
+    |> Repo.one()
   end
 end

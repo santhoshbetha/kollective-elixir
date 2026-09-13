@@ -12,8 +12,6 @@ defmodule Kollective.Accounts.Accounts do
   alias Kollective.Accounts.UserRelationship
   alias Kollective.Schemas.ULIDType
 
-  alias Kollective.Accounts.OrganizationMembership
-  alias Kollective.Workers.OrgNotificationWorker
   alias Kollective.Locations.Locations
 
   ## Database getters
@@ -98,10 +96,21 @@ defmodule Kollective.Accounts.Accounts do
 
   """
   def register_user(attrs) do
-    %User{}
-    |> User.email_changeset(attrs)
-    |> Repo.insert()
+    changeset =
+      if has_registration_password?(attrs) do
+        User.registration_changeset(%User{}, attrs)
+      else
+        User.email_changeset(%User{}, attrs)
+      end
+
+    Repo.insert(changeset)
   end
+
+  defp has_registration_password?(attrs) when is_map(attrs) do
+    (Map.get(attrs, :password) || Map.get(attrs, "password")) not in [nil, ""]
+  end
+
+  defp has_registration_password?(_), do: false
 
   @doc "Fetches list of target IDs for a specific user and relationship type"
   def list_relationship_ids(user_id, type) do
@@ -768,99 +777,30 @@ defmodule Kollective.Accounts.Accounts do
 
   def blocks?(_, _), do: false
 
-  @doc "Allows a real-world user to request access to an organization actor profile."
-  def request_organization_join(user_id, organization_id) do
-    # Verify the target is actually an organization account type
-    case Repo.get(User, organization_id) do
-      %User{type: :organization} ->
-        %OrganizationMembership{}
-        |> OrganizationMembership.changeset(%{
-          user_id: user_id,
-          organization_id: organization_id,
-          status: :pending,
-          role: :member
-        })
-        |> Repo.insert()
+  # ─── Organizations Sub-Context Delegations ────────────────────────────────────
+  alias Kollective.Accounts.Organizations
 
-      _ ->
-        {:error, :invalid_target_account}
-    end
-  end
-
-  @doc "Allows an organization administrator to approve or reject a pending request."
-  def process_join_request(%User{} = manager, membership_id, action)
-      when action in [:approved, :rejected] do
-    membership = Repo.get!(OrganizationMembership, membership_id)
-
-    # 1. ENFORCE OWNERSHIP SECURITY: Verify the manager is an approved ADMIN of the organization
-    is_admin? =
-      Repo.exists?(
-        from(m in OrganizationMembership,
-          where:
-            m.organization_id == ^membership.organization_id and m.user_id == ^manager.id and
-              m.role == :admin and m.status == :approved
-        )
-      )
-
-    if not is_admin? do
-      {:error, :unauthorized}
-    else
-      Multi.new()
-      # Step A: Atomic status update switch
-      |> Multi.update(
-        :membership,
-        OrganizationMembership.changeset(membership, %{status: action})
-      )
-
-      # Step B: ASYNC LIFE-CYCLE SCHEDULING (Offload heavy Swoosh emails entirely to an Oban queue)
-      |> Multi.run(:enqueue_email, fn _repo, _changes ->
-        %{
-          "user_id" => membership.user_id,
-          "organization_id" => membership.organization_id,
-          "action" => Atom.to_string(action)
-        }
-        |> OrgNotificationWorker.new()
-        |> Oban.insert!()
-
-        {:ok, :notified}
-      end)
-      |> Repo.transaction()
-    end
-  end
-
-  @doc "Fetches all organization accounts a specific user is authorized to post under."
-  def list_authorized_organizations(user_id) do
-    from(u in User,
-      join: m in OrganizationMembership,
-      on: m.organization_id == u.id,
-      where: m.user_id == ^user_id and m.status == :approved,
-      select: %{id: u.id, username: u.username, badge_type: fragment("?->>'badge_type'", u.data)}
-    )
-    |> Repo.all()
-  end
-
-  def search_organizations_by_type(query_str) when is_binary(query_str) do
-    if String.trim(query_str) == "" do
-      []
-    else
-      search_term = "%#{String.downcase(query_str)}%"
-
-      from(u in User,
-        where: u.type == :organization,
-        where:
-          fragment(
-            "LOWER(?) LIKE ? or LOWER(?) LIKE ?",
-            u.username,
-            ^search_term,
-            u.name,
-            ^search_term
-          ),
-        order_by: [asc: u.username],
-        limit: 20
-      )
-      |> Repo.all()
-    end
-  end
+  defdelegate request_organization_join(user_id, organization_id), to: Organizations
+  defdelegate process_join_request(manager, membership_id, action), to: Organizations
+  defdelegate list_authorized_organizations(user_id), to: Organizations
+  defdelegate search_organizations_by_type(query_str), to: Organizations
+  defdelegate create_invite(org_id, email, role), to: Organizations
+  defdelegate resend_invite(org_id, invite_id), to: Organizations
+  defdelegate remove_invite(org_id, invite_id), to: Organizations
+  defdelegate list_pending_invitations(user_id), to: Organizations
+  defdelegate accept_invitation(user_id, membership_id), to: Organizations
+  defdelegate decline_invitation(user_id, membership_id), to: Organizations
+  defdelegate transfer_ownership(org_id, current_owner_id, new_owner_id), to: Organizations
+  defdelegate update_role_query(org_id, user_id, new_role), to: Organizations
+  defdelegate is_owner?(org_id, user_id), to: Organizations
+  defdelegate get_organization_membership_by_user(user_id, org_id), to: Organizations
+  defdelegate count_organization_owners(org_id), to: Organizations
+  defdelegate update_organization_membership(membership, attrs), to: Organizations
+  defdelegate list_audit_logs(org_id, opts \\ []), to: Organizations
+  defdelegate remove_member(org_id, target_user_id, actor_id), to: Organizations
+  defdelegate list_active_members(org_id), to: Organizations
+  defdelegate list_pending_org_invites(org_id), to: Organizations
+  defdelegate delete_organization(org_id), to: Organizations
 
   @doc """
   Verifies if a specific handle is already claimed on the platform.
@@ -934,6 +874,7 @@ defmodule Kollective.Accounts.Accounts do
     raw_admin =
       geo_meta["county"] || geo_meta["district"] || attrs["county"] || attrs["district"]
 
+    # Clean the administrative district/county name
     clean_admin =
       if raw_admin do
         raw_admin
@@ -985,4 +926,8 @@ defmodule Kollective.Accounts.Accounts do
     })
     |> Repo.update()
   end
+
+  defdelegate increment_note_count(user_id), to: Kollective.Accounts.Users
+  defdelegate decrement_note_count(user_id), to: Kollective.Accounts.Users
+  defdelegate update_note_count(user_id, amount), to: Kollective.Accounts.Users
 end

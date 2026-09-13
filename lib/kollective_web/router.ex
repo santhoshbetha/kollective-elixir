@@ -17,11 +17,27 @@ defmodule KollectiveWeb.Router do
   # Enforces an active session token before allowing access
   pipeline :api_authenticated do
     # 1. First, decode the Bearer token header and assign :current_user
-    #  plug KollectiveWeb.Plugs.APIAuth
+    # plug KollectiveWeb.Plugs.APIAuth
 
     # 2. Second, run the helper to map :current_user onto the structural domain :current_scope
     plug :fetch_current_scope_for_user
     plug :require_authenticated_user
+  end
+
+  # Identifies whether the request context is a personal account or an org
+  pipeline :org_context do
+    plug KollectiveWeb.Plugs.AssignOrganization
+  end
+
+  # Strictly enforces that the request MUST have an active organization context
+  pipeline :require_org do
+    # Simple plug checking if conn.assigns.current_org_id != nil
+    plug KollectiveWeb.Plugs.RequireActiveOrganization
+  end
+
+  # Blocks the request if the user is not an Admin or Owner of the active org
+  pipeline :require_org_admin do
+    plug KollectiveWeb.Plugs.RequireOrgAdmin
   end
 
   pipeline :api_rate_limited do
@@ -83,6 +99,7 @@ defmodule KollectiveWeb.Router do
   scope "/api/users", KollectiveWeb do
     pipe_through [:api, :api_unauthenticated]
 
+    post "/", RegistrationController, :create
     post "/register", RegistrationController, :create
     post "/login", SessionController, :create
     delete "/logout", SessionController, :delete
@@ -140,6 +157,64 @@ defmodule KollectiveWeb.Router do
     post "/organization_requests/:membership_id/process",
          OrganizationAdminController,
          :update_status
+
+    post "/organizations/:org_id/members/:user_id/role", OrganizationAdminController, :change_role
+  end
+
+  # =========================================================================
+  # SCOPE 1: Personal User Account Operations
+  # No organization context headers are needed here.
+  # =========================================================================
+  scope "/api", KollectiveWeb do
+    pipe_through [:api, :api_authenticated]
+
+    # Handled by InvitationController
+    get "/invitations", InvitationController, :index
+    post "/invitations/:id/accept", InvitationController, :accept
+    post "/invitations/:id/decline", InvitationController, :decline
+  end
+
+  scope "/api/v1", KollectiveWeb do
+    pipe_through [:api, :api_authenticated]
+
+    # Handled by InvitationController (v1 alias)
+    get "/invitations", InvitationController, :index
+    post "/invitations/:id/accept", InvitationController, :accept
+    post "/invitations/:id/decline", InvitationController, :decline
+  end
+
+  # =========================================================================
+  # SCOPE 2: General Team & Roster Operations
+  # Requires a valid active organization context header.
+  # =========================================================================
+  scope "/api/v1/org-settings", KollectiveWeb do
+    # Enforces authentication, valid org membership, AND admin/owner status ranks
+    pipe_through [:api, :api_authenticated, :org_context, :require_org]
+
+    # Handled by TeamController
+    get "/members", TeamController, :index
+    delete "/members/:user_id", TeamController, :remove_member
+
+    # Handled by AuditLogController (from previous step)
+    get "/audit-logs", AuditLogController, :index
+
+    # endpoint to fulfill the React TeamManagement.jsx fetching requirement
+    get "/pending-invites", TeamController, :pending_invites
+  end
+
+  # =========================================================================
+  # SCOPE 3: High-Level Administrative Operations
+  # Requires admin or owner privileges within that specific organization.
+  # =========================================================================
+  scope "/api/v1/org-admin", KollectiveWeb do
+    pipe_through [:api, :api_authenticated, :org_context, :require_org, :require_org_admin]
+
+    # Handled by OrganizationController
+    post "/transfer-ownership", OrganizationController, :transfer_ownership
+    post "/organizations/:org_id/invite", OrganizationController, :invite_contributor
+
+    post "/organizations/:org_id/invite/:invite_id/resend", OrganizationController, :resend_invite
+    delete "/organizations/:org_id/invite/:invite_id", OrganizationController, :remove_invite
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -160,6 +235,8 @@ defmodule KollectiveWeb.Router do
     # GET /api/v1/posts?q=peaceful -> Returns the Search Results.
     # GET /api/v1/posts?category=voice -> Returns the Urgent Voice Feed
     get "/posts/:id", PostController, :show
+    put "/posts/:id", PostController, :update
+    delete "/posts/:id", PostController, :delete
 
     # Creates a nested route specifically for handling comments/replies under a post
     post "/replies", PostController, :create_reply
@@ -169,6 +246,19 @@ defmodule KollectiveWeb.Router do
 
     # /api/v1/posts/:id/like -> Toggles the like status for the specified post on behalf of the current user
     post "/posts/:id/like", PostController, :handle_like
+  end
+
+  # ─── SCOPE C: PROTECTED WRITE MUTATIONS & EXPENSIVE LOOKUPS ───
+  # Moderation endpoints (post restoration)
+  scope "/api/v1", KollectiveWeb.Admin do
+    pipe_through [:api, :api_authenticated, :api_rate_limited]
+
+    post "/admin/posts/:id/restore", ModerationController, :restore_post
+    post "/admin/posts/:id/reject", ModerationController, :reject_post
+    post "/admin/posts/:id/appeal", ModerationController, :appeal_post
+    delete "/admin/posts/:id/kill", ModerationController, :kill_post
+
+    post "/admin/posts/bulk_approve", ModerationController, :bulk_approve
   end
 
   # ─── SCOPE B: PROTECTED WRITE MUTATIONS & EXPENSIVE LOOKUPS ───
@@ -221,6 +311,11 @@ defmodule KollectiveWeb.Router do
 
     # ─── 🏷️ HASHTAG TIMELINE DISCOVERY STREAM ───
     get "/timelines/tag/:tag", HashtagController, :show
+
+    # ─── 📰 USER FEEDS & TIMELINES ───
+    get "/timeline/home", FeedController, :home
+    get "/communities/feed", FeedController, :feed
+    get "/trending/tags", TrendingController, :index
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -263,8 +358,8 @@ defmodule KollectiveWeb.Router do
     pipe_through [:api, :api_authenticated]
 
     get "/events", EventController, :index
-    get "/events/:id", EventController, :show
     get "/events/joined", EventController, :joined_events
+    get "/events/:id", EventController, :show
 
     put "/events/:id", EventController, :update
 

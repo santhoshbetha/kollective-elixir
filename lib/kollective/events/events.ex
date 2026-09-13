@@ -1366,7 +1366,7 @@ defmodule Kollective.Events.Events do
   """
   def list_joined_events_for_user(%User{} = user, _params \\ %{}) do
     from(e in Event,
-      join: p in Participant,
+      join: p in EventParticipant,
       on: p.event_id == e.id,
       where: p.user_id == ^user.id and p.status == "accepted" and e.event_status == "published",
       order_by: [desc: e.start_time],
@@ -1638,12 +1638,12 @@ defmodule Kollective.Events.Events do
             event_id: event.id,
             target_id: event.id,
             target_type: "Event",
-            metadata: %{event_title: event.name, sub_type: "private_event_invite"}
+            metadata: %{event_title: event.title, sub_type: "private_event_invite"}
           },
           %{
             post_id: nil,
             preview:
-              "🔒 Secret Invite: @#{inviter.username} invited you to a private event: '#{event.name}'."
+              "🔒 Secret Invite: @#{inviter.username} invited you to a private event: '#{event.title}'."
           }
         )
 

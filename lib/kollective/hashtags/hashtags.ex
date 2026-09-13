@@ -53,20 +53,21 @@ defmodule Kollective.Hashtags.Hashtags do
   end
 
   @doc """
-  Returns the top trending hashtags based on their pre-calculated scores.
+  Returns the top trending hashtags based on their pre-calculated scores or usage stats.
   """
   def list_trending_tags(limit \\ 10) do
-    Hashtag
-    |> where([t], t.trending_score > 0)
-    |> order_by(desc: :trending_score)
-    |> limit(^limit)
-    # Select as a map to make JSON serialization easy
-
-    |> select([t], %{
-      id: t.id,
-      name: t.name,
-      score: t.trending_score
-    })
+    from(h in Hashtag,
+      left_join: s in HashtagStat,
+      on: s.hashtag_id == h.id,
+      group_by: [h.id, h.name],
+      order_by: [desc: coalesce(sum(s.count), 0), desc: h.name],
+      limit: ^limit,
+      select: %{
+        id: h.id,
+        name: h.name,
+        score: coalesce(sum(s.count), 0)
+      }
+    )
     |> Repo.all()
   end
 

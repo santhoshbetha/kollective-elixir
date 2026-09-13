@@ -5,6 +5,8 @@
 # Ensure your ChangesetJSON looks like this to make messages human-readable by replacing placeholders like %{count} with actual values
 
 defmodule KollectiveWeb.ChangesetJSON do
+  def error(%Ecto.Changeset{} = changeset), do: error(%{changeset: changeset})
+
   def error(%{changeset: changeset}) do
     # Converts %{content: [{"should be %{count} chars", [count: 500]}]}
     # into %{content: ["should be 500 chars"]}

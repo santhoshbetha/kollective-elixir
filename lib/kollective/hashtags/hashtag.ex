@@ -12,6 +12,7 @@ defmodule Kollective.Hashtags.Hashtag do
   schema "hashtags" do
     # Caches downcase lowercase string keys (e.g. "grassroots")
     field :name, :string
+    field :trending_score, :float, virtual: true, default: 0.0
 
     many_to_many :posts, Kollective.Posts.Post, join_through: "posts_hashtags"
 

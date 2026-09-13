@@ -112,6 +112,41 @@ defmodule Kollective.Accounts.Users do
     |> Repo.update_all(inc: [following_count: amount])
   end
 
+  @doc """
+  Increments user note_count and records last_post_at timestamp.
+  """
+  def increment_note_count(user_id) do
+    now = DateTime.utc_now() |> DateTime.to_naive() |> NaiveDateTime.truncate(:second)
+
+    from(u in User, where: u.id == ^user_id)
+    |> Repo.update_all(inc: [note_count: 1], set: [last_post_at: now])
+  end
+
+  @doc """
+  Decrements user note_count, clamped at 0.
+  """
+  def decrement_note_count(user_id) do
+    from(u in User, where: u.id == ^user_id and u.note_count > 0)
+    |> Repo.update_all(inc: [note_count: -1])
+  end
+
+  @doc """
+  Updates user note_count by a relative amount, maintaining bounds.
+  """
+  def update_note_count(user_id, amount) when amount > 0 do
+    now = DateTime.utc_now() |> DateTime.to_naive() |> NaiveDateTime.truncate(:second)
+
+    from(u in User, where: u.id == ^user_id)
+    |> Repo.update_all(inc: [note_count: amount], set: [last_post_at: now])
+  end
+
+  def update_note_count(user_id, amount) when amount < 0 do
+    from(u in User, where: u.id == ^user_id and u.note_count > 0)
+    |> Repo.update_all(inc: [note_count: amount])
+  end
+
+  def update_note_count(_user_id, 0), do: {0, nil}
+
   # --- Follow / Unfollow ---
   # First, modify your follow_user function to check if the target user is locked
   # (using the is_locked boolean we added to the User schema earlier).
@@ -691,38 +726,41 @@ defmodule Kollective.Accounts.Users do
   Atomic transaction modifier pass to update a profile's verified political boundaries.
   """
   def update_user_districts(%Kollective.Accounts.User{} = user, attrs) do
-    state = attrs[:origin_state] || attrs["origin_state"]
+    state = attrs[:origin_state] || attrs["origin_state"] || user.origin_state || user.state
 
     l1_code = attrs[:district_l1] || attrs["district_l1"]
     l2_code = attrs[:district_l2] || attrs["district_l2"]
     l3_code = attrs[:district_l3] || attrs["district_l3"]
 
     l1_id =
-      if l1_code,
-        do:
-          Map.get(
-            Kollective.Locations.Locations.get_or_create_district(1, state, l1_code) || %{},
-            :id
-          ),
-        else: nil
+      attrs[:district_l1_id] || attrs["district_l1_id"] ||
+        if l1_code,
+          do:
+            Map.get(
+              Kollective.Locations.Locations.get_or_create_district(1, state, l1_code) || %{},
+              :id
+            ),
+          else: nil
 
     l2_id =
-      if l2_code,
-        do:
-          Map.get(
-            Kollective.Locations.Locations.get_or_create_district(2, state, l2_code) || %{},
-            :id
-          ),
-        else: nil
+      attrs[:district_l2_id] || attrs["district_l2_id"] ||
+        if l2_code,
+          do:
+            Map.get(
+              Kollective.Locations.Locations.get_or_create_district(2, state, l2_code) || %{},
+              :id
+            ),
+          else: nil
 
     l3_id =
-      if l3_code,
-        do:
-          Map.get(
-            Kollective.Locations.Locations.get_or_create_district(3, state, l3_code) || %{},
-            :id
-          ),
-        else: nil
+      attrs[:district_l3_id] || attrs["district_l3_id"] ||
+        if l3_code,
+          do:
+            Map.get(
+              Kollective.Locations.Locations.get_or_create_district(3, state, l3_code) || %{},
+              :id
+            ),
+          else: nil
 
     attrs =
       attrs
@@ -730,6 +768,7 @@ defmodule Kollective.Accounts.Users do
       |> Map.put("district_l1_id", l1_id)
       |> Map.put("district_l2_id", l2_id)
       |> Map.put("district_l3_id", l3_id)
+      |> Map.put("origin_state", state)
 
     user
     |> Ecto.Changeset.cast(attrs, [

@@ -16,9 +16,11 @@ defmodule Kollective.Posts.Post do
 
   schema "posts" do
     # --- OWNERSHIP & CORE IDENTITY ---
-    # Individual User/ Orgamization Member (actual human who writes org posts)
-    # This single field handles both humans and corporate actors seamlessly!
+    # Individual User / Organization Member (actual human who writes org posts)
     belongs_to(:author, User, foreign_key: :user_id)
+
+    # Organization on whose behalf the post is written (if applicable)
+    belongs_to(:organization, User, foreign_key: :organization_id)
 
     # 2. Cleanup for Discovery/Social Actions
     # This ensures that if a post is deleted, all related "liked", "reblogged",
@@ -162,6 +164,7 @@ defmodule Kollective.Posts.Post do
     # --- DATES & LIFECYCLE ---
     field :published_at, :utc_datetime
     field :edited_at, :utc_datetime
+    field :edit_count, :integer, default: 0
     # Useful for temporary "Voice" posts
     field :expires_at, :utc_datetime
     field :pinned_at, :utc_datetime
@@ -220,6 +223,7 @@ defmodule Kollective.Posts.Post do
     post
     |> cast(attrs, [
       :user_id,
+      :organization_id,
       :status,
       :category,
       :visibility,
@@ -239,6 +243,10 @@ defmodule Kollective.Posts.Post do
       :in_reply_to_username,
       :quote_id,
       :quote_url,
+      :link_url,
+      :link_title,
+      :link_description,
+      :link_preview_image,
       :context,
       :direct_conversation_id,
       :replies_count,
@@ -253,8 +261,15 @@ defmodule Kollective.Posts.Post do
       :metadata,
       :coordination_data,
       :published_at,
+      :edited_at,
+      :edit_count,
       :expires_at,
       :processing_status,
+      :rejection_reason,
+      :rejected_at,
+      :rejected_by_id,
+      :appeal_reason,
+      :appealed_at,
       :origin_city_id,
       :origin_state,
       :origin_country,
@@ -267,6 +282,7 @@ defmodule Kollective.Posts.Post do
     |> validate_inclusion(:visibility, @visibilities)
     |> validate_inclusion(:target_scope, @allowed_scopes)
     |> validate_inclusion(:category, [:post, :voice])
+    |> validate_number(:edit_count, greater_than_or_equal_to: 0)
     # --- Custom Dynamic Feature Pipings ---
     |> validate_content_length()
     |> validate_urgency_by_category()
@@ -278,9 +294,23 @@ defmodule Kollective.Posts.Post do
     |> cast_assoc(:attachments, with: &PostAttachment.changeset/2)
     |> validate_attachment_limit(4)
     |> foreign_key_constraint(:user_id)
+    |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:root_post_id)
     |> foreign_key_constraint(:in_reply_to_id)
     |> validate_length(:content, max: 2000)
+    |> validate_immutable_author(post)
+  end
+
+  defp validate_immutable_author(changeset, %__MODULE__{id: nil}) do
+    changeset
+  end
+
+  defp validate_immutable_author(changeset, %__MODULE__{id: id}) when not is_nil(id) do
+    if get_change(changeset, :user_id) do
+      add_error(changeset, :user_id, "cannot be changed once post is created")
+    else
+      changeset
+    end
   end
 
   # --- Private Processing Logic Helpers ---
@@ -339,8 +369,11 @@ defmodule Kollective.Posts.Post do
         put_change(changeset, :language, map_to_postgres_lang(final_lang))
 
       # Priority 3: Fallback (Empty content or no detection)
-      true ->
+      is_nil(get_field(changeset, :language)) ->
         put_change(changeset, :language, map_to_postgres_lang(user_locale))
+
+      true ->
+        changeset
     end
   end
 

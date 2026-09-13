@@ -264,14 +264,33 @@ defmodule Kollective.Factory do
     }
   end
 
-  def political_district_factory do
-    %Kollective.Locations.PoliticalDistrict{
-      id: Ecto.ULID.generate(),
-      name: sequence(:district_name, &"Senate District #{&1}"),
-      level: 1,
-      type_label: "State Senate",
-      state: "CA",
-      country: "US"
+  def political_district_factory(attrs) do
+    seq = sequence("district_id")
+
+    # Bounding coordinates spanning Austin, TX
+    default_geom = %Geo.Polygon{
+      coordinates: [
+        [
+          {-97.75, 30.25},
+          {-97.70, 30.25},
+          {-97.70, 30.30},
+          {-97.75, 30.30},
+          {-97.75, 30.25}
+        ]
+      ],
+      srid: 4326
     }
+
+    %Kollective.Locations.PoliticalDistrict{
+      name: "State House District #{seq}",
+      level: 2,
+      type_label: "State Representative",
+      state: "TX",
+      country: "US",
+      external_id: "TX-HD-#{seq}",
+      geom: default_geom
+    }
+    # ExMachina safely overwrites attributes passed by your tests here
+    |> merge_attributes(attrs)
   end
 end

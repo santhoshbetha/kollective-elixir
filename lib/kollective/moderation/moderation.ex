@@ -11,6 +11,7 @@ defmodule Kollective.Moderation.Moderation do
   alias Kollective.Security.Security
   alias Kollective.Moderation.Report
   alias Kollective.Accounts.UserRelationship
+  alias Kollective.Accounts.User
 
   # Define a fallback flag threshold for the keyword weighting score system
   @default_flag_threshold 3
@@ -184,6 +185,9 @@ defmodule Kollective.Moderation.Moderation do
             {:ok, nil}
 
           post ->
+            from(u in User, where: u.id == ^post.user_id and u.note_count > 0)
+            |> Repo.update_all(inc: [note_count: -1])
+
             Repo.delete(post)
 
             # Broadcast a global feed-scrubbing push to remove the post card from React viewports live
@@ -228,6 +232,12 @@ defmodule Kollective.Moderation.Moderation do
     Multi.new()
     # 1. Delete the post record from public infrastructure
     |> Multi.delete(:post, post)
+    # 1b. Decrement author's note_count counter
+    |> Multi.update_all(
+      :decrement_note_count,
+      from(u in User, where: u.id == ^post.user_id and u.note_count > 0),
+      inc: [note_count: -1]
+    )
 
     # 2. File an immutable entry in the compliance log boards
     |> Multi.insert(:admin_log, %AdminLog{

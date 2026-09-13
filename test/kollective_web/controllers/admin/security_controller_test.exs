@@ -1,5 +1,5 @@
 defmodule KollectiveWeb.Admin.SecurityControllerTest do
-  use KollectiveWeb.ConnCase, async: true
+  use KollectiveWeb.ConnCase, async: false
   import Ecto.Query
   import Kollective.Factory
 

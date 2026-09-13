@@ -10,7 +10,9 @@ defmodule KollectiveWeb.Admin.ModerationController do
 
     case Moderation.bulk_approve_pending(admin, approve_params) do
       {:ok, counts} ->
-        json(conn, %{status: "success", data: counts})
+        conn
+        |> put_status(:ok)
+        |> json(%{status: "success", data: counts})
 
       {:error, :empty_queue} ->
         conn
@@ -37,7 +39,9 @@ defmodule KollectiveWeb.Admin.ModerationController do
     # Call the code cleanly from your central Posts data context
     case Posts.reject_post(admin, id, reason) do
       {:ok, post} ->
-        json(conn, %{status: "success", data: %{id: post.id, status: post.status}})
+        conn
+        |> put_status(:ok)
+        |> json(%{status: "success", data: %{id: post.id, status: post.status}})
 
       {:error, _changeset} ->
         conn
@@ -53,7 +57,9 @@ defmodule KollectiveWeb.Admin.ModerationController do
     # Call the code cleanly from your central Posts data context
     case Posts.appeal_post(admin, id, reason) do
       {:ok, post} ->
-        json(conn, %{status: "success", data: %{id: post.id, status: post.status}})
+        conn
+        |> put_status(:ok)
+        |> json(%{status: "success", data: %{id: post.id, status: post.status}})
 
       {:error, _changeset} ->
         conn
@@ -69,7 +75,18 @@ defmodule KollectiveWeb.Admin.ModerationController do
     # Call the code cleanly from your central Posts data context
     case Posts.restore_post(admin, id) do
       {:ok, _post} ->
-        json(conn, %{status: "success", message: "Content successfully restored to public feeds."})
+        conn
+        |> put_status(:ok)
+        |> json(%{status: "success", message: "Content successfully restored to public feeds."})
+
+      {:error, :unauthorized} ->
+        conn
+        |> put_status(:forbidden)
+        |> json(%{
+          status: "error",
+          error: "forbidden",
+          message: "You are not authorized to restore this post."
+        })
 
       {:error, _changeset} ->
         conn
@@ -84,7 +101,9 @@ defmodule KollectiveWeb.Admin.ModerationController do
 
     case Moderation.admin_delete_post(admin, id) do
       {:ok, _post} ->
-        json(conn, %{status: "success", message: "Content hard-purged from system timelines."})
+        conn
+        |> put_status(:ok)
+        |> json(%{status: "success", message: "Content hard-purged from system timelines."})
 
       {:error, _changeset} ->
         conn

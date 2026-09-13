@@ -467,4 +467,52 @@ defmodule Kollective.AccountsTest do
       assert changeset.valid?
     end
   end
+
+  describe "organization memberships" do
+    test "get_organization_membership_by_user/2, count_organization_owners/1, and update_organization_membership/2" do
+      org = user_fixture(%{type: :organization, display_name: "Test Organization"})
+      user1 = user_fixture()
+      user2 = user_fixture()
+
+      # Initially no owners
+      assert Accounts.count_organization_owners(org.id) == 0
+
+      # Create invite for user1 as owner
+      {:ok, membership1} = Accounts.create_invite(org.id, user1.email, :owner)
+      assert membership1.role == :owner
+      assert membership1.status == :pending
+
+      # Pending owner doesn't count towards approved owners
+      assert Accounts.count_organization_owners(org.id) == 0
+
+      # Approve membership1
+      {:ok, approved1} =
+        Accounts.update_organization_membership(membership1, %{status: :approved})
+
+      assert approved1.status == :approved
+      assert Accounts.count_organization_owners(org.id) == 1
+
+      # Retrieve membership by user and org
+      fetched = Accounts.get_organization_membership_by_user(user1.id, org.id)
+      assert fetched != nil
+      assert fetched.id == membership1.id
+      assert fetched.role == :owner
+
+      # Non-existent membership returns nil
+      assert Accounts.get_organization_membership_by_user(user2.id, org.id) == nil
+
+      # Add user2 as contributor
+      {:ok, membership2} = Accounts.create_invite(org.id, user2.email, :contributor)
+
+      {:ok, _approved2} =
+        Accounts.update_organization_membership(membership2, %{status: :approved})
+
+      # Owner count still 1
+      assert Accounts.count_organization_owners(org.id) == 1
+
+      # Upgrade user2 to owner
+      {:ok, _updated2} = Accounts.update_organization_membership(membership2, %{role: :owner})
+      assert Accounts.count_organization_owners(org.id) == 2
+    end
+  end
 end

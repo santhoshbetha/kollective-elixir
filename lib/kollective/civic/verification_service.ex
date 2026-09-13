@@ -64,7 +64,9 @@ defmodule Kollective.Civic.VerificationService do
 
           # 6. Elevate account tier cleanly once threshold parameter passes 3
           if vouch_count >= 3 and vouchee.account_tier == 0 do
-            vouchee |> User.changeset(%{account_tier: 1}) |> Repo.update!()
+            vouchee
+            |> User.changeset(%{account_tier: 1})
+            |> Repo.update!()
           end
 
           vouch_count

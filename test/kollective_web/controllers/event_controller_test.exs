@@ -55,6 +55,47 @@ defmodule KollectiveWeb.EventControllerTest do
     end
   end
 
+  describe "joined_events/2" do
+    test "returns list of events joined by current user", %{conn: conn, user: user} do
+      event = insert(:event, created_by: user.id, user: user)
+      insert(:participant, event: event, user: user, status: "accepted")
+
+      response = conn |> get(~p"/api/v1/events/joined") |> json_response(200)
+
+      assert is_list(response["data"])
+    end
+  end
+
+  describe "invite/2" do
+    test "successfully invites a user to an event", %{conn: conn, user: user} do
+      target_user = insert(:user)
+      event = insert(:event, created_by: user.id, user: user, join_mode: "free")
+
+      response =
+        conn
+        |> post(~p"/api/v1/events/#{event.id}/invite", %{"user_id" => target_user.id})
+        |> json_response(200)
+
+      assert response["status"] == "success"
+      assert response["message"] =~ "Invitation sent successfully"
+    end
+
+    test "returns 403 forbidden if non-organizer invites to invite_only event", %{conn: conn} do
+      other_user = insert(:user)
+      target_user = insert(:user)
+
+      event =
+        insert(:event, created_by: other_user.id, user: other_user, join_mode: "invite_only")
+
+      response =
+        conn
+        |> post(~p"/api/v1/events/#{event.id}/invite", %{"user_id" => target_user.id})
+        |> json_response(403)
+
+      assert response["error"] == "forbidden"
+    end
+  end
+
   describe "create/2" do
     test "successfully creates event", %{conn: conn} do
       params = %{

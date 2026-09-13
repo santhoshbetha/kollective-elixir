@@ -17,7 +17,7 @@ defmodule Kollective.Workers.NotifyParentAuthorWorker do
         if post.in_reply_to_id do
           parent = Repo.get(Post, post.in_reply_to_id)
 
-          if parent && parent.user_id != post.user_id do
+          if parent && parent.user_id && post.user_id && parent.user_id != post.user_id do
             Notifications.notify_reply(
               parent.user_id,
               post.user_id,

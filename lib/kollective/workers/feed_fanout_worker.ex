@@ -9,45 +9,49 @@ defmodule Kollective.Workers.FeedFanoutWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"post_id" => post_id, "author_id" => author_id}}) do
-    import Ecto.Query
+    if is_nil(author_id) do
+      :ok
+    else
+      import Ecto.Query
 
-    # 1. Gather all follower IDs for this author
-    follower_ids =
-      from(r in Kollective.Accounts.UserRelationship,
-        where: r.target_id == ^author_id and r.type == "follow",
-        select: r.source_id
-      )
-      |> Repo.all()
+      # 1. Gather all follower IDs for this author
+      follower_ids =
+        from(r in Kollective.Accounts.UserRelationship,
+          where: r.target_id == ^author_id and r.type == "follow",
+          select: r.source_id
+        )
+        |> Repo.all()
 
-    # 2. Bulk insert rows into the Home Feed Cache table
-    # This is a high-speed bulk database insertion pass
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+      # 2. Bulk insert rows into the Home Feed Cache table
+      # This is a high-speed bulk database insertion pass
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    entries =
-      Enum.map(follower_ids, fn follower_id ->
-        %{
-          user_id: follower_id,
-          post_id: post_id,
-          inserted_at: now,
-          updated_at: now
-        }
+      entries =
+        Enum.map(follower_ids, fn follower_id ->
+          %{
+            user_id: follower_id,
+            post_id: post_id,
+            inserted_at: now,
+            updated_at: now
+          }
+        end)
+
+      # Insert in chunks of 1,000 to prevent hitting Postgres parameter limits
+      Enum.chunk_every(entries, 1000)
+      |> Enum.each(fn chunk ->
+        Repo.insert_all("home_feed_entries", chunk, on_conflict: :nothing)
       end)
 
-    # Insert in chunks of 1,000 to prevent hitting Postgres parameter limits
-    Enum.chunk_every(entries, 1000)
-    |> Enum.each(fn chunk ->
-      Repo.insert_all("home_feed_entries", chunk, on_conflict: :nothing)
-    end)
+      # 3. Stream real-time alerts over WebSockets to currently active followers
+      Enum.each(follower_ids, fn follower_id ->
+        Phoenix.PubSub.broadcast(
+          Kollective.PubSub,
+          "timeline:home:#{follower_id}",
+          {:new_timeline_post, %{post_id: post_id}}
+        )
+      end)
 
-    # 3. Stream real-time alerts over WebSockets to currently active followers
-    Enum.each(follower_ids, fn follower_id ->
-      Phoenix.PubSub.broadcast(
-        Kollective.PubSub,
-        "timeline:home:#{follower_id}",
-        {:new_timeline_post, %{post_id: post_id}}
-      )
-    end)
-
-    :ok
+      :ok
+    end
   end
 end

@@ -33,7 +33,14 @@ defmodule KollectiveWeb.ConnCase do
 
   setup tags do
     Kollective.DataCase.setup_sandbox(tags)
-    {:ok, conn: Phoenix.ConnTest.build_conn()}
+    ip_part1 = rem(System.unique_integer([:positive]), 250) + 1
+    ip_part2 = rem(System.unique_integer([:positive]), 250) + 1
+
+    conn =
+      Phoenix.ConnTest.build_conn()
+      |> Map.put(:remote_ip, {10, 99, ip_part1, ip_part2})
+
+    {:ok, conn: conn}
   end
 
   @doc """

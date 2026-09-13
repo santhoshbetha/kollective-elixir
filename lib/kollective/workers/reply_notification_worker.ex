@@ -10,14 +10,18 @@ defmodule Kollective.Workers.ReplyNotificationWorker do
   def perform(%Oban.Job{
         args: %{"recipient_id" => recipient_id, "actor_id" => actor_id, "reply_id" => reply_id}
       }) do
-    case Repo.get(Post, reply_id) do
-      nil ->
-        {:error, :reply_not_found}
+    if is_nil(recipient_id) or recipient_id == actor_id do
+      :ok
+    else
+      case Repo.get(Post, reply_id) do
+        nil ->
+          {:error, :reply_not_found}
 
-      reply ->
-        # Executes safely within Oban's sandbox-compatible environment
-        Notifications.notify_reply(recipient_id, actor_id, reply)
-        :ok
+        reply ->
+          # Executes safely within Oban's sandbox-compatible environment
+          Notifications.notify_reply(recipient_id, actor_id, reply)
+          :ok
+      end
     end
   end
 end

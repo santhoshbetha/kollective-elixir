@@ -4,6 +4,7 @@ defmodule KollectiveWeb.PostControllerTest do
   alias Kollective.Posts.Post
   alias Kollective.Moderation.RestrictedKeyword
   alias Kollective.Repo
+  alias Kollective.Accounts.OrganizationMembership
 
   import Kollective.AccountsFixtures
   import Ecto.Query
@@ -57,6 +58,23 @@ defmodule KollectiveWeb.PostControllerTest do
         post(conn, ~p"/api/v1/posts/#{Kollective.Schemas.ULIDType.generate()}/replies", %{
           "post" => %{"content" => "reply"}
         })
+
+      assert conn.status == 401
+      assert json_response(conn, 401)["message"] =~ "must log in"
+    end
+
+    test "PUT /api/v1/posts/:id returns 401", %{conn: conn} do
+      conn =
+        put(conn, ~p"/api/v1/posts/#{Kollective.Schemas.ULIDType.generate()}", %{
+          "post" => %{"content" => "updated"}
+        })
+
+      assert conn.status == 401
+      assert json_response(conn, 401)["message"] =~ "must log in"
+    end
+
+    test "DELETE /api/v1/posts/:id returns 401", %{conn: conn} do
+      conn = delete(conn, ~p"/api/v1/posts/#{Kollective.Schemas.ULIDType.generate()}")
 
       assert conn.status == 401
       assert json_response(conn, 401)["message"] =~ "must log in"
@@ -156,6 +174,76 @@ defmodule KollectiveWeb.PostControllerTest do
 
       assert response["status"] == "ok"
       assert response["data"]["content"] == "This is a clean post content"
+      assert response["data"]["author"]["id"] == to_string(conn.assigns.current_user.id)
+      assert response["data"]["organization_id"] == nil
+
+      # Verify directly in database
+      post_record = Repo.get_by(Post, content: "This is a clean post content")
+      assert post_record.user_id == conn.assigns.current_user.id
+      assert is_nil(post_record.organization_id)
+    end
+
+    test "POST /api/v1/posts creates an organization post with individual author and org ID", %{
+      conn: conn
+    } do
+      user = conn.assigns.current_user
+      org = user_fixture(%{type: :organization, display_name: "Action Org"})
+
+      # Add user as approved contributor to the organization
+      %OrganizationMembership{}
+      |> OrganizationMembership.changeset(%{
+        user_id: user.id,
+        organization_id: org.id,
+        role: :contributor,
+        status: :approved
+      })
+      |> Repo.insert!()
+
+      params = %{
+        "post" => %{
+          "content" => "Official statement from Action Org",
+          "text" => "Official statement from Action Org",
+          "category" => "post",
+          "target_scope" => "local",
+          "organization_id" => org.id
+        }
+      }
+
+      response =
+        conn
+        |> post(~p"/api/v1/posts", params)
+        |> json_response(201)
+
+      assert response["status"] == "ok"
+      # Author remains the individual human who writes the post on behalf of the org
+      assert response["data"]["author"]["id"] == to_string(user.id)
+      assert response["data"]["organization_id"] == to_string(org.id)
+
+      # Verify directly in database: user_id is author (123), organization_id is org (456)
+      post_record = Repo.get_by(Post, content: "Official statement from Action Org")
+      assert post_record.user_id == user.id
+      assert post_record.organization_id == org.id
+    end
+
+    test "POST /api/v1/posts rejects org post if user is not an approved member", %{conn: conn} do
+      org = user_fixture(%{type: :organization, display_name: "Other Org"})
+
+      params = %{
+        "post" => %{
+          "content" => "Fraudulent post pretending to be org",
+          "text" => "Fraudulent post pretending to be org",
+          "category" => "post",
+          "target_scope" => "local",
+          "organization_id" => org.id
+        }
+      }
+
+      response =
+        conn
+        |> post(~p"/api/v1/posts", params)
+        |> json_response(403)
+
+      assert response["error"] == "forbidden"
     end
 
     test "POST /api/v1/posts creates a post with a nested poll and options", %{conn: conn} do
@@ -443,6 +531,107 @@ defmodule KollectiveWeb.PostControllerTest do
       assert data2["reblog"] != nil
       assert data2["reblog"]["id"] == post.id
       assert data2["reblog"]["content"] == post.content
+    end
+  end
+
+  describe "PUT /api/v1/posts/:id" do
+    setup :authenticate_user
+
+    test "author can update post and edit_count increments", %{conn: conn, user: user} do
+      post = post_fixture(user, %{content: "Initial text"})
+      assert post.edit_count == 0
+
+      conn1 =
+        put(conn, ~p"/api/v1/posts/#{post.id}", %{
+          "post" => %{"content" => "Updated text once"}
+        })
+
+      assert conn1.status == 200
+      data1 = json_response(conn1, 200)["data"]
+      assert data1["content"] == "Updated text once"
+      assert data1["edit_count"] == 1
+      assert data1["edited_at"] != nil
+
+      # Second edit increments to 2
+      conn2 =
+        put(conn, ~p"/api/v1/posts/#{post.id}", %{
+          "post" => %{"content" => "Updated text twice"}
+        })
+
+      assert conn2.status == 200
+      data2 = json_response(conn2, 200)["data"]
+      assert data2["content"] == "Updated text twice"
+      assert data2["edit_count"] == 2
+    end
+
+    test "unauthorized user cannot update another user's post", %{conn: conn} do
+      other_user = user_fixture()
+      post = post_fixture(other_user, %{content: "Other user post"})
+
+      conn =
+        put(conn, ~p"/api/v1/posts/#{post.id}", %{
+          "post" => %{"content" => "Malicious update"}
+        })
+
+      assert conn.status == 403
+      assert json_response(conn, 403)["error"] == "forbidden"
+    end
+  end
+
+  describe "DELETE /api/v1/posts/:id" do
+    setup :authenticate_user
+
+    test "author can delete their post", %{conn: conn, user: user} do
+      post = post_fixture(user, %{content: "Post to delete"})
+
+      conn = delete(conn, ~p"/api/v1/posts/#{post.id}")
+      assert response(conn, 204)
+      assert Repo.get(Post, post.id) == nil
+    end
+
+    test "unauthorized user cannot delete another user's post", %{conn: conn} do
+      other_user = user_fixture()
+      post = post_fixture(other_user, %{content: "Other post"})
+
+      conn = delete(conn, ~p"/api/v1/posts/#{post.id}")
+      assert conn.status == 403
+      assert json_response(conn, 403)["error"] == "forbidden"
+      assert Repo.get(Post, post.id) != nil
+    end
+
+    test "organization admin can delete organization post and records AuditLog", %{
+      conn: conn,
+      user: admin
+    } do
+      org = user_fixture(%{type: :organization, display_name: "Civic Org"})
+      author = user_fixture()
+
+      # Add admin as approved admin of org
+      Repo.insert!(%OrganizationMembership{
+        user_id: admin.id,
+        organization_id: org.id,
+        role: :admin,
+        status: :approved
+      })
+
+      post = post_fixture(author, %{content: "Org post to be deleted", organization_id: org.id})
+
+      conn = delete(conn, ~p"/api/v1/posts/#{post.id}")
+      assert response(conn, 204)
+      assert Repo.get(Post, post.id) == nil
+
+      # Check AuditLog
+      log =
+        Repo.get_by(Kollective.Accounts.AuditLog,
+          action: "post_deleted",
+          target_type: "Post",
+          target_id: to_string(post.id)
+        )
+
+      assert log != nil
+      assert log.actor_id == admin.id
+      assert log.organization_id == org.id
+      assert log.metadata["is_admin_delete"] == true
     end
   end
 

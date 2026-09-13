@@ -3,8 +3,11 @@ defmodule Kollective.Accounts.OrganizationMembership do
   import Ecto.Changeset
 
   schema "organization_memberships" do
-    field :role, Ecto.Enum, values: [:admin, :member], default: :member
-    field :status, Ecto.Enum, values: [:pending, :approved, :rejected], default: :pending
+    field :role, Ecto.Enum, values: [:admin, :contributor, :owner], default: :contributor
+
+    field :status, Ecto.Enum,
+      values: [:pending, :approved, :active, :rejected, :removed],
+      default: :pending
 
     # Both foreign keys point back to columns in your main users table!
     belongs_to :user, Kollective.Accounts.User, foreign_key: :user_id

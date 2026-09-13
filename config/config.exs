@@ -94,6 +94,7 @@ config :kollective, KollectiveWeb.Endpoint,
 # For production it's recommended to configure a different adapter
 # at the `config/runtime.exs`.
 config :kollective, Kollective.Mailer, adapter: Swoosh.Adapters.Local
+config :kollective, Kollective.OrganizationMailer, adapter: Swoosh.Adapters.Local
 
 # -------------------------------------------------------------------
 # Application Architecture Bridge (Application Layer)

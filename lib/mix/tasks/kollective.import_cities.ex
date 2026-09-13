@@ -1,7 +1,6 @@
 # lib/mix/tasks/kollective.import_cities.ex
 defmodule Mix.Tasks.Kollective.ImportCities do
   use Mix.Task
-  import Ecto.Query
 
   alias Kollective.Repo
   alias Kollective.Locations.City

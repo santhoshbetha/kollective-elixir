@@ -125,4 +125,71 @@ defmodule KollectiveWeb.UserLocationTest do
       assert response["user"]["district_l3"] == "Austin Central Assembly"
     end
   end
+
+  describe "PATCH /api/v1/profile/districts (Geospatial Service Mock Testing)" do
+    test "successfully synchronizes districts using mocked @geo_client", %{
+      conn: conn,
+      user: user,
+      expected_l3_id: expected_l3_id
+    } do
+      Kollective.Geospatial.ServiceMock
+      |> expect(:geocode_us_address, 1, fn "123 Congress Ave", "Austin" ->
+        {:ok,
+         %{
+           lat: 30.25,
+           lon: -97.75,
+           state: "TX",
+           county: "Travis County",
+           district: "Travis"
+         }}
+      end)
+
+      payload = %{"address" => "123 Congress Ave, Austin"}
+
+      response =
+        conn
+        |> patch(~p"/api/v1/profile/districts", payload)
+        |> json_response(200)
+
+      assert response["status"] == "success"
+      assert response["message"] == "Political boundaries successfully synchronized."
+      assert response["data"]["id"] == to_string(user.id)
+
+      updated_user = Repo.get!(Kollective.Accounts.User, user.id)
+      assert updated_user.origin_state == "TX"
+      assert updated_user.district_l1_id != nil
+      assert updated_user.district_l2_id != nil
+      assert updated_user.district_l3_id == expected_l3_id
+    end
+
+    test "returns 422 when street address cannot be located", %{conn: conn} do
+      Kollective.Geospatial.ServiceMock
+      |> expect(:geocode_us_address, 1, fn "Nowhere Road", "Austin" ->
+        {:error, :address_not_found}
+      end)
+
+      response =
+        conn
+        |> patch(~p"/api/v1/profile/districts", %{"address" => "Nowhere Road, Austin"})
+        |> json_response(422)
+
+      assert response["error"] =~ "could not be located"
+    end
+
+    test "returns 400 when address parameter is missing or blank", %{conn: conn} do
+      response =
+        conn
+        |> patch(~p"/api/v1/profile/districts", %{})
+        |> json_response(400)
+
+      assert response["error"] == "Missing address parameter."
+
+      blank_response =
+        conn
+        |> patch(~p"/api/v1/profile/districts", %{"address" => ""})
+        |> json_response(400)
+
+      assert blank_response["error"] == "Missing address parameter."
+    end
+  end
 end
