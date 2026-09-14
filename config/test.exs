@@ -69,6 +69,8 @@ config :kollective,
        Kollective.OrganizationMailer,
        adapter: Swoosh.Adapters.Test
 
+config :joken, default_signer: "kollective_jwt_token_signing_secret_key_minimum_32_bytes"
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 

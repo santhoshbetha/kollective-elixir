@@ -65,6 +65,17 @@ defmodule KollectiveWeb.EventController do
     |> json(EventJSON.index(%{events: events}))
   end
 
+  # ─── ACTION: RETRIEVE NEARBY EVENTS FOR USER WITHIN GIVEN RADIUS ───
+  # GET /api/v1/events/nearby
+  def nearby(conn, params) do
+    user = conn.assigns[:current_user]
+    events = Events.list_nearby_events(user, params)
+
+    conn
+    |> put_status(:ok)
+    |> json(EventJSON.index(%{events: events}))
+  end
+
   # ─── ACTION 3: DISPATCH SOCIAL EVENT INVITE DIALOG TABS ───
   # POST /api/v1/kollective/events/:id/invite
   def invite(conn, %{"id" => event_id, "user_id" => target_user_id}) do
@@ -136,7 +147,8 @@ defmodule KollectiveWeb.EventController do
   fraud identification gates, automated two-strike IP banning, and strategic black-hole responses.
   """
   # POST /api/v1/events
-  def create(conn, %{"event" => event_params}) do
+  def create(conn, params) do
+    event_params = Map.get(params, "event", params)
     user = conn.assigns.current_user
     ip = guest_ip(conn)
 

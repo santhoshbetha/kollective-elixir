@@ -17,7 +17,7 @@ defmodule KollectiveWeb.Router do
   # Enforces an active session token before allowing access
   pipeline :api_authenticated do
     # 1. First, decode the Bearer token header and assign :current_user
-    # plug KollectiveWeb.Plugs.APIAuth
+    plug KollectiveWeb.Plugs.APIAuth
 
     # 2. Second, run the helper to map :current_user onto the structural domain :current_scope
     plug :fetch_current_scope_for_user
@@ -94,6 +94,10 @@ defmodule KollectiveWeb.Router do
 
     # 🚀 REAL-TIME REGISTRATION AVAILABILITY CHECKER
     get "/auth/check-username", AuthController, :check_username
+
+    # 📢 Town Bulletin / Classifieds Directory (Public)
+    get "/classifieds", ClassifiedController, :index
+    get "/classifieds/:id", ClassifiedController, :show
   end
 
   scope "/api/users", KollectiveWeb do
@@ -114,6 +118,31 @@ defmodule KollectiveWeb.Router do
   scope "/api/v1", KollectiveWeb do
     pipe_through [:api, :api_authenticated]
 
+    get "/accounts/:username_or_id", ProfileController, :show
+
+    # Accessible account profiles (personal + active orgs)
+    get "/profiles", ProfileController, :index_profiles
+
+    # Media upload presignment tickets
+    get "/profile/media/presign", ProfileController, :presign_asset
+
+    # Main profile parameters modifier mapping
+    put "/profile", ProfileController, :update
+
+    get "/profile/authorized_organizations", ProfileController, :list_authorized_organizations
+  end
+
+  scope "/api/v1", KollectiveWeb do
+    pipe_through [:api, :api_authenticated]
+
+    # 📢 Town Bulletin / Classifieds Post & Management
+    post "/classifieds", ClassifiedController, :create
+    delete "/classifieds/:id", ClassifiedController, :delete
+  end
+
+  scope "/api/v1", KollectiveWeb do
+    pipe_through [:api, :api_authenticated]
+
     # List blocked/muted user indices for the settings panels
     get "/relationships", RelationshipController, :index
 
@@ -128,20 +157,6 @@ defmodule KollectiveWeb.Router do
     get "/users/settings", SettingsController, :edit
     put "/users/settings", SettingsController, :update
     get "/users/settings/confirm-email/:token", SettingsController, :confirm_email
-  end
-
-  scope "/api/v1", KollectiveWeb do
-    pipe_through [:api, :api_authenticated]
-
-    get "/accounts/:username_or_id", ProfileController, :show
-
-    # Media upload presignment tickets
-    get "/profile/media/presign", ProfileController, :presign_asset
-
-    # Main profile parameters modifier mapping
-    put "/profile", ProfileController, :update
-
-    get "/profile/authorized_organizations", ProfileController, :list_authorized_organizations
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -172,6 +187,8 @@ defmodule KollectiveWeb.Router do
     get "/invitations", InvitationController, :index
     post "/invitations/:id/accept", InvitationController, :accept
     post "/invitations/:id/decline", InvitationController, :decline
+
+    get "/profiles", ProfileController, :index_profiles
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -359,6 +376,7 @@ defmodule KollectiveWeb.Router do
 
     get "/events", EventController, :index
     get "/events/joined", EventController, :joined_events
+    get "/events/nearby", EventController, :nearby
     get "/events/:id", EventController, :show
 
     put "/events/:id", EventController, :update
@@ -623,5 +641,29 @@ defmodule KollectiveWeb.Router do
     pipe_through [:api, :api_authenticated]
 
     get "/districts/lookup", DistrictController, :lookup
+
+    post "/classifieds", ClassifiedController, :create
+    delete "/classifieds/:id", ClassifiedController, :delete
+  end
+
+  scope "/api", KollectiveWeb do
+    pipe_through [:api]
+
+    get "/classifieds", ClassifiedController, :index
+    get "/classifieds/:id", ClassifiedController, :show
+  end
+
+  scope "/classifieds", KollectiveWeb do
+    pipe_through [:api]
+
+    get "/", ClassifiedController, :index
+    get "/:id", ClassifiedController, :show
+  end
+
+  scope "/classifieds", KollectiveWeb do
+    pipe_through [:api, :api_authenticated]
+
+    post "/", ClassifiedController, :create
+    delete "/:id", ClassifiedController, :delete
   end
 end

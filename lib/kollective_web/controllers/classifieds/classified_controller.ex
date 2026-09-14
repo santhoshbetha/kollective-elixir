@@ -1,0 +1,115 @@
+defmodule KollectiveWeb.ClassifiedController do
+  use KollectiveWeb, :controller
+
+  alias Kollective.Classifieds.Classifieds
+  alias Kollective.Classifieds.Classified
+  alias KollectiveWeb.ClassifiedJSON
+
+  action_fallback KollectiveWeb.FallbackController
+
+  @doc """
+  GET /api/v1/classifieds (also /classifieds)
+  Lists active classified ads with optional search and category filters.
+  """
+  def index(conn, params) do
+    user =
+      conn.assigns[:current_user] ||
+        (conn.assigns[:current_scope] && conn.assigns.current_scope.user)
+
+    classifieds = Classifieds.list_classifieds(params, user)
+    json(conn, ClassifiedJSON.index(%{classifieds: classifieds}))
+  end
+
+  @doc """
+  GET /api/v1/classifieds/:id
+  Retrieves single classified ad details.
+  """
+  def show(conn, %{"id" => id}) do
+    case Classifieds.get_classified(id) do
+      nil ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found", message: "Classified ad not found."})
+
+      %Classified{} = classified ->
+        json(conn, ClassifiedJSON.show(%{classified: classified}))
+    end
+  end
+
+  @doc """
+  POST /api/v1/classifieds (also /classifieds)
+  Creates a new classified ad for the authenticated user.
+  Accepts either %{"classified" => params} or flat params map.
+  """
+  def create(conn, params) do
+    user =
+      conn.assigns[:current_user] ||
+        (conn.assigns[:current_scope] && conn.assigns.current_scope.user)
+
+    if is_nil(user) do
+      conn
+      |> put_status(:unauthorized)
+      |> json(%{error: "unauthorized", message: "You must log in to post an ad."})
+    else
+      classified_params = Map.get(params, "classified", params)
+
+      case Classifieds.create_classified(user, classified_params) do
+        {:ok, classified} ->
+          rendered = ClassifiedJSON.data(classified)
+
+          conn
+          |> put_status(:created)
+          # Merge both top-level keys for React's direct response unpacking and data wrapper
+          |> json(Map.merge(rendered, %{status: "success", data: rendered}))
+
+        {:error, changeset} ->
+          conn
+          |> put_status(:unprocessable_entity)
+          |> json(KollectiveWeb.ChangesetJSON.error(%{changeset: changeset}))
+      end
+    end
+  end
+
+  @doc """
+  DELETE /api/v1/classifieds/:id
+  Deletes an ad if the user is the author or a platform admin.
+  """
+  def delete(conn, %{"id" => id}) do
+    user =
+      conn.assigns[:current_user] ||
+        (conn.assigns[:current_scope] && conn.assigns.current_scope.user)
+
+    if is_nil(user) do
+      conn
+      |> put_status(:unauthorized)
+      |> json(%{error: "unauthorized", message: "You must log in to delete an ad."})
+    else
+      case Classifieds.get_classified(id) do
+        nil ->
+          conn
+          |> put_status(:not_found)
+          |> json(%{error: "not_found", message: "Classified ad not found."})
+
+        %Classified{} = classified ->
+          is_owner = to_string(classified.user_id) == to_string(user.id)
+          is_admin = user.role in [:admin, "admin"]
+
+          if is_owner or is_admin do
+            case Classifieds.delete_classified(classified) do
+              {:ok, _} ->
+                json(conn, %{status: "success", message: "Classified ad deleted successfully."})
+
+              {:error, changeset} ->
+                conn
+                |> put_status(:unprocessable_entity)
+                |> json(KollectiveWeb.ChangesetJSON.error(%{changeset: changeset}))
+            end
+          else
+            conn
+            |> put_status(:forbidden)
+            |> json(%{error: "forbidden", message: "You are not authorized to delete this ad."})
+          end
+      end
+    end
+  end
+end

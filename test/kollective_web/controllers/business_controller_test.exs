@@ -3,7 +3,6 @@ defmodule KollectiveWeb.BusinessControllerTest do
 
   import Kollective.Factory
 
-  alias Kollective.Businesses.Business
   alias Kollective.Repo
 
   setup :authenticate_user
@@ -53,7 +52,7 @@ defmodule KollectiveWeb.BusinessControllerTest do
   end
 
   describe "create business (POST /api/v1/businesses)" do
-    test "successfully registers a business with valid parameters", %{conn: conn, user: user} do
+    test "successfully registers a business with valid parameters", %{conn: conn} do
       # Insert a city fixture so get_or_import_city does not hit external GeoNames API
       city = insert(:city)
 
@@ -86,6 +85,43 @@ defmodule KollectiveWeb.BusinessControllerTest do
       assert response["data"]["name"] == "Acme Cafe"
       assert response["data"]["legal_structure"] == "LLC"
       assert response["data"]["id"]
+    end
+
+    test "normalizes frontend collaborative business form payload with flat params and display labels",
+         %{conn: conn} do
+      city = insert(:city)
+
+      # Emulates payload sent directly from PostBusinessPage.jsx without "business" wrapper
+      flat_params = %{
+        "name" => "Eastside Solidarity Bakery & Farm",
+        "description" =>
+          "A community-owned worker cooperative providing organic bread and produce.",
+        "category" => "Sustainable Energy",
+        "legalStructure" => "Cooperative (Recommended)",
+        "address" => "456 Solar Way",
+        "city" => city.name,
+        "state" => city.state,
+        "zip" => "90002",
+        "email" => "contact@solidarity.coop",
+        "phone" => "213-555-0200",
+        "website" => "solidarity.coop",
+        "established" => "2024",
+        "employees" => "1-5",
+        "hours" => "8:00 AM - 4:00 PM",
+        "image" => "https://images.unsplash.com/photo-solidarity.jpg",
+        "services" => ["Worker-Owned", "Unionized Shop", "Solar Powered", "Local Sourcing"]
+      }
+
+      response =
+        conn
+        |> post(~p"/api/v1/businesses", flat_params)
+        |> json_response(201)
+
+      assert response["status"] == "success"
+      assert response["data"]["name"] == "Eastside Solidarity Bakery & Farm"
+      assert response["data"]["legal_structure"] == "Cooperative"
+      assert response["data"]["hours"] == "8:00 AM - 4:00 PM"
+      assert "Worker-Owned" in response["data"]["services"]
     end
 
     test "returns 422 with validation errors when parameters are invalid", %{conn: conn} do
@@ -129,6 +165,37 @@ defmodule KollectiveWeb.BusinessControllerTest do
       assert response["message"] =~ "proposal has been successfully published"
       assert response["data"]["title"] == "Community Tech Incubator"
       assert response["data"]["category"] == "technology"
+      assert response["data"]["funding_details"]["funding_required"] == true
+    end
+
+    test "normalizes frontend proposal payload with flat params and fundingGoal/minInvest", %{
+      conn: conn
+    } do
+      flat_params = %{
+        "title" => "Community Solar Microgrid Proposal",
+        "description" =>
+          "Neighborhood-owned solar array providing clean energy dividends to residents.",
+        "category" => "Infrastructure",
+        "location" => "Oakland District 4",
+        "fundingGoal" => 75_000,
+        "minInvest" => 50,
+        "maxInvest" => 5000,
+        "daysLeft" => 45,
+        "participants" => "12 Members",
+        "status" => "Active"
+      }
+
+      response =
+        conn
+        |> post(~p"/api/v1/business_proposals", flat_params)
+        |> json_response(201)
+
+      assert response["status"] == "success"
+      assert response["data"]["title"] == "Community Solar Microgrid Proposal"
+      assert response["data"]["fundingGoal"] == 75_000
+      assert response["data"]["minInvest"] == 50
+      assert response["data"]["maxInvest"] == 5000
+      assert response["data"]["daysLeft"] == 45
       assert response["data"]["funding_details"]["funding_required"] == true
     end
 
@@ -189,6 +256,114 @@ defmodule KollectiveWeb.BusinessControllerTest do
       assert response["status"] == "success"
       assert is_list(response["data"])
       assert Enum.any?(response["data"], fn p -> p["name"] == proposal.name end)
+    end
+
+    test "correctly discovers businesses within distance using extracted user coordinates and excludes distant ones",
+         %{conn: conn, user: user} do
+      # User with fuzzy coordinates in Austin (30.27, -97.74)
+      # Clear city_id and districts so only physical distance matching applies
+      austin_user =
+        user
+        |> Ecto.Changeset.change(%{
+          city_id: nil,
+          district_l1_id: nil,
+          district_l2_id: nil,
+          district_l3_id: nil,
+          state: "TX",
+          location: "POINT(-97.74 30.27)"
+        })
+        |> Repo.update!()
+
+      # Business in Austin (~0 miles)
+      _austin_biz =
+        insert(:business,
+          name: "Austin Coffee Roasters",
+          verification_status: "verified",
+          city_id: nil,
+          district_l1: nil,
+          district_l2: nil,
+          district_l3: nil,
+          state: "TX",
+          location: %Geo.Point{coordinates: {-97.7431, 30.2672}, srid: 4326}
+        )
+
+      # Business in Round Rock (~15 miles away)
+      _round_rock_biz =
+        insert(:business,
+          name: "Round Rock Bakery",
+          verification_status: "verified",
+          city_id: nil,
+          district_l1: nil,
+          district_l2: nil,
+          district_l3: nil,
+          state: "TX",
+          location: %Geo.Point{coordinates: {-97.6789, 30.5083}, srid: 4326}
+        )
+
+      # Business in Dallas (~195 miles away - beyond 60 miles)
+      _dallas_biz =
+        insert(:business,
+          name: "Dallas Steakhouse",
+          verification_status: "verified",
+          city_id: nil,
+          district_l1: nil,
+          district_l2: nil,
+          district_l3: nil,
+          state: "TX",
+          location: %Geo.Point{coordinates: {-96.7970, 32.7767}, srid: 4326}
+        )
+
+      conn = assign(conn, :current_user, austin_user)
+
+      # Default 60-mile radius: Austin & Round Rock included, Dallas excluded
+      response =
+        conn
+        |> get(~p"/api/v1/businesses", %{"type" => "existing"})
+        |> json_response(200)
+
+      names = Enum.map(response["data"], & &1["name"])
+      assert "Austin Coffee Roasters" in names
+      assert "Round Rock Bakery" in names
+      refute "Dallas Steakhouse" in names
+    end
+
+    test "filters businesses by coordinate distance along with category", %{
+      conn: conn,
+      user: user
+    } do
+      austin_user =
+        user
+        |> Ecto.Changeset.change(%{
+          location: "POINT(-97.74 30.27)"
+        })
+        |> Repo.update!()
+
+      _coffee =
+        insert(:business,
+          name: "Austin Espresso Hub",
+          category: "food_beverage",
+          verification_status: "verified",
+          location: %Geo.Point{coordinates: {-97.7431, 30.2672}, srid: 4326}
+        )
+
+      _retail =
+        insert(:business,
+          name: "Austin Boutique Clothes",
+          category: "retail",
+          verification_status: "verified",
+          location: %Geo.Point{coordinates: {-97.7431, 30.2672}, srid: 4326}
+        )
+
+      conn = assign(conn, :current_user, austin_user)
+
+      response =
+        conn
+        |> get(~p"/api/v1/businesses", %{"type" => "existing", "category" => "food_beverage"})
+        |> json_response(200)
+
+      names = Enum.map(response["data"], & &1["name"])
+      assert "Austin Espresso Hub" in names
+      refute "Austin Boutique Clothes" in names
     end
   end
 

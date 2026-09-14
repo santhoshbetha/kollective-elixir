@@ -75,4 +75,70 @@ defmodule Kollective.Events.EventTest do
              )
     end
   end
+
+  describe "list_nearby_events" do
+    test "fetches events within given radius using user coordinates and explicit coordinates" do
+      # Setup user with Austin location: 30.2672, -97.7431
+      user =
+        insert(:user,
+          location: "POINT(-97.7431 30.2672)"
+        )
+
+      # Austin event (~0 miles)
+      austin_event =
+        insert(:event,
+          title: "Austin Music Fest",
+          latitude: 30.2672,
+          longitude: -97.7431,
+          location: %Geo.Point{coordinates: {-97.7431, 30.2672}, srid: 4326},
+          event_status: "published",
+          user: user
+        )
+
+      # Round Rock event (~15 miles)
+      rr_event =
+        insert(:event,
+          title: "Round Rock Tech Talk",
+          latitude: 30.5083,
+          longitude: -97.6789,
+          location: %Geo.Point{coordinates: {-97.6789, 30.5083}, srid: 4326},
+          event_status: "published"
+        )
+
+      # Houston event (~160 miles: 29.7604, -95.3698)
+      houston_event =
+        insert(:event,
+          title: "Houston Art Walk",
+          latitude: 29.7604,
+          longitude: -95.3698,
+          location: %Geo.Point{coordinates: {-95.3698, 29.7604}, srid: 4326},
+          event_status: "published"
+        )
+
+      # 1. list_nearby_events(user, %{"radius" => "5"}) -> Austin only
+      events_5 = Kollective.Events.Events.list_nearby_events(user, %{"radius" => "5"})
+      ids_5 = Enum.map(events_5, & &1.id)
+      assert austin_event.id in ids_5
+      refute rr_event.id in ids_5
+      refute houston_event.id in ids_5
+
+      # 2. list_nearby_events(user, %{"radius" => "25"}) -> Austin and Round Rock
+      events_25 = Kollective.Events.Events.list_nearby_events(user, %{"radius" => "25"})
+      ids_25 = Enum.map(events_25, & &1.id)
+      assert austin_event.id in ids_25
+      assert rr_event.id in ids_25
+      refute houston_event.id in ids_25
+
+      # 3. list_nearby_events(lat, lng, radius_meters) -> explicit coordinates
+      events_coords = Kollective.Events.Events.list_nearby_events(30.2672, -97.7431, 40_000)
+      ids_coords = Enum.map(events_coords, & &1.id)
+      assert austin_event.id in ids_coords
+      assert rr_event.id in ids_coords
+      refute houston_event.id in ids_coords
+
+      # Distance meters metadata is populated
+      austin_res = Enum.find(events_25, &(&1.id == austin_event.id))
+      assert is_number(austin_res.metadata["distance_meters"])
+    end
+  end
 end

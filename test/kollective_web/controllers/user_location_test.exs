@@ -87,6 +87,7 @@ defmodule KollectiveWeb.UserLocationTest do
   describe "PATCH /api/me/political-location (Offline Mock Testing)" do
     test "successfully resolves districts using mocked GeoService responses", %{
       conn: conn,
+      user: user,
       city: city,
       expected_l3_id: _expected_l3_id
     } do
@@ -119,10 +120,14 @@ defmodule KollectiveWeb.UserLocationTest do
 
       assert response["status"] == "success"
       assert response["user"]["street_address"] == "123 Congress Ave"
+      assert response["user"]["location"] == "POINT(-97.75 30.25)"
       assert response["user"]["state"] == "TX"
       assert response["user"]["district_l1"] == "US House District 10"
       assert response["user"]["district_l2"] == "TX Senate District 14"
       assert response["user"]["district_l3"] == "Austin Central Assembly"
+
+      db_user = Repo.get!(Kollective.Accounts.User, user.id)
+      assert db_user.location == "POINT(-97.75 30.25)"
     end
   end
 

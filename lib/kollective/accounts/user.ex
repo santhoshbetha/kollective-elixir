@@ -53,8 +53,10 @@ defmodule Kollective.Accounts.User do
     field :is_candidate, :boolean, default: false
 
     # --- LOCATION & DISCOVERY ---
-    # User-facing location string
+    # User-facing location string (stores fuzzy coordinates as WKT for safety)
     field :location, :string
+    field :fuzzy_latitude, :float, virtual: true
+    field :fuzzy_longitude, :float, virtual: true
     field :language, :string, default: "en"
     field :is_discoverable, :boolean, default: true
     field :is_invisible, :boolean, default: false
@@ -756,11 +758,24 @@ defmodule Kollective.Accounts.User do
       :city_id,
       :district_l1_id,
       :district_l2_id,
-      :district_l3_id
+      :district_l3_id,
+      :location
     ])
     # Guard: If they opt-in, they must supply a valid 3-tier concentric stack
     |> validate_complete_political_stack()
   end
+
+  @doc """
+  Extracts fuzzy coordinates `{lat, lng}` from user's stored location WKT.
+  """
+  def fuzzy_coordinates(%__MODULE__{location: "POINT(" <> _ = wkt}) do
+    case Geo.WKT.decode(wkt) do
+      {:ok, %Geo.Point{coordinates: {lng, lat}}} -> {lat, lng}
+      _ -> {nil, nil}
+    end
+  end
+
+  def fuzzy_coordinates(_), do: {nil, nil}
 
   defp validate_complete_political_stack(changeset) do
     l1 = get_field(changeset, :district_l1_id)

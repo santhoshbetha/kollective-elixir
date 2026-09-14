@@ -800,6 +800,9 @@ defmodule Kollective.Accounts.Accounts do
   defdelegate remove_member(org_id, target_user_id, actor_id), to: Organizations
   defdelegate list_active_members(org_id), to: Organizations
   defdelegate list_pending_org_invites(org_id), to: Organizations
+  defdelegate get_active_membership(user_id, org_id), to: Organizations
+  defdelegate list_active_memberships(user_id), to: Organizations
+  defdelegate permissions_for_role(role), to: Organizations
   defdelegate delete_organization(org_id), to: Organizations
 
   @doc """
@@ -862,17 +865,81 @@ defmodule Kollective.Accounts.Accounts do
     end
   end
 
+  @doc """
+  Fuzzes high-precision coordinates to 2 decimal places (~1.1 km / 0.7 mile grid cell)
+  to preserve user safety and location privacy while enabling neighborhood-level discovery.
+  Returns `{:ok, fuzzy_lat, fuzzy_lon, wkt}` or `:error`.
+  """
+  def fuzz_coordinates(lat, lon, precision \\ 2) do
+    with {:ok, lat_f} <- parse_float_coord(lat),
+         {:ok, lon_f} <- parse_float_coord(lon) do
+      fuzzy_lat = Float.round(lat_f * 1.0, precision)
+      fuzzy_lon = Float.round(lon_f * 1.0, precision)
+      wkt = "POINT(#{fuzzy_lon} #{fuzzy_lat})"
+      {:ok, fuzzy_lat, fuzzy_lon, wkt}
+    else
+      _ -> :error
+    end
+  end
+
+  defp parse_float_coord(nil), do: :error
+  defp parse_float_coord(val) when is_float(val), do: {:ok, val}
+  defp parse_float_coord(val) when is_integer(val), do: {:ok, val * 1.0}
+
+  defp parse_float_coord(val) when is_binary(val) do
+    case Float.parse(val) do
+      {num, _} -> {:ok, num}
+      :error -> :error
+    end
+  end
+
+  defp parse_float_coord(_), do: :error
+
   def update_political_location(user, attrs) do
-    # 1. Parse high-precision coordinates passed from the frontend geocoder
-    lon = attrs["exact_lon"] || attrs["lng"] || attrs["longitude"]
-    lat = attrs["exact_lat"] || attrs["lat"] || attrs["latitude"]
+    # 1. Parse high-precision coordinates passed or extract via geocoding if street is provided
     country = attrs["country"] || user.country || "US"
+    street = attrs["street_address"] || attrs["street"] || user.street_address
+
+    raw_lon = attrs["exact_lon"] || attrs["lng"] || attrs["longitude"]
+    raw_lat = attrs["exact_lat"] || attrs["lat"] || attrs["latitude"]
+
+    {lon, lat, geo_state, geo_county} =
+      if ((is_nil(raw_lon) or is_nil(raw_lat)) and street) && country == "US" do
+        city_name = resolve_user_city_name(attrs, user)
+
+        if city_name do
+          geo_client =
+            Application.get_env(
+              :kollective,
+              :geospatial_client,
+              Kollective.External.GeospatialService
+            )
+
+          case geo_client.geocode_us_address(street, city_name) do
+            {:ok, geo_data} ->
+              {
+                get_geo_prop(geo_data, :lon),
+                get_geo_prop(geo_data, :lat),
+                get_geo_prop(geo_data, :state),
+                get_geo_prop(geo_data, :county)
+              }
+
+            _ ->
+              {raw_lon, raw_lat, nil, nil}
+          end
+        else
+          {raw_lon, raw_lat, nil, nil}
+        end
+      else
+        {raw_lon, raw_lat, nil, nil}
+      end
 
     # 2. Extract and format the administrative district string (County/District)
     geo_meta = attrs["geocoder_metadata"] || %{}
 
     raw_admin =
-      geo_meta["county"] || geo_meta["district"] || attrs["county"] || attrs["district"]
+      geo_meta["county"] || geo_meta["district"] || geo_county || attrs["county"] ||
+        attrs["district"]
 
     # Clean the administrative district/county name
     clean_admin =
@@ -885,16 +952,25 @@ defmodule Kollective.Accounts.Accounts do
         user.county
       end
 
-    # 3. Compute spatial intersections on-demand using PostGIS GIST indexes
+    # 3. Compute spatial intersections on-demand using PostGIS GIST indexes (using exact coords for electoral accuracy)
     l1_dist = Locations.find_district_by_coords(lon, lat, 1, country)
     l2_dist = Locations.find_district_by_coords(lon, lat, 2, country)
     l3_dist = Locations.find_district_by_coords(lon, lat, 3, country)
 
-    # 4. Compile attributes and apply the strict location changeset validation
+    # 4. Generate FUZZY coordinates for user safety & privacy
+    # Coordinates are fuzzed to 2 decimal places (~1.1 km / 0.7 mile radius),
+    # obscuring the exact street address/building while preserving neighborhood discovery.
+    fuzzy_location =
+      case fuzz_coordinates(lat, lon) do
+        {:ok, _flat, _flon, wkt} -> wkt
+        _ -> user.location
+      end
+
+    # 5. Compile attributes and apply the strict location changeset validation
     enriched_attrs = %{
-      "street_address" => attrs["street_address"] || attrs["street"] || user.street_address,
+      "street_address" => street,
       "country" => country,
-      "state" => attrs["state"] || user.state,
+      "state" => attrs["state"] || geo_state || user.state,
       "county" => clean_admin,
       "city_id" => attrs["city_id"] || attrs["origin_city_id"] || user.city_id,
       "district_l1_id" =>
@@ -902,7 +978,8 @@ defmodule Kollective.Accounts.Accounts do
       "district_l2_id" =>
         (l2_dist && l2_dist.id) || attrs["district_l2_id"] || user.district_l2_id,
       "district_l3_id" =>
-        (l3_dist && l3_dist.id) || attrs["district_l3_id"] || user.district_l3_id
+        (l3_dist && l3_dist.id) || attrs["district_l3_id"] || user.district_l3_id,
+      "location" => fuzzy_location
     }
 
     user
@@ -910,10 +987,45 @@ defmodule Kollective.Accounts.Accounts do
     |> Repo.update()
   end
 
+  defp resolve_user_city_name(attrs, user) do
+    cond do
+      attrs["city_name"] && attrs["city_name"] != "" ->
+        attrs["city_name"]
+
+      attrs["city"] && is_binary(attrs["city"]) && attrs["city"] != "" ->
+        attrs["city"]
+
+      user.city_name && user.city_name != "" ->
+        user.city_name
+
+      user.city_id ->
+        case Repo.get(Kollective.Locations.City, user.city_id) do
+          %Kollective.Locations.City{name: name} -> name
+          _ -> nil
+        end
+
+      attrs["city_id"] ->
+        case Repo.get(Kollective.Locations.City, attrs["city_id"]) do
+          %Kollective.Locations.City{name: name} -> name
+          _ -> nil
+        end
+
+      true ->
+        nil
+    end
+  end
+
+  defp get_geo_prop(geo_data, key) when is_map(geo_data) and is_atom(key) do
+    Map.get(geo_data, key) || Map.get(geo_data, Atom.to_string(key))
+  end
+
+  defp get_geo_prop(_, _), do: nil
+
   def clear_political_location(user) do
     user
     |> Ecto.Changeset.change(%{
       street_address: nil,
+      location: nil,
       county: nil,
       city_name: nil,
       school_district_code: nil,
@@ -930,4 +1042,48 @@ defmodule Kollective.Accounts.Accounts do
   defdelegate increment_note_count(user_id), to: Kollective.Accounts.Users
   defdelegate decrement_note_count(user_id), to: Kollective.Accounts.Users
   defdelegate update_note_count(user_id, amount), to: Kollective.Accounts.Users
+
+  @doc """
+  Lists all profiles available to a user (their personal profile + all active/approved organizations).
+  Used by the profile switcher dropdown and returned on login.
+  """
+  def list_user_profiles(%User{} = user) do
+    personal_profile = %{
+      id: to_string(user.id),
+      type: to_string(user.type || :citizen),
+      name: user.display_name || user.username,
+      username: user.username,
+      handle: "@#{user.username}",
+      avatar_url: user.avatar_url || "/default-avatar.jpg",
+      role: "owner",
+      permissions: ["posts:write", "profile:manage"]
+    }
+
+    org_memberships = list_active_memberships(user.id)
+
+    org_profiles =
+      Enum.map(org_memberships, fn membership ->
+        org = membership.organization
+
+        %{
+          id: to_string(org.id),
+          type: to_string(org.type || :organization),
+          name: org.display_name || org.username,
+          username: org.username,
+          handle: "@#{org.username}",
+          avatar_url: org.avatar_url || "/default-avatar.jpg",
+          role: to_string(membership.role),
+          permissions: permissions_for_role(membership.role)
+        }
+      end)
+
+    [personal_profile | org_profiles]
+  end
+
+  def list_user_profiles(user_id) when is_binary(user_id) do
+    case get_user(user_id) do
+      %User{} = user -> list_user_profiles(user)
+      nil -> []
+    end
+  end
 end

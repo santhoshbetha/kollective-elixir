@@ -6,7 +6,8 @@ defmodule KollectiveWeb.BusinessController do
   action_fallback KollectiveWeb.FallbackController
 
   # POST /api/v1/businesses
-  def create(conn, %{"business" => business_params}) do
+  def create(conn, params) do
+    business_params = Map.get(params, "business", params)
     user = conn.assigns.current_user
 
     case Businesses.create_business(user, business_params) do
@@ -28,7 +29,8 @@ defmodule KollectiveWeb.BusinessController do
   end
 
   # POST /api/v1/business_proposals
-  def create_proposal(conn, %{"proposal" => proposal_params}) do
+  def create_proposal(conn, params) do
+    proposal_params = Map.get(params, "proposal", params)
     user = conn.assigns.current_user
 
     case Businesses.create_business_proposal(user, proposal_params) do
@@ -50,7 +52,8 @@ defmodule KollectiveWeb.BusinessController do
   end
 
   # PATCH/PUT /api/v1/businesses/:id
-  def update(conn, %{"id" => id, "business" => business_params}) do
+  def update(conn, %{"id" => id} = params) do
+    business_params = Map.get(params, "business", Map.delete(params, "id"))
     current_user = conn.assigns.current_user
 
     case Businesses.update_business(current_user, id, business_params) do
@@ -99,7 +102,8 @@ defmodule KollectiveWeb.BusinessController do
   end
 
   # PATCH/PUT /api/v1/business_proposals/:id
-  def update_proposal(conn, %{"id" => id, "proposal" => proposal_params}) do
+  def update_proposal(conn, %{"id" => id} = params) do
+    proposal_params = Map.get(params, "proposal", Map.delete(params, "id"))
     user = conn.assigns.current_user
 
     case Businesses.update_business_proposal(user, id, proposal_params) do
@@ -191,7 +195,13 @@ defmodule KollectiveWeb.BusinessController do
     # Package query filters down into clean keyword options arrays
     opts = [
       scope: Map.get(params, "scope", "all"),
-      category: Map.get(params, "category", "all")
+      category: Map.get(params, "category", "all"),
+      sub_category: Map.get(params, "sub_category"),
+      lat: Map.get(params, "lat") || Map.get(params, "latitude"),
+      lng: Map.get(params, "lng") || Map.get(params, "longitude") || Map.get(params, "lon"),
+      radius: Map.get(params, "radius") || Map.get(params, "distance"),
+      radius_miles: Map.get(params, "radius_miles") || Map.get(params, "distance_miles"),
+      radius_meters: Map.get(params, "radius_meters")
     ]
 
     discovery_items = Businesses.list_local_businesses(user, type, opts)

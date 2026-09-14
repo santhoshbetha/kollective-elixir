@@ -11,12 +11,14 @@ defmodule KollectiveWeb.SessionController do
       }) do
     if user = Accounts.get_user_by_email_and_password(email, password) do
       token = Accounts.generate_user_session_token(user)
+      profiles = Accounts.list_user_profiles(user)
 
       conn
       |> put_status(:ok)
       |> json(%{
         message: "Welcome back!",
-        data: %{token: token, user: AccountJSON.profile_data(user)}
+        profiles: profiles,
+        data: %{token: token, user: AccountJSON.profile_data(user), profiles: profiles}
       })
     else
       conn
@@ -30,22 +32,26 @@ defmodule KollectiveWeb.SessionController do
     case Accounts.login_user_by_magic_link(token) do
       {:ok, {:ok, {user, _expired_tokens}}} ->
         token = Accounts.generate_user_session_token(user)
+        profiles = Accounts.list_user_profiles(user)
 
         conn
         |> put_status(:ok)
         |> json(%{
           message: "Welcome back!",
-          data: %{token: token, user: AccountJSON.profile_data(user)}
+          profiles: profiles,
+          data: %{token: token, user: AccountJSON.profile_data(user), profiles: profiles}
         })
 
       {:ok, {user, _expired_tokens}} ->
         token = Accounts.generate_user_session_token(user)
+        profiles = Accounts.list_user_profiles(user)
 
         conn
         |> put_status(:ok)
         |> json(%{
           message: "Welcome back!",
-          data: %{token: token, user: AccountJSON.profile_data(user)}
+          profiles: profiles,
+          data: %{token: token, user: AccountJSON.profile_data(user), profiles: profiles}
         })
 
       # 🔄 FIX: Add a flexible pattern matcher to catch all verification/not_found errors

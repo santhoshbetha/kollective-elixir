@@ -445,4 +445,65 @@ defmodule Kollective.Accounts.Organizations do
         end
     end
   end
+
+  @doc """
+  Fetches an active or approved membership for a user in an organization with preloaded organization.
+  """
+  def get_active_membership(user_id, org_id) do
+    cache_key = "membership:#{user_id}:#{org_id}"
+
+    case Cachex.get(:kollective_cache, cache_key) do
+      {:ok, %OrganizationMembership{} = membership} ->
+        membership
+
+      _ ->
+        case Repo.one(
+               from(
+                 m in OrganizationMembership,
+                 where: m.user_id == ^user_id and m.organization_id == ^org_id,
+                 where: m.status in [:approved, :active]
+               )
+             ) do
+          nil ->
+            nil
+
+          %OrganizationMembership{} = membership ->
+            loaded = Repo.preload(membership, :organization)
+            Cachex.put(:kollective_cache, cache_key, loaded)
+            loaded
+        end
+    end
+  end
+
+  @doc """
+  Returns a list of fine-grained string permissions based on the membership role.
+  """
+  def permissions_for_role(role) when role in [:owner, "owner"],
+    do: ["posts:create", "posts:publish", "team:manage", "billing:manage"]
+
+  def permissions_for_role(role)
+      when role in [:admin, "admin", "lead organizer", "Lead Organizer"],
+      do: ["posts:create", "posts:publish", "team:manage"]
+
+  def permissions_for_role(role) when role in [:editor, "editor", "Editor"],
+    do: ["posts:create", "posts:publish"]
+
+  def permissions_for_role(role) when role in [:contributor, "contributor", "Contributor"],
+    do: ["posts:create"]
+
+  def permissions_for_role(_), do: []
+
+  @doc """
+  Fetches all active organization memberships for a specific user.
+  Preloads the associated organization user record in a single optimized query.
+  """
+  def list_active_memberships(user_id) do
+    from(m in OrganizationMembership,
+      where: m.user_id == ^user_id and m.status in [:active, :approved],
+      # 🚀 Preloads the organization profile details efficiently
+      preload: [:organization]
+    )
+    # Executed against your database repo
+    |> Repo.all()
+  end
 end

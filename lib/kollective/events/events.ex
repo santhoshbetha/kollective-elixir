@@ -35,6 +35,7 @@ defmodule Kollective.Events.Events do
   asynchronous geocoding and notifications via Oban concurrently.
   """
   def create_event(%User{} = user, attrs \\ %{}) do
+    attrs = Event.normalize_event_attrs(attrs)
     now = DateTime.utc_now()
 
     has_coordinates? =
@@ -42,7 +43,10 @@ defmodule Kollective.Events.Events do
         not is_nil(attrs["longitude"] || attrs[:longitude])
 
     address_text =
-      attrs["address"] || attrs[:address] || attrs["location_name"] || attrs[:location_name]
+      attrs["address"] || attrs[:address] ||
+        attrs["location_name"] || attrs[:location_name] ||
+        attrs["street"] || attrs[:street] ||
+        attrs["location"] || attrs[:location]
 
     geoname_id = Map.get(attrs, "geoname_id") || Map.get(attrs, :geoname_id)
 
@@ -898,56 +902,247 @@ defmodule Kollective.Events.Events do
   end
 
   @doc """
-  Geospatial Discovery Engine: Fetches events within a strict circular bounding box.
-  Leverages the PostgreSQL earth_distance index extensions to calculate precise proximity metrics.
+  Geospatial Discovery Engine: Fetches events within a given radius of a user or coordinates.
+  Supports passing either:
+    * `list_nearby_events(%User{} = user, params \\\\ %{})`
+    * `list_nearby_events(user_lat, user_lng, radius_meters \\\\ 10_000)`
+  Leverages PostgreSQL earth_distance and cube index extensions to calculate precise proximity metrics.
   """
-  def list_nearby_events(user_lat, user_lng, radius_meters \\ 10_000) do
-    # Convert incoming strings safely if they leak from UI parameter arrays
-    lat = if is_binary(user_lat), do: String.to_float(user_lat), else: user_lat
-    lng = if is_binary(user_lng), do: String.to_float(user_lng), else: user_lng
+  def list_nearby_events(user, params \\ %{})
 
-    radius =
-      if is_binary(radius_meters), do: String.to_integer(radius_meters), else: radius_meters
+  def list_nearby_events(%User{} = user, params) when is_map(params) do
+    {lat, lng} = resolve_user_coordinates(user, params)
 
+    if lat && lng do
+      radius_meters = parse_radius_param(params)
+      limit = parse_limit_param(params, 50)
+
+      list_nearby_events_query(lat, lng, radius_meters, limit)
+      |> Repo.all()
+    else
+      []
+    end
+  end
+
+  def list_nearby_events(user_lat, user_lng, radius_meters) do
+    case {parse_coord(user_lat), parse_coord(user_lng)} do
+      {{:ok, lat}, {:ok, lng}} ->
+        radius =
+          case parse_coord(radius_meters) do
+            {:ok, r} -> r
+            _ -> 10_000.0
+          end
+
+        list_nearby_events_query(lat, lng, radius, 50)
+        |> Repo.all()
+
+      _ ->
+        []
+    end
+  end
+
+  @doc """
+  Constructs the Ecto.Query for nearby events using earth_distance / cube indexing.
+  """
+  def list_nearby_events_query(lat, lng, radius_meters, limit \\ 50) do
     from e in Event,
       where:
-        e.event_status == "published" and (is_nil(e.end_time) or e.end_time > fragment("NOW()")),
+        e.event_status == "published" and
+          (is_nil(e.end_time) or e.end_time > fragment("NOW()")) and
+          not is_nil(e.latitude) and not is_nil(e.longitude),
       # 1. Fast Indexed Pre-Filtering bounding box scan pass
       where:
         fragment(
-          "earth_box(ll_to_earth(?, ?), ?) @> ll_to_earth(e.latitude, e.longitude)",
+          "earth_box(ll_to_earth(?, ?), ?) @> ll_to_earth(?, ?)",
           ^lat,
           ^lng,
-          ^radius
+          ^radius_meters,
+          e.latitude,
+          e.longitude
         ),
       # 2. Refine selection footprint to an exact radial circle calculation
       where:
         fragment(
-          "earth_distance(ll_to_earth(?, ?), ll_to_earth(e.latitude, e.longitude)) < ?",
+          "earth_distance(ll_to_earth(?, ?), ll_to_earth(?, ?)) < ?",
           ^lat,
           ^lng,
-          ^radius
+          e.latitude,
+          e.longitude,
+          ^radius_meters
         ),
       # Calculate virtual distance meters property mapping on the fly
       select_merge: %{
         metadata:
           fragment(
-            "jsonb_build_object('distance_meters', round(earth_distance(ll_to_earth(?, ?), ll_to_earth(e.latitude, e.longitude))::numeric, 0))",
+            "coalesce(?, '{}'::jsonb) || jsonb_build_object('distance_meters', round(earth_distance(ll_to_earth(?, ?), ll_to_earth(?, ?))::numeric, 0))",
+            e.metadata,
             ^lat,
-            ^lng
+            ^lng,
+            e.latitude,
+            e.longitude
           )
       },
       order_by: [
         asc:
           fragment(
-            "earth_distance(ll_to_earth(?, ?), ll_to_earth(e.latitude, e.longitude))",
+            "earth_distance(ll_to_earth(?, ?), ll_to_earth(?, ?))",
             ^lat,
-            ^lng
+            ^lng,
+            e.latitude,
+            e.longitude
           )
       ],
-      limit: 20,
+      limit: ^limit,
       preload: [:user, :origin_city]
   end
+
+  defp resolve_user_coordinates(user, params) do
+    lat_param = params["lat"] || params["latitude"]
+    lng_param = params["lng"] || params["lon"] || params["longitude"]
+
+    with {:ok, lat} <- parse_coord(lat_param),
+         {:ok, lng} <- parse_coord(lng_param) do
+      {lat, lng}
+    else
+      _ ->
+        resolve_coordinates_from_user(user)
+    end
+  end
+
+  defp resolve_coordinates_from_user(nil), do: {nil, nil}
+
+  defp resolve_coordinates_from_user(%User{} = user) do
+    cond do
+      match?(%Geo.Point{}, user.location) ->
+        %Geo.Point{coordinates: {lng, lat}} = user.location
+        {lat, lng}
+
+      is_binary(user.location) and String.starts_with?(user.location, "POINT(") ->
+        case Geo.WKT.decode(user.location) do
+          {:ok, %Geo.Point{coordinates: {lng, lat}}} -> {lat, lng}
+          _ -> fallback_user_district_or_city(user)
+        end
+
+      true ->
+        fallback_user_district_or_city(user)
+    end
+  end
+
+  defp fallback_user_district_or_city(%User{} = user) do
+    district_id =
+      user.district_l3_id || user.district_l2_id || user.district_l1_id
+
+    cond do
+      district_id ->
+        case Repo.get(Kollective.Locations.PoliticalDistrict, district_id) do
+          %Kollective.Locations.PoliticalDistrict{geom: %Geo.Point{coordinates: {lng, lat}}} ->
+            {lat, lng}
+
+          %Kollective.Locations.PoliticalDistrict{geom: %_{}} ->
+            query =
+              from d in Kollective.Locations.PoliticalDistrict,
+                where: d.id == ^district_id,
+                select:
+                  {fragment("ST_Y(ST_Centroid(?))", d.geom),
+                   fragment("ST_X(ST_Centroid(?))", d.geom)}
+
+            case Repo.one(query) do
+              {lat, lng} when is_number(lat) and is_number(lng) -> {lat, lng}
+              _ -> fallback_user_city(user)
+            end
+
+          _ ->
+            fallback_user_city(user)
+        end
+
+      true ->
+        fallback_user_city(user)
+    end
+  end
+
+  defp fallback_user_city(%User{} = user) do
+    if user.city_id do
+      case Repo.get(Kollective.Locations.City, user.city_id) do
+        %Kollective.Locations.City{latitude: lat, longitude: lng}
+        when not is_nil(lat) and not is_nil(lng) ->
+          {lat, lng}
+
+        _ ->
+          {nil, nil}
+      end
+    else
+      {nil, nil}
+    end
+  end
+
+  defp parse_radius_param(params) do
+    cond do
+      params["radius_meters"] ->
+        case parse_coord(params["radius_meters"]) do
+          {:ok, val} -> val
+          _ -> 10_000.0
+        end
+
+      params["radius_miles"] || params["distance_miles"] ->
+        case parse_coord(params["radius_miles"] || params["distance_miles"]) do
+          {:ok, val} -> val * 1609.34
+          _ -> 10_000.0
+        end
+
+      params["unit"] in ["m", "meter", "meters"] and (params["radius"] || params["distance"]) ->
+        case parse_coord(params["radius"] || params["distance"]) do
+          {:ok, val} -> val
+          _ -> 10_000.0
+        end
+
+      params["unit"] in ["km", "kilometer", "kilometers"] and
+          (params["radius"] || params["distance"]) ->
+        case parse_coord(params["radius"] || params["distance"]) do
+          {:ok, val} -> val * 1000.0
+          _ -> 10_000.0
+        end
+
+      params["radius"] || params["distance"] ->
+        case parse_coord(params["radius"] || params["distance"]) do
+          {:ok, val} -> val * 1609.34
+          _ -> 10_000.0
+        end
+
+      true ->
+        10_000.0
+    end
+  end
+
+  defp parse_limit_param(params, default) do
+    case params["limit"] do
+      nil ->
+        default
+
+      val when is_integer(val) ->
+        min(max(val, 1), 100)
+
+      val when is_binary(val) ->
+        case Integer.parse(val) do
+          {int, _} -> min(max(int, 1), 100)
+          _ -> default
+        end
+
+      _ ->
+        default
+    end
+  end
+
+  defp parse_coord(val) when is_float(val), do: {:ok, val}
+  defp parse_coord(val) when is_integer(val), do: {:ok, val * 1.0}
+
+  defp parse_coord(val) when is_binary(val) do
+    case Float.parse(val) do
+      {num, _} -> {:ok, num}
+      _ -> :error
+    end
+  end
+
+  defp parse_coord(_), do: :error
 
   @doc """
   Dispatches a secure community event invitation. Evaluates mutual social filters,

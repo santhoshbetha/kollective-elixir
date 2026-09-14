@@ -11,26 +11,40 @@ defmodule KollectiveWeb.EventJSON do
   end
 
   def data(event) do
+    banner =
+      event.banner_url || Kollective.Events.EventHelpers.get_banner_url(event) ||
+        default_banner()
+
     %{
       id: event.id,
       title: event.title,
       description: event.description,
+      category: event.category || "standard",
+      format: format_label(event.participation_format),
+      participation_format: event.participation_format || "in_person",
       start_time: event.start_time,
       end_time: event.end_time,
+      date: format_event_date(event.start_time),
+      displayDate: format_display_date(event.start_time, event.end_time),
+      time: format_event_time(event.start_time, event.end_time),
       timezone: event.timezone,
       status: event.event_status,
 
       # Visuals
-      banner_url:
-        event.banner_url || Kollective.Events.EventHelpers.get_banner_url(event) ||
-          default_banner(),
+      image: banner,
+      banner_url: banner,
       logo_url: event.logo_url,
 
-      # Engagement
+      # Engagement & Capacity
       participants_count: event.participants_count,
+      attendeesCount: event.participants_count,
+      interestedCount: 0,
       comments_count: event.comments_count,
+      capacity: get_capacity(event.metadata),
 
-      # Geography (Preloaded)
+      # Location string convenience and preloaded structured geography
+      location_name: event.location_name,
+      location_string: format_location_string(event),
       location: %{
         name: event.location_name,
         city: city_name(event.origin_city),
@@ -47,6 +61,56 @@ defmodule KollectiveWeb.EventJSON do
       organizer: serialize_organizer(event.user),
       inserted_at: event.inserted_at
     }
+  end
+
+  defp format_label("in_person"), do: "In-Person"
+  defp format_label("online_virtual"), do: "Online"
+  defp format_label("hybrid"), do: "Hybrid"
+  defp format_label(other) when is_binary(other), do: other
+  defp format_label(_), do: "In-Person"
+
+  defp format_event_date(%DateTime{} = dt) do
+    Calendar.strftime(dt, "%b %-d, %Y")
+  end
+
+  defp format_event_date(_), do: nil
+
+  defp format_display_date(%DateTime{} = start_dt, end_dt) do
+    date_part = Calendar.strftime(start_dt, "%A, %b %-d")
+    time_part = format_event_time(start_dt, end_dt)
+    if time_part, do: "#{date_part} • #{time_part}", else: date_part
+  end
+
+  defp format_display_date(_, _), do: nil
+
+  defp format_event_time(%DateTime{} = start_dt, %DateTime{} = end_dt) do
+    "#{Calendar.strftime(start_dt, "%H:%M")} - #{Calendar.strftime(end_dt, "%H:%M")}"
+  end
+
+  defp format_event_time(%DateTime{} = start_dt, _) do
+    Calendar.strftime(start_dt, "%H:%M")
+  end
+
+  defp format_event_time(_, _), do: nil
+
+  defp get_capacity(%{"max_participants" => max}) when is_integer(max), do: max
+  defp get_capacity(%{max_participants: max}) when is_integer(max), do: max
+  defp get_capacity(_), do: nil
+
+  defp format_location_string(event) do
+    cond do
+      event.participation_format == "online_virtual" ->
+        event.location_url || "Online"
+
+      event.location_name && event.location_name != "" ->
+        event.location_name
+
+      event.street && event.street != "" ->
+        event.street
+
+      true ->
+        "Location TBA"
+    end
   end
 
   defp serialize_organizer(%Kollective.Accounts.User{} = user) do

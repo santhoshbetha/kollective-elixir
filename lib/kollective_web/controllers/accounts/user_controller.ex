@@ -103,6 +103,12 @@ defmodule KollectiveWeb.UserController do
         l2_code = l2_dist && (l2_dist.external_id || l2_dist.name)
         l3_code = l3_dist && (l3_dist.external_id || l3_dist.name)
 
+        fuzzy_location =
+          case Accounts.fuzz_coordinates(lat, lon) do
+            {:ok, _, _, wkt} -> wkt
+            _ -> nil
+          end
+
         district_params = %{
           "origin_state" => state,
           "district_l1" => l1_code,
@@ -110,7 +116,9 @@ defmodule KollectiveWeb.UserController do
           "district_l3" => l3_code,
           "district_l1_id" => l1_id,
           "district_l2_id" => l2_id,
-          "district_l3_id" => l3_id
+          "district_l3_id" => l3_id,
+          "location" => fuzzy_location,
+          "street_address" => street
         }
 
         case Users.update_user_districts(user, district_params) do
@@ -166,8 +174,8 @@ defmodule KollectiveWeb.UserController do
   # PATCH /api/me/political-location
   def update_location(conn, %{"country" => "US", "street" => street} = params) do
     user = conn.assigns.current_user
-    city = params["city_name"] || params["city"]
-    city_id = params["city_id"]
+    city = params["city_name"] || params["city"] || user.city_name
+    city_id = params["city_id"] || user.city_id
 
     if city do
       # 1. Forward Geocode via our new Backend Elixir Service
@@ -251,6 +259,7 @@ defmodule KollectiveWeb.UserController do
           user: %{
             id: updated_user.id,
             street_address: updated_user.street_address,
+            location: updated_user.location,
             country: updated_user.country,
             state: updated_user.state,
             county: updated_user.county,

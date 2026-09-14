@@ -219,4 +219,121 @@ defmodule KollectiveWeb.SessionControllerTest do
       assert conn.status == 400
     end
   end
+
+  describe "GET /api/v1/profiles and X-Active-Account-Id resolution" do
+    alias Kollective.Repo
+    alias Kollective.Accounts.OrganizationMembership
+
+    setup %{conn: conn, user: user} do
+      scope = Kollective.Accounts.Scope.for_user(user)
+
+      {:ok, org} =
+        Repo.insert(%Kollective.Accounts.User{
+          display_name: "Tech Collective",
+          username: "tech_collective",
+          email: "tech@collective.org",
+          type: :organization
+        })
+
+      {:ok, membership} =
+        Repo.insert(%OrganizationMembership{
+          user_id: user.id,
+          organization_id: org.id,
+          role: :admin,
+          status: :active
+        })
+
+      # Generate a valid session token for authentication testing
+      token = Kollective.Accounts.Accounts.generate_user_session_token(user)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> assign(:current_user, user)
+        |> assign(:current_scope, scope)
+
+      %{conn: conn, user: user, org: org, membership: membership, token: token}
+    end
+
+    test "returns accessible profiles for user including personal and orgs", %{
+      conn: conn,
+      user: user,
+      org: org
+    } do
+      conn = get(conn, ~p"/api/v1/profiles")
+
+      assert conn.status == 200
+      response = json_response(conn, 200)
+
+      profiles = response["profiles"]
+      assert is_list(profiles)
+      assert length(profiles) == 2
+
+      personal = Enum.find(profiles, &(&1["id"] == to_string(user.id)))
+      assert personal["name"] == user.display_name || user.username
+      assert personal["handle"] == "@#{user.username}"
+      assert "posts:write" in personal["permissions"]
+
+      org_profile = Enum.find(profiles, &(&1["id"] == to_string(org.id)))
+      assert org_profile["name"] == org.display_name || org.username
+      assert org_profile["handle"] == "@#{org.username}"
+      assert org_profile["role"] == "admin"
+      assert "team:manage" in org_profile["permissions"]
+    end
+
+    test "resolves default personal account when X-Active-Account-Id is omitted", %{
+      conn: conn,
+      user: user
+    } do
+      conn = get(conn, ~p"/api/v1/profiles")
+      assert conn.status == 200
+      assert conn.assigns[:active_account_id] == to_string(user.id)
+      assert conn.assigns[:account_type] == user.type
+      assert "posts:write" in conn.assigns[:permissions]
+    end
+
+    test "resolves organization context when valid X-Active-Account-Id header is provided", %{
+      conn: conn,
+      org: org
+    } do
+      conn =
+        conn
+        |> put_req_header("x-active-account-id", to_string(org.id))
+        |> get(~p"/api/v1/profiles")
+
+      assert conn.status == 200
+      assert conn.assigns[:active_account_id] == to_string(org.id)
+      assert conn.assigns[:account_type] == :organization
+      assert "team:manage" in conn.assigns[:permissions]
+    end
+
+    test "returns 403 when X-Active-Account-Id is an org the user is not a member of", %{
+      conn: conn
+    } do
+      {:ok, unauthorized_org} =
+        Repo.insert(%Kollective.Accounts.User{
+          display_name: "Secret Org",
+          username: "secret_org",
+          email: "secret@org.com",
+          type: :organization
+        })
+
+      conn =
+        conn
+        |> put_req_header("x-active-account-id", to_string(unauthorized_org.id))
+        |> get(~p"/api/v1/profiles")
+
+      assert conn.status == 403
+      response = json_response(conn, 403)
+      assert response["error"] == "forbidden"
+    end
+
+    test "returns 401 when user is not authenticated" do
+      conn =
+        build_conn()
+        |> get(~p"/api/v1/profiles")
+
+      assert conn.status == 401
+    end
+  end
 end

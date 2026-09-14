@@ -775,7 +775,9 @@ defmodule Kollective.Accounts.Users do
       :origin_state,
       :district_l1_id,
       :district_l2_id,
-      :district_l3_id
+      :district_l3_id,
+      :location,
+      :street_address
     ])
     |> Ecto.Changeset.validate_required([:origin_state, :district_l1_id])
     |> Kollective.Repo.update()

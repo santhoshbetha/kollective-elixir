@@ -95,6 +95,7 @@ config :kollective, KollectiveWeb.Endpoint,
 # at the `config/runtime.exs`.
 config :kollective, Kollective.Mailer, adapter: Swoosh.Adapters.Local
 config :kollective, Kollective.OrganizationMailer, adapter: Swoosh.Adapters.Local
+config :joken, default_signer: "kollective_jwt_token_signing_secret_key_minimum_32_bytes"
 
 # -------------------------------------------------------------------
 # Application Architecture Bridge (Application Layer)

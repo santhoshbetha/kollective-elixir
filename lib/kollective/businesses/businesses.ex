@@ -8,12 +8,15 @@ defmodule Kollective.Businesses.Businesses do
   alias Kollective.Businesses.{Business, Comment, Upvote}
   alias Kollective.Accounts.User
   alias Kollective.Locations.Locations
+  alias Kollective.Locations.{City, PoliticalDistrict}
 
   @doc """
   Registers an existing local business profile inside the platform database.
   Enforces white-listed properties and fires real-time synchronization cascades.
   """
   def create_business(%User{} = user, attrs \\ %{}) do
+    attrs = Business.normalize_business_attrs(attrs)
+
     # Determine if explicit coordinates are missing while text address parameters are present
     has_coordinates? =
       not is_nil(attrs["latitude"] || attrs[:latitude]) and
@@ -23,45 +26,48 @@ defmodule Kollective.Businesses.Businesses do
 
     # Extract geoname_id string pointer passed from the frontend client autocomplete layout
     geoname_id = Map.get(attrs, "geoname_id") || Map.get(attrs, :geoname_id)
+    city_id = Map.get(attrs, "city_id") || Map.get(attrs, :city_id)
+    city_name = Map.get(attrs, "city") || Map.get(attrs, :city)
+    state_code = Map.get(attrs, "state") || Map.get(attrs, :state)
 
     Multi.new()
-    # Step 1: Ensure the city records are fetched or dynamically instantiated via GeoNames
+    # Step 1: Ensure the city records are resolved gracefully without blocking rural onboarding
     |> Multi.run(:resolved_city, fn _repo, _changes ->
-      if is_nil(geoname_id) do
-        changeset =
-          %Business{}
-          |> Ecto.Changeset.change()
-          |> Ecto.Changeset.add_error(:city_id, "is required")
+      cond do
+        geoname_id && String.trim(to_string(geoname_id)) != "" ->
+          case Locations.get_or_import_city(geoname_id) do
+            {:ok, city} ->
+              {:ok, city}
 
-        {:error, changeset}
-      else
-        case Locations.get_or_import_city(geoname_id) do
-          {:ok, city} ->
-            {:ok, city}
+            {:error, _reason} ->
+              resolve_city_fallback(city_id, city_name, state_code, user)
+          end
 
-          {:error, reason} ->
-            changeset =
-              %Business{}
-              |> Ecto.Changeset.change()
-              |> Ecto.Changeset.add_error(:city_id, "could not be imported: #{inspect(reason)}")
-
-            {:error, changeset}
-        end
+        true ->
+          resolve_city_fallback(city_id, city_name, state_code, user)
       end
     end)
     # Step 2: Bind the user metadata, type metrics, and city structural values to the attributes
     |> Multi.insert(:business, fn %{resolved_city: city} ->
+      city_fields =
+        if city do
+          %{
+            "city_id" => city.id,
+            "city" => city.name,
+            "state" => city.state,
+            "country" => city.country
+          }
+        else
+          %{}
+        end
+
       base_attrs =
         attrs
         |> Map.put("user_id", user.id)
-        |> Map.put("city_id", city.id)
-        # Ensure name strings map cleanly onto the fields expected by validation rules
-        |> Map.put("city", city.name)
-        |> Map.put("state", city.state)
-        |> Map.put("country", city.country)
         |> Map.put("type", "existing")
         # Queue for postcard/OTP review
         |> Map.put("verification_status", "pending")
+        |> Map.merge(city_fields, fn _k, v1, v2 -> v1 || v2 end)
 
       Business.creation_changeset(%Business{user_id: user.id}, base_attrs)
     end)
@@ -94,12 +100,45 @@ defmodule Kollective.Businesses.Businesses do
     end
   end
 
+  defp resolve_city_fallback(city_id, city_name, state_code, %User{} = user) do
+    cond do
+      city_id ->
+        case Repo.get(City, city_id) do
+          %City{} = city -> {:ok, city}
+          _ -> fallback_to_user_city(user)
+        end
+
+      city_name && state_code && String.trim(to_string(city_name)) != "" ->
+        case Repo.get_by(City,
+               name: String.trim(to_string(city_name)),
+               state: String.trim(to_string(state_code))
+             ) do
+          %City{} = city -> {:ok, city}
+          _ -> fallback_to_user_city(user)
+        end
+
+      true ->
+        fallback_to_user_city(user)
+    end
+  end
+
+  defp fallback_to_user_city(%User{city_id: user_city_id}) when not is_nil(user_city_id) do
+    case Repo.get(City, user_city_id) do
+      %City{} = city -> {:ok, city}
+      _ -> {:ok, nil}
+    end
+  end
+
+  defp fallback_to_user_city(_), do: {:ok, nil}
+
   @doc """
   The definitive grassroots business idea and proposal creator.
   Saves the proposal details, builds optional city associations, stashes
   crowdfunding boundaries inside JSONB, and enqueues the Oban geocoder.
   """
   def create_business_proposal(%User{} = user, attrs \\ %{}) do
+    attrs = Business.normalize_proposal_attrs(attrs)
+
     # Determine if explicit coordinates are missing while text address parameters are present
     has_coordinates? =
       not is_nil(attrs["latitude"] || attrs[:latitude]) and
@@ -107,44 +146,49 @@ defmodule Kollective.Businesses.Businesses do
 
     address_text = attrs["address"] || attrs[:address]
     geoname_id = Map.get(attrs, "geoname_id") || Map.get(attrs, :geoname_id)
+    city_id = Map.get(attrs, "city_id") || Map.get(attrs, :city_id)
+    city_name = Map.get(attrs, "city") || Map.get(attrs, :city)
+    state_code = Map.get(attrs, "state") || Map.get(attrs, :state)
 
     Multi.new()
     # Step 1: OPTIONAL CITY RESOLUTION (Never blocks rural or unincorporated onboarding)
     |> Multi.run(:resolved_city, fn _repo, _changes ->
-      if is_nil(geoname_id) || String.trim(to_string(geoname_id)) == "" do
-        # Safe unincorporated path fallback
-        {:ok, nil}
-      else
-        case Locations.get_or_import_city(geoname_id) do
-          {:ok, city} -> {:ok, city}
-          # Fallback gracefully if GeoNames API times out
-          {:error, _} -> {:ok, nil}
-        end
+      cond do
+        geoname_id && String.trim(to_string(geoname_id)) != "" ->
+          case Locations.get_or_import_city(geoname_id) do
+            {:ok, city} -> {:ok, city}
+            {:error, _} -> resolve_city_fallback(city_id, city_name, state_code, user)
+          end
+
+        true ->
+          resolve_city_fallback(city_id, city_name, state_code, user)
       end
     end)
 
     # Step 2: Bind the user credentials and optional city tracking structures
     |> Multi.insert(:proposal, fn %{resolved_city: city} ->
+      city_fields =
+        if city do
+          %{
+            "city_id" => city.id,
+            "city" => city.name,
+            "state" => city.state,
+            "country" => city.country
+          }
+        else
+          %{}
+        end
+
       base_attrs =
         attrs
         |> Map.put("user_id", user.id)
-        # FIXED: Explicitly marks this entry as a community idea
+        # Explicitly marks this entry as a community idea
         |> Map.put("type", "proposals")
         # Proposals stay unverified until launched
         |> Map.put("verification_status", "unverified")
-        # Safely append city foreign keys ONLY if a valid model was resolved
-        |> Map.merge(
-          if city,
-            do: %{
-              "city_id" => city.id,
-              "city" => city.name,
-              "state" => city.state,
-              "country" => city.country
-            },
-            else: %{}
-        )
+        |> Map.merge(city_fields, fn _k, v1, v2 -> v1 || v2 end)
 
-      # FIXED: Pipes into your specific crowdfunding validation rules
+      # Pipes into your specific crowdfunding validation rules
       Business.proposal_changeset(%Business{user_id: user.id}, base_attrs)
     end)
 
@@ -562,70 +606,42 @@ defmodule Kollective.Businesses.Businesses do
   end
 
   @doc """
-  The definitive regional local discovery engine. Evaluates tiered political scopes
-  (Federal, State Senate, Municipal City) vs broad geometric distance sweeps.
-  Supports React dashboard category filtering tabs and verification gating.
+  Discovers local businesses or proposals within geometric search distance of the user's coordinates.
+  Filters by type ("proposals" or "existing"), distance radius, and optional category/sub-category.
 
   Options (`opts`):
-    * `:scope`    -> "all" (Default), "federal", "state_senate", "city"
-    * `:category` -> Optional string tab filter (e.g. "food_beverage", "retail")
+    * `:category` -> Optional category filter (e.g. "food_beverage", "retail")
+    * `:sub_category` -> Optional sub-category filter (e.g. "cafe_coffee", "restaurant")
+    * `:radius` / `:radius_meters` / `:radius_miles` -> Search radius (default 60 miles = 96,560 meters)
+    * `:lat`, `:lng` -> Optional explicit coordinate overrides
   """
   def list_local_businesses(%User{} = user, type, opts \\ [])
       when type in ["proposals", "existing"] do
-    scope = Keyword.get(opts, :scope, "all")
     category = Keyword.get(opts, :category)
-    # Precise 60 miles boundary sweep radius
-    radius_meters = 96560
+    # Default 60 miles boundary sweep radius = 96,560.4 meters
+    radius_meters = parse_business_radius(opts)
 
     # Initialize the base database query structure
     query = from(b in Business, where: b.type == ^type)
 
-    user_geo =
-      case user.location do
-        "POINT(" <> _ = wkt ->
-          case Geo.WKT.decode(wkt) do
-            {:ok, %Geo.Point{} = point} -> %{point | srid: 4326}
-            _ -> nil
-          end
+    user_geo = extract_user_geo(user, opts)
 
-        _ ->
-          nil
-      end
-
-    # 1. TIERED GEOGRAPHY SCOPING MATRIX
+    # 1. Coordinate distance-based filtering
     query =
-      case scope do
-        "federal" ->
-          where(query, [b], b.district_l1 == ^user.district_l1_id and b.state == ^user.state)
-
-        "state_senate" ->
-          where(query, [b], b.district_l2 == ^user.district_l2_id and b.state == ^user.state)
-
-        "city" ->
-          where(query, [b], b.city_id == ^user.city_id)
-
-        _all ->
-          # Broad regional discovery sweep combining political structures OR physical distance
-          if user_geo do
-            where(
-              query,
-              [b],
-              b.city_id == ^user.city_id or
-                (b.district_l3 == ^user.district_l3_id and b.state == ^user.state) or
-                (b.district_l2 == ^user.district_l2_id and b.state == ^user.state) or
-                (b.district_l1 == ^user.district_l1_id and b.state == ^user.state) or
-                fragment("ST_DWithin(?, ?, ?)", b.location, ^user_geo, ^radius_meters)
+      if user_geo do
+        where(
+          query,
+          [b],
+          not is_nil(b.location) and
+            fragment(
+              "ST_DWithin(?::geography, ?::geography, ?)",
+              b.location,
+              ^user_geo,
+              ^radius_meters
             )
-          else
-            where(
-              query,
-              [b],
-              b.city_id == ^user.city_id or
-                (b.district_l3 == ^user.district_l3_id and b.state == ^user.state) or
-                (b.district_l2 == ^user.district_l2_id and b.state == ^user.state) or
-                (b.district_l1 == ^user.district_l1_id and b.state == ^user.state)
-            )
-          end
+        )
+      else
+        where(query, [b], false)
       end
 
     # 2. DYNAMIC FRONTEND CATEGORY FILTER TAB
@@ -747,6 +763,150 @@ defmodule Kollective.Businesses.Businesses do
     |> preload([:user, :city_relation])
     |> Repo.one!()
   end
+
+  @doc """
+  Extracts the user's geographic point (%Geo.Point{}) from:
+    1. Explicit coordinates in `opts` (:lat/:lng or :latitude/:longitude).
+    2. User's stored fuzzy location in `user.location` (WKT or %Geo.Point{}).
+    3. User's political district centroid (L3, L2, or L1 via `PoliticalDistrict.geom`).
+    4. User's home city coordinates (via `City.latitude`/`City.longitude`).
+  """
+  def extract_user_geo(user, opts \\ []) do
+    lat_opt = opts[:lat] || opts[:latitude]
+    lng_opt = opts[:lng] || opts[:longitude]
+
+    cond do
+      lat_opt && lng_opt ->
+        with {:ok, lat} <- parse_coord(lat_opt),
+             {:ok, lng} <- parse_coord(lng_opt) do
+          %Geo.Point{coordinates: {lng, lat}, srid: 4326}
+        else
+          _ -> extract_geo_from_user(user)
+        end
+
+      true ->
+        extract_geo_from_user(user)
+    end
+  end
+
+  defp extract_geo_from_user(nil), do: nil
+
+  defp extract_geo_from_user(%User{} = user) do
+    cond do
+      match?(%Geo.Point{}, user.location) ->
+        %{user.location | srid: 4326}
+
+      is_binary(user.location) and
+          String.starts_with?(String.upcase(String.trim(user.location)), "POINT(") ->
+        case Geo.WKT.decode(user.location) do
+          {:ok, %Geo.Point{} = point} -> %{point | srid: 4326}
+          _ -> fallback_user_geo_district_or_city(user)
+        end
+
+      is_binary(user.location) and String.contains?(user.location, ",") ->
+        case String.split(user.location, ",") do
+          [lat_s, lng_s] ->
+            with {:ok, lat} <- parse_coord(String.trim(lat_s)),
+                 {:ok, lng} <- parse_coord(String.trim(lng_s)) do
+              %Geo.Point{coordinates: {lng, lat}, srid: 4326}
+            else
+              _ -> fallback_user_geo_district_or_city(user)
+            end
+
+          _ ->
+            fallback_user_geo_district_or_city(user)
+        end
+
+      true ->
+        fallback_user_geo_district_or_city(user)
+    end
+  end
+
+  defp fallback_user_geo_district_or_city(%User{} = user) do
+    district_id = user.district_l3_id || user.district_l2_id || user.district_l1_id
+
+    district_geo =
+      if district_id do
+        case Repo.get(PoliticalDistrict, district_id) do
+          %PoliticalDistrict{geom: %Geo.Point{coordinates: {lng, lat}}} ->
+            %Geo.Point{coordinates: {lng, lat}, srid: 4326}
+
+          %PoliticalDistrict{geom: %_{}} ->
+            query =
+              from d in PoliticalDistrict,
+                where: d.id == ^district_id,
+                select:
+                  {fragment("ST_Y(ST_Centroid(?))", d.geom),
+                   fragment("ST_X(ST_Centroid(?))", d.geom)}
+
+            case Repo.one(query) do
+              {lat, lng} when is_number(lat) and is_number(lng) ->
+                %Geo.Point{coordinates: {lng, lat}, srid: 4326}
+
+              _ ->
+                nil
+            end
+
+          _ ->
+            nil
+        end
+      end
+
+    district_geo || fallback_user_geo_city(user)
+  end
+
+  defp fallback_user_geo_city(%User{} = user) do
+    if user.city_id do
+      case Repo.get(City, user.city_id) do
+        %City{latitude: lat, longitude: lng}
+        when not is_nil(lat) and not is_nil(lng) ->
+          %Geo.Point{coordinates: {lng, lat}, srid: 4326}
+
+        _ ->
+          nil
+      end
+    else
+      nil
+    end
+  end
+
+  defp parse_business_radius(opts) do
+    cond do
+      opts[:radius_meters] ->
+        case parse_coord(opts[:radius_meters]) do
+          {:ok, r} -> r
+          _ -> 96560.0
+        end
+
+      opts[:radius_miles] ->
+        case parse_coord(opts[:radius_miles]) do
+          {:ok, r} -> r * 1609.34
+          _ -> 96560.0
+        end
+
+      opts[:radius] ->
+        case parse_coord(opts[:radius]) do
+          {:ok, r} -> r * 1609.34
+          _ -> 96560.0
+        end
+
+      true ->
+        96560.0
+    end
+  end
+
+  defp parse_coord(nil), do: :error
+  defp parse_coord(val) when is_float(val), do: {:ok, val}
+  defp parse_coord(val) when is_integer(val), do: {:ok, val * 1.0}
+
+  defp parse_coord(val) when is_binary(val) do
+    case Float.parse(val) do
+      {num, _} -> {:ok, num}
+      :error -> :error
+    end
+  end
+
+  defp parse_coord(_), do: :error
 end
 
 # 4. Implementation Strategy for Tabs

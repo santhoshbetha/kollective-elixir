@@ -121,4 +121,22 @@ defmodule KollectiveWeb.ProfileController do
         end)
     })
   end
+
+  @doc """
+  Returns all profiles (the personal account + all active orgs) the logged-in user can access.
+  Useful for rendering your navbar switcher dropdown on initial app load.
+  """
+  def index_profiles(conn, _params) do
+    user =
+      conn.assigns[:current_user] ||
+        (conn.assigns[:current_scope] && conn.assigns.current_scope.user)
+
+    profiles = Accounts.list_user_profiles(user)
+
+    json(conn, %{
+      status: "success",
+      profiles: profiles,
+      data: %{profiles: profiles}
+    })
+  end
 end

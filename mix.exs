@@ -84,7 +84,8 @@ defmodule Kollective.MixProject do
       {:mox, "~> 1.0", only: :test},
       {:ex_machina, "~> 2.4", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:joken, "~> 2.3"}
     ]
   end
 
