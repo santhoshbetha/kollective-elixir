@@ -13,17 +13,26 @@ defmodule KollectiveWeb.EventController do
 
   # GET /api/v1/events
   def index(conn, _params) do
-    user = conn.assigns.current_user
+    user = conn.assigns[:current_user]
 
     events =
       if user do
-        # Authenticated: Apply privacy-mapped visibility constraints
         Events.list_visible_events_query(user)
         |> Kollective.Repo.all()
       else
-        # Anonymous: Deliver public content pools exclusively
-        Events.list_public_events()
+        Events.list_visible_events_query(nil)
+        |> Kollective.Repo.all()
       end
+
+    conn
+    |> put_status(:ok)
+    |> json(EventJSON.index(%{events: events}))
+  end
+
+  # POST /api/v1/events/filter_by_date
+  def filter_by_date(conn, params) do
+    user = conn.assigns[:current_user]
+    events = Events.list_events_filtered(user, params)
 
     conn
     |> put_status(:ok)

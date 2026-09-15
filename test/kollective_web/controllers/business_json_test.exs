@@ -67,13 +67,20 @@ defmodule KollectiveWeb.BusinessJSONTest do
       assert data.category == "food_beverage"
       assert data.verification_status == "verified"
       assert data.legal_structure == "LLC"
+      assert data.address == "123 Main St"
+      assert data.city == "Austin"
+      assert data.phone == "512-555-0100"
+      assert data.email == "info@acme.com"
+      assert data.website == "https://acme.com"
+      assert data.location == "Austin"
       assert data.contact_details.city == "Austin"
       assert data.contact.city == "Austin"
       assert data.corporate_details.year_established == 2020
       assert data.metrics.year_established == 2020
       assert data.funding_details["goal"] == 10000
       assert data.geography.coordinates == %{longitude: -97.7431, latitude: 30.2672}
-      assert data.owner.username == "johndoe"
+      assert data.owner == "johndoe"
+      assert data.owner_info.username == "johndoe"
       assert data.inserted_at == "2026-01-15T10:30:00Z"
     end
 
@@ -126,7 +133,8 @@ defmodule KollectiveWeb.BusinessJSONTest do
       without_user = %{business | user: %Ecto.Association.NotLoaded{}}
       data = BusinessJSON.data(without_user)
 
-      assert data.owner == nil
+      assert data.owner == "community_member"
+      assert data.owner_info == nil
     end
   end
 end

@@ -377,6 +377,7 @@ defmodule KollectiveWeb.Router do
     get "/events", EventController, :index
     get "/events/joined", EventController, :joined_events
     get "/events/nearby", EventController, :nearby
+    post "/events/filter_by_date", EventController, :filter_by_date
     get "/events/:id", EventController, :show
 
     put "/events/:id", EventController, :update

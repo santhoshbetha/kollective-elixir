@@ -177,6 +177,17 @@ defmodule KollectiveWeb.BusinessJSON do
       services: Map.get(meta, "services", []),
       tags: Map.get(meta, "tags", []),
 
+      # Top-level Contact Details
+      address: item.address,
+      city: item.city,
+      state: item.state,
+      zip: item.zip,
+      country: item.country,
+      phone: item.phone,
+      email: item.email,
+      website: item.website,
+      location: item.city || item.address || item.district_l1 || "Local District",
+
       # Contact Details
       contact: contact_details(item),
       contact_details: contact_details(item),
@@ -210,7 +221,8 @@ defmodule KollectiveWeb.BusinessJSON do
       district_l3: item.district_l3,
 
       # Unified Owner Struct Serialization
-      owner: serialize_owner(item),
+      owner: serialize_owner_name(item) || "community_member",
+      owner_info: serialize_owner(item),
       owner_name: serialize_owner_name(item),
       ownerAvatar: serialize_owner_avatar(item)
     }

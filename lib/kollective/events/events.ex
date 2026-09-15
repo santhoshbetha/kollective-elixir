@@ -1785,20 +1785,105 @@ defmodule Kollective.Events.Events do
   Hides "invite_only" events unless the active user is the creator or an invited participant.
   """
   def list_visible_events_query(user) do
-    # 1. Fetch array of event IDs where the user has an active registration slot
-    invited_event_ids =
-      from(p in EventParticipant, where: p.user_id == ^user.id, select: p.event_id)
-      |> Repo.all()
+    if user do
+      invited_event_ids =
+        from(p in EventParticipant, where: p.user_id == ^user.id, select: p.event_id)
+        |> Repo.all()
 
-    # 2. Query: Enforce visibility rules using fast index matching bounds
-    from(e in Event,
-      where: e.event_status == "published",
-      where:
-        e.join_mode in ["free", "restricted"] or e.id in ^invited_event_ids or
-          e.created_by == ^user.id,
-      order_by: [desc: e.start_time],
-      preload: [:user, :origin_city]
-    )
+      from(e in Event,
+        where: e.event_status == "published",
+        where:
+          e.join_mode in ["free", "restricted"] or e.id in ^invited_event_ids or
+            e.created_by == ^user.id,
+        order_by: [desc: e.start_time],
+        preload: [:user, :origin_city]
+      )
+    else
+      from(e in Event,
+        where: e.event_status == "published",
+        where: e.join_mode in ["free", "restricted"],
+        order_by: [desc: e.start_time],
+        preload: [:user, :origin_city]
+      )
+    end
+  end
+
+  @doc """
+  Filters published events by selected date string, distance radius in miles, or state.
+  """
+  def list_events_filtered(user, params \\ %{}) do
+    query = list_visible_events_query(user)
+
+    date_str = params["date"] || params["selected_date"]
+    distance_val = params["distance"] || params["radius"]
+    state_val = params["state"]
+    lat_val = params["latitude"] || (user && Map.get(user, :latitude))
+    lng_val = params["longitude"] || (user && Map.get(user, :longitude))
+
+    # Apply Date Filter if present
+    query =
+      if is_binary(date_str) and String.trim(date_str) != "" do
+        case Date.from_iso8601(String.trim(date_str)) do
+          {:ok, date} ->
+            start_dt = DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
+            end_dt = DateTime.new!(date, ~T[23:59:59], "Etc/UTC")
+            from(e in query, where: e.start_time >= ^start_dt and e.start_time <= ^end_dt)
+
+          _ ->
+            query
+        end
+      else
+        query
+      end
+
+    parse_float = fn
+      val when is_number(val) ->
+        val * 1.0
+
+      val when is_binary(val) ->
+        case Float.parse(val) do
+          {num, _} -> num
+          :error -> nil
+        end
+
+      _ ->
+        nil
+    end
+
+    # Apply Distance/Coordinates filter if distance & lat/lng provided
+    query =
+      if not is_nil(distance_val) and not is_nil(lat_val) and not is_nil(lng_val) do
+        dist_miles = parse_float.(distance_val)
+        lat = parse_float.(lat_val)
+        lng = parse_float.(lng_val)
+
+        if dist_miles && lat && lng do
+          lat_delta = dist_miles / 69.0
+          lng_delta = dist_miles / 53.0
+
+          min_lat = lat - lat_delta
+          max_lat = lat + lat_delta
+          min_lng = lng - lng_delta
+          max_lng = lng + lng_delta
+
+          from(e in query,
+            where: e.latitude >= ^min_lat and e.latitude <= ^max_lat,
+            where: e.longitude >= ^min_lng and e.longitude <= ^max_lng
+          )
+        else
+          query
+        end
+      else
+        # Fallback to State Filter if distance is not applicable but state is provided
+        if is_binary(state_val) and String.trim(state_val) != "" do
+          clean_state = String.trim(state_val)
+          from(e in query, where: fragment("LOWER(?)", e.origin_state) == ^String.downcase(clean_state))
+        else
+          query
+        end
+      end
+
+    Repo.all(query)
   end
 
   # ─── WORKFLOW 3: ATOMIC PRIVATE EVENT INVITATIONS ───
