@@ -2,10 +2,6 @@ defmodule KollectiveWeb.ProfileController do
   use KollectiveWeb, :controller
   alias Kollective.Accounts.Accounts
 
-  @bucket_name "your-r2-profiles-bucket"
-  # Replace with your custom domain or pub.r2.dev link
-  @cdn_domain "https://r2.dev"
-
   # ─── ACTION 1: GENERATE PROFILE ASSET PRESIGNED TICKETS ───
   # GET /api/v1/profile/media/presign
   # Expected params: ?filename=avatar.png&type=avatar&content_type=image/png
@@ -25,7 +21,7 @@ defmodule KollectiveWeb.ProfileController do
 
     # Hand out a highly restrictive 15-minute write ticket straight to R2 edge pools
     {:ok, upload_url} =
-      ExAws.S3.presigned_url(config, :put, @bucket_name, s3_path,
+      ExAws.S3.presigned_url(config, :put, Kollective.Storage.bucket_name(), s3_path,
         expires_in: 900,
         query_params: [{"Content-Type", content_type}]
       )
@@ -33,7 +29,7 @@ defmodule KollectiveWeb.ProfileController do
     json(conn, %{
       status: "success",
       upload_url: upload_url,
-      final_asset_url: "#{@cdn_domain}/#{s3_path}"
+      final_asset_url: "#{Kollective.Storage.cdn_domain()}/#{s3_path}"
     })
   end
 

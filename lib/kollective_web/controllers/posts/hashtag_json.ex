@@ -25,6 +25,27 @@ defmodule KollectiveWeb.HashtagJSON do
   end
 
   @doc """
+  Serializes a single tag object with follow state.
+  """
+  def show(tag_name, following) when is_binary(tag_name) do
+    base_url = KollectiveWeb.Endpoint.url()
+
+    %{
+      name: tag_name,
+      url: "#{base_url}/api/discovery/hashtag?tag=#{tag_name}",
+      history: [],
+      following: following
+    }
+  end
+
+  @doc """
+  Serializes a list of followed tags.
+  """
+  def list_followed(tag_names) when is_list(tag_names) do
+    Enum.map(tag_names, fn name -> show(name, true) end)
+  end
+
+  @doc """
   Formats hashtag discovery timeline payload.
   """
   def timeline(tag_name, entries, next_cursor) do

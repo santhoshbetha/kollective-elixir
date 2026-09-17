@@ -1,11 +1,13 @@
 import Config
 
 # Configure your database
+database_url =
+  System.get_env("DATABASE_URL") ||
+    "postgres://avnadmin:AVNS_0UTkLjKgF6SR7BBnNva@pg-1611a57f-kollective.i.aivencloud.com:16584/defaultdb"
+
 config :kollective, Kollective.Repo,
-  username: "postgres",
-  password: "postgres",
-  hostname: "localhost",
-  database: "kollective_dev",
+  url: database_url,
+  ssl: [verify: :verify_none],
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10,
@@ -76,3 +78,30 @@ config :phoenix, :plug_init_mode, :runtime
 
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
+
+# Cloudflare R2 Object Storage Development Configuration
+config :ex_aws,
+  access_key_id: System.get_env("R2_ACCESS_KEY_ID"),
+  secret_access_key: System.get_env("R2_SECRET_ACCESS_KEY"),
+  region: "auto"
+
+config :ex_aws, :s3,
+  scheme: "https://",
+  host:
+    "#{System.get_env("R2_ACCOUNT_ID", "47701ef2e87f29505064cb21fd2513ed")}.r2.cloudflarestorage.com",
+  access_key_id: System.get_env("R2_ACCESS_KEY_ID"),
+  secret_access_key: System.get_env("R2_SECRET_ACCESS_KEY"),
+  region: "auto"
+
+config :waffle,
+  storage: Waffle.Storage.S3,
+  bucket: System.get_env("R2_BUCKET_NAME", "kollective")
+
+config :kollective,
+  r2_account_id: System.get_env("R2_ACCOUNT_ID", "47701ef2e87f29505064cb21fd2513ed"),
+  r2_bucket: System.get_env("R2_BUCKET_NAME", "kollective"),
+  r2_public_domain:
+    System.get_env(
+      "R2_PUBLIC_DOMAIN",
+      "https://47701ef2e87f29505064cb21fd2513ed.r2.cloudflarestorage.com/kollective"
+    )

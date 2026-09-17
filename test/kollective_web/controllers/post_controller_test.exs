@@ -24,6 +24,13 @@ defmodule KollectiveWeb.PostControllerTest do
       assert json_response(conn, 401)["message"] =~ "must log in"
     end
 
+    test "GET /api/v1/posts/:id/context returns 401", %{conn: conn} do
+      conn = get(conn, ~p"/api/v1/posts/#{Kollective.Schemas.ULIDType.generate()}/context")
+
+      assert conn.status == 401
+      assert json_response(conn, 401)["message"] =~ "must log in"
+    end
+
     test "POST /api/v1/posts returns 401", %{conn: conn} do
       conn =
         post(conn, ~p"/api/v1/posts", %{
@@ -142,6 +149,19 @@ defmodule KollectiveWeb.PostControllerTest do
       assert is_list(response["data"])
       ids = Enum.map(response["data"], fn p -> p["id"] end)
       assert p1.id in ids
+    end
+
+    test "GET /api/v1/posts supports ULID string cursor pagination", %{conn: conn, user: user} do
+      _p1 = post_fixture(user, %{content: "Post 1", text: "Post 1"})
+      _p2 = post_fixture(user, %{content: "Post 2", text: "Post 2"})
+      ulid_cursor = Kollective.Schemas.ULIDType.generate()
+
+      response =
+        conn
+        |> get(~p"/api/v1/posts?cursor=#{ulid_cursor}&sort=newest")
+        |> json_response(200)
+
+      assert is_list(response["data"])
     end
 
     test "GET /api/v1/posts/:id returns public post details", %{conn: conn, user: user} do
@@ -531,6 +551,73 @@ defmodule KollectiveWeb.PostControllerTest do
       assert data2["reblog"] != nil
       assert data2["reblog"]["id"] == post.id
       assert data2["reblog"]["content"] == post.content
+    end
+  end
+
+  describe "GET /api/v1/posts/:id/context" do
+    setup :authenticate_user
+
+    test "returns 404 for missing post", %{conn: conn} do
+      conn = get(conn, ~p"/api/v1/posts/#{Kollective.Schemas.ULIDType.generate()}/context")
+
+      assert conn.status == 404
+      assert json_response(conn, 404)["error"] == "Post not found"
+    end
+
+    test "returns empty ancestors and descendants for a standalone post", %{
+      conn: conn,
+      user: user
+    } do
+      post = post_fixture(user, %{content: "Standalone post"})
+
+      conn = get(conn, ~p"/api/v1/posts/#{post.id}/context")
+
+      assert conn.status == 200
+      response = json_response(conn, 200)
+
+      assert response["ancestors"] == []
+      assert response["focus"]["id"] == post.id
+      assert response["focus"]["content"] == "Standalone post"
+      assert response["descendants"] == []
+    end
+
+    test "returns thread context with ancestors, focus, and descendants", %{
+      conn: conn,
+      user: user
+    } do
+      parent_post = post_fixture(user, %{content: "Root post in thread"})
+
+      focus_post =
+        post_fixture(user, %{
+          content: "Focus reply post",
+          in_reply_to_id: parent_post.id,
+          root_post_id: parent_post.id
+        })
+
+      descendant_post =
+        post_fixture(user, %{
+          content: "Nested reply to focus",
+          in_reply_to_id: focus_post.id,
+          root_post_id: parent_post.id
+        })
+
+      conn = get(conn, ~p"/api/v1/posts/#{focus_post.id}/context")
+
+      assert conn.status == 200
+      response = json_response(conn, 200)
+
+      assert is_list(response["ancestors"])
+      assert length(response["ancestors"]) == 1
+      assert Enum.at(response["ancestors"], 0)["id"] == parent_post.id
+      assert Enum.at(response["ancestors"], 0)["content"] == "Root post in thread"
+
+      assert response["focus"]["id"] == focus_post.id
+      assert response["focus"]["content"] == "Focus reply post"
+
+      assert is_list(response["descendants"])
+      assert length(response["descendants"]) == 1
+      assert Enum.at(response["descendants"], 0)["id"] == descendant_post.id
+      assert Enum.at(response["descendants"], 0)["content"] == "Nested reply to focus"
     end
   end
 

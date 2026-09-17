@@ -9,9 +9,6 @@ defmodule KollectiveWeb.MediaController do
   alias KollectiveWeb.ChangesetJSON
 
   @s3_engine Application.compile_env(:kollective, :s3_engine, ExAws.S3)
-  @bucket_name "your-r2-attachments-bucket"
-  # Or your custom CDN domain
-  @cdn_domain "https://r2.dev"
 
   # ─── ACTION 1: GENERATE CLOUDFLARE R2 PRESIGNED PUT TICKETS ───
   # GET /api/v1/media/presign
@@ -25,7 +22,7 @@ defmodule KollectiveWeb.MediaController do
     file_key = "attachments/#{user.id}/#{unique_name}"
 
     {:ok, upload_url} =
-      @s3_engine.presigned_url(config, :put, @bucket_name, file_key,
+      @s3_engine.presigned_url(config, :put, Kollective.Storage.bucket_name(), file_key,
         expires_in: 900,
         query_params: [{"Content-Type", content_type}]
       )
@@ -35,7 +32,7 @@ defmodule KollectiveWeb.MediaController do
     |> json(
       MediaJSON.presign(%{
         upload_url: upload_url,
-        final_asset_url: "#{@cdn_domain}/#{file_key}"
+        final_asset_url: "#{Kollective.Storage.cdn_domain()}/#{file_key}"
       })
     )
   end

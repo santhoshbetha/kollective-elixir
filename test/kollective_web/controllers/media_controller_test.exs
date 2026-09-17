@@ -35,7 +35,7 @@ defmodule KollectiveWeb.MediaControllerTest do
 
       assert response["status"] == "success"
       assert is_binary(response["upload_url"])
-      assert response["final_asset_url"] =~ "https://r2.dev"
+      assert response["final_asset_url"] =~ Kollective.Storage.cdn_domain()
     end
   end
 

@@ -8,6 +8,80 @@ defmodule Kollective.Hashtags.Hashtags do
 
   alias Kollective.Hashtags.Hashtag
   alias Kollective.Hashtags.HashtagStat
+  alias Kollective.Hashtags.TagFollow
+
+  @doc """
+  Normalizes tag name by removing leading '#' and downcasing.
+  If the identifier is a tag ID (ULID), looks up the Hashtag record.
+  """
+  def normalize_tag_identifier(tag_identifier) when is_binary(tag_identifier) do
+    cleaned = String.replace(tag_identifier, ~r/^#/, "") |> String.trim() |> String.downcase()
+
+    case Repo.get(Hashtag, cleaned) do
+      %Hashtag{name: name} -> name
+      nil -> cleaned
+    end
+  end
+
+  @doc """
+  Follows a hashtag for the given user.
+  """
+  def follow_tag(user, tag_identifier) do
+    tag_name = normalize_tag_identifier(tag_identifier)
+    user_id = user.id
+
+    %TagFollow{}
+    |> TagFollow.changeset(%{user_id: user_id, tag_name: tag_name})
+    |> Repo.insert(on_conflict: :nothing, conflict_target: [:user_id, :tag_name])
+
+    {:ok, tag_name}
+  end
+
+  @doc """
+  Unfollows a hashtag for the given user.
+  """
+  def unfollow_tag(user, tag_identifier) do
+    tag_name = normalize_tag_identifier(tag_identifier)
+    user_id = user.id
+
+    from(tf in TagFollow, where: tf.user_id == ^user_id and tf.tag_name == ^tag_name)
+    |> Repo.delete_all()
+
+    {:ok, tag_name}
+  end
+
+  @doc """
+  Checks if a user is following a tag.
+  """
+  def is_following_tag?(user, tag_identifier) do
+    if is_nil(user) do
+      false
+    else
+      tag_name = normalize_tag_identifier(tag_identifier)
+      user_id = user.id
+
+      from(tf in TagFollow, where: tf.user_id == ^user_id and tf.tag_name == ^tag_name)
+      |> Repo.exists?()
+    end
+  end
+
+  @doc """
+  Lists all hashtags followed by the given user.
+  """
+  def list_followed_tags(user) do
+    if is_nil(user) do
+      []
+    else
+      user_id = user.id
+
+      from(tf in TagFollow,
+        where: tf.user_id == ^user_id,
+        order_by: [asc: tf.tag_name],
+        select: tf.tag_name
+      )
+      |> Repo.all()
+    end
+  end
 
   def update_all_trending_scores do
     now = DateTime.utc_now()

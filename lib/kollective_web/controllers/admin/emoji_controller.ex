@@ -4,9 +4,6 @@ defmodule KollectiveWeb.Admin.AdminEmojiController do
   alias Kollective.Posts.Posts
   alias KollectiveWeb.ChangesetJSON
 
-  @bucket_name "your-r2-bucket"
-  @cdn_domain "https://your-cdn.com"
-
   # ─── ACTION 1: GENERATE CUSTOM EMOJI PRESIGNED URLS ───
   # GET /api/v1/admin/custom_emojis/presign?shortcode=kollective_logo&content_type=image/gif
   def presign(conn, %{"shortcode" => shortcode, "content_type" => content_type}) do
@@ -19,15 +16,18 @@ defmodule KollectiveWeb.Admin.AdminEmojiController do
     key_gif = "custom_emojis/#{safe_shortcode}.gif"
     key_static = "custom_emojis/#{safe_shortcode}_static.png"
 
+    bucket = Kollective.Storage.bucket_name()
+    cdn = Kollective.Storage.cdn_domain()
+
     # Generate an unauthenticated 15-minute write ticket straight to Cloudflare R2 edge pools
     {:ok, url_gif} =
-      ExAws.S3.presigned_url(config, :put, @bucket_name, key_gif,
+      ExAws.S3.presigned_url(config, :put, bucket, key_gif,
         expires_in: 900,
         query_params: [{"Content-Type", content_type}]
       )
 
     {:ok, url_static} =
-      ExAws.S3.presigned_url(config, :put, @bucket_name, key_static,
+      ExAws.S3.presigned_url(config, :put, bucket, key_static,
         expires_in: 900,
         query_params: [{"Content-Type", "image/png"}]
       )
@@ -39,8 +39,8 @@ defmodule KollectiveWeb.Admin.AdminEmojiController do
       status: "success",
       upload_url_gif: url_gif,
       upload_url_static: url_static,
-      final_url: "#{@cdn_domain}/#{key_gif}",
-      final_static_url: "#{@cdn_domain}/#{key_static}"
+      final_url: "#{cdn}/#{key_gif}",
+      final_static_url: "#{cdn}/#{key_static}"
     })
   end
 

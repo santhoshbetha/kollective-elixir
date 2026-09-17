@@ -46,24 +46,34 @@ defmodule KollectiveWeb.PostJSON do
     base_domain = KollectiveWeb.Endpoint.url()
     computed_permalink = "#{base_domain}/posts/#{to_string(post.id)}"
 
+    attachments = Map.get(post, :attachments)
+    image_urls = if is_list(attachments), do: Enum.map(attachments, & &1.url), else: []
+
+    likes_cnt = Map.get(item, :likes_count, 0) || Map.get(post, :likes_count, 0)
+    has_liked = Map.get(item, :has_liked, false) || Map.get(post, :liked, false)
+    replies_cnt = Map.get(post, :replies_count) || Map.get(item, :replies_count) || 0
+
     %{
       id: to_string(post.id),
       content: post.content,
-      # Safe access if category is optional
+      text: post.text || post.content,
+      title: Map.get(post, :summary) || Map.get(post, :spoiler_text) || nil,
       category: Map.get(post, :category),
-      # Standard ISO string
       inserted_at: Calendar.strftime(post.inserted_at, "%Y-%m-%dT%H:%M:%SZ"),
       published_at:
         (Map.get(post, :published_at) &&
            Calendar.strftime(post.published_at, "%Y-%m-%dT%H:%M:%SZ")) || nil,
-
-      # 🟢 PASSES A CLEAN COMPUTED RUNTIME PERMALINK STRAIGHT TO REACT [INDEX]
+      time: Calendar.strftime(post.inserted_at, "%b %d, %Y"),
       permalink: computed_permalink,
 
       # Social engagement metrics and flags
-      likes_count: item.likes_count,
+      likes: likes_cnt,
+      likes_count: likes_cnt,
       reblogs_count: item.reblogs_count,
-      has_liked: item.has_liked,
+      commentsCount: replies_cnt,
+      replies_count: replies_cnt,
+      liked: has_liked,
+      has_liked: has_liked,
       has_reblogged: item.has_reblogged,
       bookmarked: post.bookmarked || false,
       favourited: Map.get(post, :favourited, false),
@@ -75,6 +85,11 @@ defmodule KollectiveWeb.PostJSON do
       author: serialize_author(Map.get(post, :author)),
       organization_id: (post.organization_id && to_string(post.organization_id)) || nil,
       organization: serialize_organization(Map.get(post, :organization)),
+
+      # Attachments and images
+      images: image_urls,
+      image: List.first(image_urls),
+      media_attachments: serialize_attachments(attachments),
 
       # INTERACTIVE CARD PREVIEW OBJECT: Returns nil if no link was pasted
       link_preview:
@@ -89,15 +104,11 @@ defmodule KollectiveWeb.PostJSON do
           nil
         end,
 
-      # MEDIA ATTACHMENTS PORTFOLIO ARRAY: Serializes S3/R2 picture data maps
-      media_attachments: serialize_attachments(Map.get(post, :attachments)),
-
       # POLL: Serializes the poll if attached
       poll: serialize_poll(Map.get(post, :poll)),
 
       # Additional Mastodon-like fields
       in_reply_to_id: (post.in_reply_to_id && to_string(post.in_reply_to_id)) || nil,
-      replies_count: Map.get(post, :replies_count) || Map.get(item, :replies_count) || 0,
       muted: Map.get(post, :muted) || Map.get(item, :muted) || false,
       sensitive: Map.get(post, :sensitive) || false,
       spoiler_text: Map.get(post, :spoiler_text) || "",
@@ -119,10 +130,26 @@ defmodule KollectiveWeb.PostJSON do
   defp serialize_author(nil), do: nil
 
   defp serialize_author(author) do
+    username = Map.get(author, :username) || Map.get(author, :name) || "user"
+
+    handle =
+      cond do
+        Map.get(author, :handle) -> author.handle
+        String.starts_with?(username, "@") -> username
+        true -> "@#{username}"
+      end
+
+    name = Map.get(author, :name) || Map.get(author, :username) || "Anonymous"
+    avatar = Map.get(author, :avatar) || Map.get(author, :avatar_url) || "/default-avatar.jpg"
+
     %{
       id: to_string(Map.get(author, :id)),
-      username: Map.get(author, :username),
-      avatar_url: Map.get(author, :avatar_url) || "/default-avatar.jpg"
+      name: name,
+      username: username,
+      handle: handle,
+      avatar: avatar,
+      avatar_url: avatar,
+      verified: Map.get(author, :is_verified) || Map.get(author, :verified) || false
     }
   end
 

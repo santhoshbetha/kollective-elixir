@@ -50,4 +50,6 @@ defmodule KollectiveWeb.FilterController do
         json(conn, %{status: "success", message: "Mute phrase successfully removed."})
     end
   end
+
+  def delete_filter(conn, params), do: delete(conn, params)
 end

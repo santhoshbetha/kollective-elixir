@@ -293,4 +293,14 @@ defmodule Kollective.Factory do
     # ExMachina safely overwrites attributes passed by your tests here
     |> merge_attributes(attrs)
   end
+
+  def user_filter_factory do
+    %Kollective.Posts.UserFilter{
+      id: ulid_sequence(),
+      phrase: sequence(:phrase, &"muted_phrase_#{&1}"),
+      whole_word: true,
+      context: ["home", "public"],
+      user: build(:user)
+    }
+  end
 end

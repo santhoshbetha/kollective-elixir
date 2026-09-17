@@ -2,6 +2,7 @@
 defmodule KollectiveWeb.HashtagController do
   use KollectiveWeb, :controller
   alias Kollective.Posts.Posts
+  alias Kollective.Hashtags.Hashtags
   alias KollectiveWeb.HashtagJSON
 
   # GET /api/v1/timelines/tag/:tag
@@ -16,6 +17,36 @@ defmodule KollectiveWeb.HashtagController do
     conn
     |> put_status(:ok)
     |> json(HashtagJSON.timeline(tag_name, entries, next_cursor))
+  end
+
+  # POST /api/v1/tags/:tag/follow
+  def follow(conn, %{"tag" => tag_identifier}) do
+    current_user = conn.assigns.current_user
+    {:ok, tag_name} = Hashtags.follow_tag(current_user, tag_identifier)
+
+    conn
+    |> put_status(:ok)
+    |> json(HashtagJSON.show(tag_name, true))
+  end
+
+  # POST /api/v1/tags/:tag/unfollow
+  def unfollow(conn, %{"tag" => tag_identifier}) do
+    current_user = conn.assigns.current_user
+    {:ok, tag_name} = Hashtags.unfollow_tag(current_user, tag_identifier)
+
+    conn
+    |> put_status(:ok)
+    |> json(HashtagJSON.show(tag_name, false))
+  end
+
+  # GET /api/v1/followed_tags
+  def followed_tags(conn, _params) do
+    current_user = conn.assigns.current_user
+    tags = Hashtags.list_followed_tags(current_user)
+
+    conn
+    |> put_status(:ok)
+    |> json(HashtagJSON.list_followed(tags))
   end
 
   @doc """

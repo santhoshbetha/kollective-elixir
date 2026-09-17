@@ -61,6 +61,85 @@ defmodule Kollective.Posts.Posts do
     |> Repo.get!(id)
   end
 
+  @doc """
+  Fetches the cascading thread context for a given post ID.
+  Returns `{:ok, %{ancestors: [...], focus: ..., descendants: [...]}}` or `{:error, :not_found}`.
+  """
+  def get_post_context(post_id, current_user \\ nil) do
+    case get_post(post_id) do
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:ok, focus_post} ->
+        ancestors = get_ancestors(focus_post, [])
+        descendants = get_descendants(focus_post)
+
+        all_posts = ancestors ++ [focus_post] ++ descendants
+        hydrated_items = hydrate_virtual_fields(all_posts, current_user)
+
+        ancestors_count = length(ancestors)
+
+        {hydrated_ancestors, [hydrated_focus | hydrated_descendants]} =
+          Enum.split(hydrated_items, ancestors_count)
+
+        {:ok,
+         %{
+           ancestors: hydrated_ancestors,
+           focus: hydrated_focus,
+           descendants: hydrated_descendants
+         }}
+    end
+  end
+
+  defp get_ancestors(%Post{in_reply_to_id: nil}, acc), do: acc
+
+  defp get_ancestors(%Post{in_reply_to_id: parent_id}, acc) when not is_nil(parent_id) do
+    case get_post(parent_id) do
+      {:ok, parent_post} ->
+        get_ancestors(parent_post, [parent_post | acc])
+
+      {:error, _} ->
+        acc
+    end
+  end
+
+  defp get_descendants(%Post{id: focus_id}) do
+    Post
+    |> where([p], p.in_reply_to_id == ^focus_id or p.root_post_id == ^focus_id)
+    |> where([p], is_nil(p.deleted_at))
+    |> order_by([p], asc: p.inserted_at)
+    |> preload([:author, :organization, :attachments, :hashtags, :reblog_of, poll: :options])
+    |> Repo.all()
+  end
+
+  @doc """
+  Lists all users who liked a specific post.
+  """
+  def list_liked_by_users(post_id) do
+    from(u in User,
+      join: l in Like,
+      on: l.user_id == u.id,
+      where: l.post_id == ^post_id,
+      order_by: [desc: l.inserted_at],
+      select: u
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Lists all users who reblogged/boosted a specific post.
+  """
+  def list_reblogged_by_users(post_id) do
+    from(u in User,
+      join: p in Post,
+      on: p.user_id == u.id,
+      where: p.reblog_of_id == ^post_id and is_nil(p.deleted_at),
+      order_by: [desc: p.inserted_at],
+      select: u
+    )
+    |> Repo.all()
+  end
+
   def list_local_feed(user, params) do
     Post
     |> where(
@@ -986,14 +1065,17 @@ defmodule Kollective.Posts.Posts do
       if after_cursor && after_cursor != "" do
         case String.split(after_cursor, ",") do
           [ts_str, id_str] ->
-            {:ok, ts, _} = DateTime.from_iso8601(ts_str)
-            target_id = String.to_integer(id_str)
+            case DateTime.from_iso8601(ts_str) do
+              {:ok, ts, _} ->
+                from p in query,
+                  where: p.published_at < ^ts or (p.published_at == ^ts and p.id < ^id_str)
 
-            from p in query,
-              where: p.published_at < ^ts or (p.published_at == ^ts and p.id < ^target_id)
+              _ ->
+                from p in query, where: p.id < ^after_cursor
+            end
 
           _ ->
-            query
+            from p in query, where: p.id < ^after_cursor
         end
       else
         query
@@ -1126,16 +1208,19 @@ defmodule Kollective.Posts.Posts do
       if after_trend_cursor && after_trend_cursor != "" do
         case String.split(after_trend_cursor, ",") do
           [score_str, id_str] ->
-            target_score = String.to_float(score_str)
-            target_id = String.to_integer(id_str)
+            case Float.parse(score_str) do
+              {target_score, _} ->
+                from p in query,
+                  where:
+                    p.trending_score < ^target_score or
+                      (p.trending_score == ^target_score and p.id < ^id_str)
 
-            from p in query,
-              where:
-                p.trending_score < ^target_score or
-                  (p.trending_score == ^target_score and p.id < ^target_id)
+              :error ->
+                from p in query, where: p.id < ^after_trend_cursor
+            end
 
           _ ->
-            query
+            from p in query, where: p.id < ^after_trend_cursor
         end
       else
         query
@@ -1188,14 +1273,17 @@ defmodule Kollective.Posts.Posts do
   defp apply_feed_cursor(query, cursor) do
     case String.split(cursor, ",") do
       [ts_str, id_str] ->
-        {:ok, ts, _} = DateTime.from_iso8601(ts_str)
-        target_id = String.to_integer(id_str)
+        case DateTime.from_iso8601(ts_str) do
+          {:ok, ts, _} ->
+            from p in query,
+              where: p.published_at < ^ts or (p.published_at == ^ts and p.id < ^id_str)
 
-        from p in query,
-          where: p.published_at < ^ts or (p.published_at == ^ts and p.id < ^target_id)
+          _ ->
+            from p in query, where: p.id < ^cursor
+        end
 
       _ ->
-        query
+        from p in query, where: p.id < ^cursor
     end
   end
 
@@ -1412,8 +1500,20 @@ defmodule Kollective.Posts.Posts do
 
   defp apply_cursor_pagination(query, max_id) do
     # Keyset pagination rule ensures index scans run under 1ms on massive datasets
-    id_threshold = if is_binary(max_id), do: String.to_integer(max_id), else: max_id
-    from p in query, where: p.id < ^id_threshold
+    case String.split(to_string(max_id), ",") do
+      [ts_str, id_str] ->
+        case DateTime.from_iso8601(ts_str) do
+          {:ok, ts, _} ->
+            from p in query,
+              where: p.published_at < ^ts or (p.published_at == ^ts and p.id < ^id_str)
+
+          _ ->
+            from p in query, where: p.id < ^max_id
+        end
+
+      _ ->
+        from p in query, where: p.id < ^max_id
+    end
   end
 
   defp filter_by_category(query, "voice") do

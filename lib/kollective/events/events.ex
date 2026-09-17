@@ -22,10 +22,6 @@ defmodule Kollective.Events.Events do
   alias Kollective.Admins.Log, as: AdminLog
   alias Kollective.Locations.Locations
 
-  @bucket_name "your-r2-events-bucket"
-  # Or your custom CDN domain
-  @cdn_domain "https://pub-xxxxxxxx.r2.dev"
-
   # alias Kollective.External.GeoapifyService
   # alias Kollective.External.CivicService
 
@@ -1458,13 +1454,16 @@ defmodule Kollective.Events.Events do
 
       config = ExAws.Config.new(:s3)
 
+      bucket = Kollective.Storage.bucket_name()
+      cdn = Kollective.Storage.cdn_domain()
+
       # Wrap the S3 call in a safe case block to handle real connectivity errors
-      case ExAws.S3.presigned_url(config, :put, @bucket_name, s3_path, expires_in: 900) do
+      case ExAws.S3.presigned_url(config, :put, bucket, s3_path, expires_in: 900) do
         {:ok, presigned_url} ->
           {:ok,
            %{
              upload_url: presigned_url,
-             final_asset_url: "#{@cdn_domain}/#{s3_path}"
+             final_asset_url: "#{cdn}/#{s3_path}"
            }}
 
         {:error, reason} ->
@@ -1877,7 +1876,10 @@ defmodule Kollective.Events.Events do
         # Fallback to State Filter if distance is not applicable but state is provided
         if is_binary(state_val) and String.trim(state_val) != "" do
           clean_state = String.trim(state_val)
-          from(e in query, where: fragment("LOWER(?)", e.origin_state) == ^String.downcase(clean_state))
+
+          from(e in query,
+            where: fragment("LOWER(?)", e.origin_state) == ^String.downcase(clean_state)
+          )
         else
           query
         end

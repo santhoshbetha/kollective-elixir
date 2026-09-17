@@ -187,7 +187,7 @@ defmodule KollectiveWeb.EventCommentController do
   def presign_image(conn, %{"content_type" => content_type}) do
     user = conn.assigns.current_user
     config = ExAws.Config.new(:s3)
-    bucket = "your-r2-comments-bucket"
+    bucket = Kollective.Storage.bucket_name()
 
     # Determine extensions safely based on the mime type parameters
     extension =
@@ -213,7 +213,7 @@ defmodule KollectiveWeb.EventCommentController do
     |> json(%{
       status: "success",
       upload_url: url,
-      final_asset_url: "https://your-custom-cdn.com{file_key}"
+      final_asset_url: "#{Kollective.Storage.cdn_domain()}/#{file_key}"
     })
   end
 end

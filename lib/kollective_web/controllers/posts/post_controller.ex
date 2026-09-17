@@ -9,6 +9,7 @@ defmodule KollectiveWeb.PostController do
   alias Kollective.Accounts.OrganizationMembership
   alias Kollective.Security.Security
   alias KollectiveWeb.PostJSON
+  alias KollectiveWeb.AccountJSON
   alias KollectiveWeb.ChangesetJSON
 
   # GET /api/v1/posts
@@ -171,6 +172,69 @@ defmodule KollectiveWeb.PostController do
           })
         else
           # Return a 404 to protect the privacy of the account holder (Stealth Defense)
+          conn |> put_status(:not_found) |> json(%{error: "Post not found"}) |> halt()
+        end
+    end
+  end
+
+  # GET /api/v1/posts/:id/context
+  def context(conn, %{"id" => id}) do
+    current_user = conn.assigns[:current_user]
+
+    case Posts.get_post_context(id, current_user) do
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "Post not found"})
+
+      {:ok, %{ancestors: ancestors, focus: focus, descendants: descendants}} ->
+        conn
+        |> put_status(:ok)
+        |> json(%{
+          ancestors: Enum.map(ancestors, &PostJSON.show/1),
+          focus: PostJSON.show(focus),
+          descendants: Enum.map(descendants, &PostJSON.show/1)
+        })
+    end
+  end
+
+  # GET /api/v1/posts/:id/liked_by
+  def liked_by(conn, %{"id" => id}) do
+    current_user = conn.assigns[:current_user]
+
+    case Posts.get_post(id) do
+      {:error, :not_found} ->
+        conn |> put_status(:not_found) |> json(%{error: "Post not found"})
+
+      {:ok, post} ->
+        if has_access_to_post?(post, if(current_user, do: current_user.id, else: nil)) do
+          users = Posts.list_liked_by_users(id)
+
+          conn
+          |> put_status(:ok)
+          |> json(AccountJSON.index(%{users: users, for: current_user}))
+        else
+          conn |> put_status(:not_found) |> json(%{error: "Post not found"}) |> halt()
+        end
+    end
+  end
+
+  # GET /api/v1/posts/:id/reblogged_by
+  def reblogged_by(conn, %{"id" => id}) do
+    current_user = conn.assigns[:current_user]
+
+    case Posts.get_post(id) do
+      {:error, :not_found} ->
+        conn |> put_status(:not_found) |> json(%{error: "Post not found"})
+
+      {:ok, post} ->
+        if has_access_to_post?(post, if(current_user, do: current_user.id, else: nil)) do
+          users = Posts.list_reblogged_by_users(id)
+
+          conn
+          |> put_status(:ok)
+          |> json(AccountJSON.index(%{users: users, for: current_user}))
+        else
           conn |> put_status(:not_found) |> json(%{error: "Post not found"}) |> halt()
         end
     end
@@ -407,9 +471,14 @@ defmodule KollectiveWeb.PostController do
   end
 
   # POST /api/v1/posts/:id/replies
-  def create_reply(conn, %{"id" => parent_id, "post" => post_params}) do
+  # POST /api/v1/posts/:id/reply
+  def create_reply(conn, %{"id" => parent_id} = params) do
     user = conn.assigns.current_user
     ip = guest_ip(conn)
+
+    post_params = Map.get(params, "post", params)
+    content_text = post_params["text"] || post_params["content"] || ""
+    post_params = Map.put(post_params, "content", content_text)
 
     # 1. Locate the target parent post first to verify existence and preload assets
     case Repo.get(Post, parent_id) |> Repo.preload([:author]) do

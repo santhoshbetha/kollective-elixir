@@ -69,23 +69,33 @@ if config_env() == :prod do
     ],
     secret_key_base: secret_key_base
 
-  config :ex_aws, :s3,
-    # Get these from your Cloudflare R2 dashboard
-    host: "#{System.get_env("R2_ACCOUNT_ID")}.r2.cloudflarestorage.com",
+  r2_account_id = System.get_env("R2_ACCOUNT_ID") || "47701ef2e87f29505064cb21fd2513ed"
+  r2_bucket = System.get_env("R2_BUCKET_NAME") || "kollective"
+
+  r2_public_domain =
+    System.get_env("R2_PUBLIC_DOMAIN") ||
+      "https://#{r2_account_id}.r2.cloudflarestorage.com/#{r2_bucket}"
+
+  config :ex_aws,
     access_key_id: System.get_env("R2_ACCESS_KEY_ID"),
     secret_access_key: System.get_env("R2_SECRET_ACCESS_KEY"),
-    # Format: https://<account_id>.r2.cloudflarestorage.com
+    region: "auto"
+
+  config :ex_aws, :s3,
+    host: "#{r2_account_id}.r2.cloudflarestorage.com",
+    access_key_id: System.get_env("R2_ACCESS_KEY_ID"),
+    secret_access_key: System.get_env("R2_SECRET_ACCESS_KEY"),
     scheme: "https://",
-    # R2 uses 'auto'
     region: "auto"
 
   config :waffle,
     storage: Waffle.Storage.S3,
-    # ,
-    bucket: System.get_env("R2_BUCKET_NAME")
+    bucket: r2_bucket
 
-  # remove the asset_host for now to ensure signed URLs work correctly with Cloudflare R2
-  # asset_host: System.get_env("R2_PUBLIC_DOMAIN") # e.g., https://pub-xyz.r2.dev
+  config :kollective,
+    r2_account_id: r2_account_id,
+    r2_bucket: r2_bucket,
+    r2_public_domain: r2_public_domain
 
   # ## SSL Support
   #

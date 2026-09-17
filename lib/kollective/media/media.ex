@@ -9,7 +9,7 @@ defmodule Kollective.Media.Media do
       ExAws.S3.presigned_url(
         config,
         :put,
-        "your-bucket-name",
+        Kollective.Storage.bucket_name(),
         "uploads/#{filename}",
         expires_in: 3600,
         query_params: [{"Content-Type", content_type}]
@@ -27,7 +27,7 @@ defmodule Kollective.Media.Media do
     # Path: /custom_emojis/:shortcode.:ext
     key = "custom_emojis/#{shortcode}"
 
-    ExAws.S3.presigned_url(config, :put, "your-bucket", key,
+    ExAws.S3.presigned_url(config, :put, Kollective.Storage.bucket_name(), key,
       expires_in: 3600,
       query_params: [{"Content-Type", content_type}]
     )

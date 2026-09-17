@@ -7,7 +7,9 @@ defmodule KollectiveWeb.OrganizationController do
 
   # GET /api/v1/organizations/search
   # Expected params: ?q=news
-  def search(conn, %{"q" => query_str}) do
+  def search(conn, params) do
+    query_str = params["q"] || params["query"] || ""
+
     current_user =
       conn.assigns[:current_user] ||
         (conn.assigns[:current_scope] && conn.assigns.current_scope.user)
@@ -20,29 +22,37 @@ defmodule KollectiveWeb.OrganizationController do
   end
 
   # POST /api/v1/organizations/:org_id/join
-  def join_request(conn, %{"org_id" => org_id}) do
+  def join_request(conn, params) do
+    org_id = params["org_id"] || params["id"]
+
     user =
       conn.assigns[:current_user] ||
         (conn.assigns[:current_scope] && conn.assigns.current_scope.user)
 
-    case Accounts.request_organization_join(user.id, org_id) do
-      {:ok, _membership} ->
-        conn
-        |> put_status(:ok)
-        |> json(OrganizationJSON.join_request_success())
+    if is_nil(org_id) do
+      conn
+      |> put_status(:bad_request)
+      |> json(%{error: "Organization ID is required."})
+    else
+      case Accounts.request_organization_join(user.id, org_id) do
+        {:ok, _membership} ->
+          conn
+          |> put_status(:ok)
+          |> json(OrganizationJSON.join_request_success())
 
-      {:error, :invalid_target_account} ->
-        conn
-        |> put_status(:bad_request)
-        |> json(%{error: "Target account is not an organization entity."})
+        {:error, :invalid_target_account} ->
+          conn
+          |> put_status(:bad_request)
+          |> json(%{error: "Target account is not an organization entity."})
 
-      {:error, _changeset} ->
-        conn
-        |> put_status(:conflict)
-        |> json(%{
-          error: "duplicate_request",
-          message: "You have already requested to join this organization."
-        })
+        {:error, _changeset} ->
+          conn
+          |> put_status(:conflict)
+          |> json(%{
+            error: "duplicate_request",
+            message: "You have already requested to join this organization."
+          })
+      end
     end
   end
 
