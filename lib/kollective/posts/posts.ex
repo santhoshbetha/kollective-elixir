@@ -1333,14 +1333,14 @@ defmodule Kollective.Posts.Posts do
       # JSONB GIN mention arrays
       |> filter_by_mentions(current_user_id, params["filter"])
 
-    # 🔄 Only apply geographic geofencing if there is a logged-in user!
+    # 🔄 Geographic geofencing for logged-in users vs guest users with detected country!
     query =
       if current_user do
         # Filters by Local, State, Country, or World based on user properties
         filter_by_geographic_scope(base_query, current_user, params["scope"])
       else
-        # For anonymous guests, fall back to global content, or enforce a fallback scope
-        where(base_query, [p], p.visibility == "public" and p.status == "published")
+        # For anonymous guests, filter by detected country parameter or public posts
+        filter_by_guest_geographic_scope(base_query, params)
       end
 
     # Continue the rest of your dynamic query builder pipeline without interruption
@@ -1400,6 +1400,24 @@ defmodule Kollective.Posts.Posts do
   end
 
   # NEW: Unified Geographic Geofencing Filters
+  defp filter_by_guest_geographic_scope(query, params) do
+    base_guest_query = from(p in query, where: p.visibility == "public" and p.status == :published)
+    country = params["country"] || params["country_code"] || params["country_name"]
+
+    cond do
+      not is_nil(country) and country != "" ->
+        from p in base_guest_query,
+          where: p.origin_country == ^country or p.origin_country == "US" or p.target_scope in [:country, :world]
+
+      params["scope"] == "country" ->
+        from p in base_guest_query,
+          where: p.target_scope == :country or p.origin_country == "US"
+
+      true ->
+        base_guest_query
+    end
+  end
+
   # Anonymous users bypass geo-fencing
   defp filter_by_geographic_scope(query, nil, _scope), do: query
 

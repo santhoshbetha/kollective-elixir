@@ -253,21 +253,22 @@ defmodule KollectiveWeb.Router do
   end
 
   scope "/api/v1", KollectiveWeb do
+    pipe_through([:api, KollectiveWeb.Plugs.OptionalAPIAuth])
+
+    # GET /api/v1/posts -> Returns Home or Communities Feed (supports unauthenticated guests with ?country=US parameter)
+    get("/posts", PostController, :index)
+    get("/posts/:id", PostController, :show)
+    get("/posts/:id/context", PostController, :context)
+  end
+
+  scope "/api/v1", KollectiveWeb do
     pipe_through([:api, :api_authenticated])
 
-    # GET /api/v1/posts  -> Returns the Home Feed.
-    # GET /api/v1/posts?scope=state&category=voice&cursor=891-> Returns the Urgent Voice Feed
-    get("/posts", PostController, :index)
-
     # GET /api/v1/posts/:id -> Returns the details of a single post, including its nested replies
-    # GET /api/v1/posts?q=peaceful -> Returns the Search Results.
-    # GET /api/v1/posts?category=voice -> Returns the Urgent Voice Feed
-    get("/posts/:id/context", PostController, :context)
     get("/posts/:id/liked_by", PostController, :liked_by)
     get("/posts/:id/favourited_by", PostController, :liked_by)
     get("/posts/:id/reblogged_by", PostController, :reblogged_by)
 
-    get("/posts/:id", PostController, :show)
     put("/posts/:id", PostController, :update)
     delete("/posts/:id", PostController, :delete)
 
