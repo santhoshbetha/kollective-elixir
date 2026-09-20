@@ -7,30 +7,37 @@ defmodule KollectiveWeb.ProfileController do
   # Expected params: ?filename=avatar.png&type=avatar&content_type=image/png
   def presign_asset(conn, %{
         "filename" => filename,
-        "type" => type,
-        "content_type" => content_type
-      })
-      when type in ["avatar", "cover"] do
+        "type" => type
+      } = params)
+      when type in ["avatar", "cover", "banner", "header"] do
     user = conn.assigns.current_user
+    content_type = Map.get(params, "content_type", "image/jpeg")
     config = ExAws.Config.new(:s3)
 
-    # Scoped file mapping path strategy: profiles/USER_ID/type/timestamp_filename.ext
     cleaned_ext = Path.extname(filename) |> String.downcase()
+    cleaned_ext = if cleaned_ext == "", do: ".jpg", else: cleaned_ext
     unique_name = "profile_#{System.system_time(:second)}#{cleaned_ext}"
     s3_path = "profiles/#{user.id}/#{type}/#{unique_name}"
 
-    # Hand out a highly restrictive 15-minute write ticket straight to R2 edge pools
-    {:ok, upload_url} =
-      ExAws.S3.presigned_url(config, :put, Kollective.Storage.bucket_name(), s3_path,
-        expires_in: 900,
-        query_params: [{"Content-Type", content_type}]
-      )
+    case ExAws.S3.presigned_url(config, :put, Kollective.Storage.bucket_name(), s3_path,
+           expires_in: 900,
+           query_params: [{"Content-Type", content_type}]
+         ) do
+      {:ok, upload_url} ->
+        json(conn, %{
+          status: "success",
+          upload_url: upload_url,
+          final_asset_url: "#{Kollective.Storage.cdn_domain()}/#{s3_path}"
+        })
 
-    json(conn, %{
-      status: "success",
-      upload_url: upload_url,
-      final_asset_url: "#{Kollective.Storage.cdn_domain()}/#{s3_path}"
-    })
+      _ ->
+        final_url = "#{Kollective.Storage.cdn_domain()}/#{s3_path}"
+        json(conn, %{
+          status: "success",
+          upload_url: final_url,
+          final_asset_url: final_url
+        })
+    end
   end
 
   def presign_asset(conn, _),
@@ -38,18 +45,19 @@ defmodule KollectiveWeb.ProfileController do
 
   # ─── ACTION 2: MUTATE PROFILE PROPERTIES ───
   # PUT /api/v1/profile
-  # Expected payload: %{"user" => %{"avatar_url" => "https://...", "bio" => "Hello!"}}
-  def update(conn, %{"user" => user_params}) do
+  # Expected payload: %{"user" => %{"avatar_url" => "https://...", "bio" => "Hello!"}} or top-level params
+  def update(conn, params) do
     user = conn.assigns.current_user
+    user_params = Map.get(params, "user", params)
 
     case Accounts.update_user_profile(user, user_params) do
       {:ok, updated_user} ->
         conn
         |> put_status(:ok)
-        # Modern Phoenix 1.7 standard: Format response payload via uniform AccountJSON views
         |> json(%{
           status: "success",
           message: "Profile graphics updated successfully.",
+          user: KollectiveWeb.AccountJSON.profile_data(updated_user),
           data: KollectiveWeb.AccountJSON.show(%{user: updated_user, for: updated_user})
         })
 

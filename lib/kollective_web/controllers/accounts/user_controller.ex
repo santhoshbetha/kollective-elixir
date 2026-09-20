@@ -262,6 +262,7 @@ defmodule KollectiveWeb.UserController do
             location: updated_user.location,
             country: updated_user.country,
             state: updated_user.state,
+            state_updated_at: updated_user.state_updated_at,
             county: updated_user.county,
             city_id: updated_user.city_id,
             district_l1: if(updated_user.district_l1, do: updated_user.district_l1.name),
@@ -269,6 +270,11 @@ defmodule KollectiveWeb.UserController do
             district_l3: if(updated_user.district_l3, do: updated_user.district_l3.name)
           }
         })
+
+      {:error, :state_change_cooldown, message} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{status: "error", error: "state_change_cooldown", message: message})
 
       {:error, %Ecto.Changeset{} = changeset} ->
         conn
@@ -278,7 +284,7 @@ defmodule KollectiveWeb.UserController do
       {:error, reason} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{status: "error", error: "location_update_failed", message: reason})
+        |> json(%{status: "error", error: "location_update_failed", message: to_string(reason)})
     end
   end
 

@@ -259,6 +259,9 @@ defmodule KollectiveWeb.Router do
     get("/posts", PostController, :index)
     get("/posts/:id", PostController, :show)
     get("/posts/:id/context", PostController, :context)
+
+    # 🗳️ GET /api/v1/polls/stream -> Streams Poll posts across Local, State, Country, and World scopes
+    get("/polls/stream", PollController, :stream)
   end
 
   scope "/api/v1", KollectiveWeb do

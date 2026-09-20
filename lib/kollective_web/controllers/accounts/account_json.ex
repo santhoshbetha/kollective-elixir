@@ -83,6 +83,9 @@ defmodule KollectiveWeb.AccountJSON do
       created_at: Calendar.strftime(user.inserted_at, "%Y-%m-%dT%H:%M:%SZ"),
       email: user.email,
       location: user.location,
+      state: user.state,
+      country: user.country,
+      state_updated_at: user.state_updated_at,
       type: to_string(user.type || :citizen),
       representative_name: user.representative_name,
 
@@ -159,6 +162,7 @@ defmodule KollectiveWeb.AccountJSON do
       political_location: %{
         country: user.country,
         state: user.state,
+        state_updated_at: user.state_updated_at,
         county: user.county,
         city_name: user.city_name,
         district_l1_id: user.district_l1_id,
@@ -186,7 +190,12 @@ defmodule KollectiveWeb.AccountJSON do
       display_name: user.display_name || user.username,
       bio: user.bio || "",
       avatar: user.avatar_url || "/default-avatar.jpg",
+      avatar_url: user.avatar_url || "/default-avatar.jpg",
       cover_image: user.cover_image_url || "/default-banner-bg.jpg",
+      cover_image_url: user.cover_image_url || "/default-banner-bg.jpg",
+      banner: user.cover_image_url || "/default-banner-bg.jpg",
+      header: user.cover_image_url || "/default-banner-bg.jpg",
+      header_url: user.cover_image_url || "/default-banner-bg.jpg",
 
       # Counts caches synchronized natively via our atomic context counters
       followers_count: user.follower_count || 0,

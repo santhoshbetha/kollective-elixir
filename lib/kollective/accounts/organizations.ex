@@ -450,28 +450,33 @@ defmodule Kollective.Accounts.Organizations do
   Fetches an active or approved membership for a user in an organization with preloaded organization.
   """
   def get_active_membership(user_id, org_id) do
-    cache_key = "membership:#{user_id}:#{org_id}"
+    with {:ok, valid_user_id} <- Ecto.ULID.cast(user_id),
+         {:ok, valid_org_id} <- Ecto.ULID.cast(org_id) do
+      cache_key = "membership:#{valid_user_id}:#{valid_org_id}"
 
-    case Cachex.get(:kollective_cache, cache_key) do
-      {:ok, %OrganizationMembership{} = membership} ->
-        membership
+      case Cachex.get(:kollective_cache, cache_key) do
+        {:ok, %OrganizationMembership{} = membership} ->
+          membership
 
-      _ ->
-        case Repo.one(
-               from(
-                 m in OrganizationMembership,
-                 where: m.user_id == ^user_id and m.organization_id == ^org_id,
-                 where: m.status in [:approved, :active]
-               )
-             ) do
-          nil ->
-            nil
+        _ ->
+          case Repo.one(
+                 from(
+                   m in OrganizationMembership,
+                   where: m.user_id == ^valid_user_id and m.organization_id == ^valid_org_id,
+                   where: m.status in [:approved, :active]
+                 )
+               ) do
+            nil ->
+              nil
 
-          %OrganizationMembership{} = membership ->
-            loaded = Repo.preload(membership, :organization)
-            Cachex.put(:kollective_cache, cache_key, loaded)
-            loaded
-        end
+            %OrganizationMembership{} = membership ->
+              loaded = Repo.preload(membership, :organization)
+              Cachex.put(:kollective_cache, cache_key, loaded)
+              loaded
+          end
+      end
+    else
+      _ -> nil
     end
   end
 

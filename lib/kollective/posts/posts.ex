@@ -141,37 +141,49 @@ defmodule Kollective.Posts.Posts do
   end
 
   def list_local_feed(user, params) do
-    Post
-    |> where(
-      [p],
-      p.origin_district_l1 == ^user.district_l1_id or
-        p.origin_district_l2 == ^user.district_l2_id or
-        p.origin_district_l3 == ^user.district_l3_id
-    )
-    |> common_feed_pipeline(user, params)
+    d1 = user.district_l1_id
+    d2 = user.district_l2_id
+    d3 = user.district_l3_id
+
+    query = Post
+    query = if d1 && d1 != "", do: where(query, [p], p.origin_district_l1 == ^d1), else: query
+    query = if d2 && d2 != "", do: or_where(query, [p], p.origin_district_l2 == ^d2), else: query
+    query = if d3 && d3 != "", do: or_where(query, [p], p.origin_district_l3 == ^d3), else: query
+
+    common_feed_pipeline(query, user, params)
   end
 
   def list_state_feed(user, params) do
-    Post
-    |> where([p], p.origin_state == ^user.state)
-    |> where([p], p.origin_district_l1 != ^user.district_l1_id)
-    |> where([p], p.origin_district_l2 != ^user.district_l2_id)
-    |> where([p], p.origin_district_l3 != ^user.district_l3_id)
-    |> common_feed_pipeline(user, params)
+    state = user.state || Map.get(user, :origin_state)
+    d1 = user.district_l1_id
+    d2 = user.district_l2_id
+    d3 = user.district_l3_id
+
+    query = Post
+    query = if state && state != "", do: where(query, [p], p.origin_state == ^state), else: query
+    query = if d1 && d1 != "", do: where(query, [p], is_nil(p.origin_district_l1) or p.origin_district_l1 != ^d1), else: query
+    query = if d2 && d2 != "", do: where(query, [p], is_nil(p.origin_district_l2) or p.origin_district_l2 != ^d2), else: query
+    query = if d3 && d3 != "", do: where(query, [p], is_nil(p.origin_district_l3) or p.origin_district_l3 != ^d3), else: query
+
+    common_feed_pipeline(query, user, params)
   end
 
   @spec list_country_feed(any(), nil | maybe_improper_list() | map()) :: Scrivener.Page.t()
   def list_country_feed(user, params) do
-    Post
-    |> where([p], p.origin_country == ^user.country)
-    # EXCLUDE the user's entire state
-    |> where([p], p.origin_state != ^user.state)
-    |> common_feed_pipeline(user, params)
+    country = user.country || "US"
+    state = user.state || Map.get(user, :origin_state)
+
+    query = Post |> where([p], p.origin_country == ^country)
+    query = if state && state != "", do: where(query, [p], is_nil(p.origin_state) or p.origin_state != ^state), else: query
+
+    common_feed_pipeline(query, user, params)
   end
 
   def list_world_feed(user, params) do
+    country = user.country || "US"
+
     Post
-    |> where([p], p.origin_country != ^user.country)
+    |> where([p], is_nil(p.origin_country) or p.origin_country != ^country)
     |> common_feed_pipeline(user, params)
   end
 
@@ -195,34 +207,45 @@ defmodule Kollective.Posts.Posts do
 
   # Ring 1: Specific Local Districts (L1, L2, L3)
   defp base_local_query(user) do
-    from p in Post,
-      where:
-        p.origin_district_l1 == ^user.district_l1_id or
-          p.origin_district_l2 == ^user.district_l2_id or
-          p.origin_district_l3 == ^user.district_l3_id
+    d1 = user.district_l1_id
+    d2 = user.district_l2_id
+    d3 = user.district_l3_id
+
+    cond1 = if d1 && d1 != "", do: dynamic([p], p.origin_district_l1 == ^d1), else: false
+    cond2 = if d2 && d2 != "", do: dynamic([p], p.origin_district_l2 == ^d2), else: false
+    cond3 = if d3 && d3 != "", do: dynamic([p], p.origin_district_l3 == ^d3), else: false
+
+    from p in Post, where: ^cond1 or ^cond2 or ^cond3
   end
 
   # Ring 2: Entire State, EXCLUDING the local districts
   defp base_state_query(user) do
-    from p in Post,
-      where: p.origin_state == ^user.state,
-      where:
-        p.origin_district_l1 != ^user.district_l1_id and
-          p.origin_district_l2 != ^user.district_l2_id and
-          p.origin_district_l3 != ^user.district_l3_id
+    state = user.state || Map.get(user, :origin_state)
+    d1 = user.district_l1_id
+    d2 = user.district_l2_id
+    d3 = user.district_l3_id
+
+    query = from p in Post
+    query = if state && state != "", do: from(p in query, where: p.origin_state == ^state), else: query
+    query = if d1 && d1 != "", do: from(p in query, where: is_nil(p.origin_district_l1) or p.origin_district_l1 != ^d1), else: query
+    query = if d2 && d2 != "", do: from(p in query, where: is_nil(p.origin_district_l2) or p.origin_district_l2 != ^d2), else: query
+    query = if d3 && d3 != "", do: from(p in query, where: is_nil(p.origin_district_l3) or p.origin_district_l3 != ^d3), else: query
+    query
   end
 
   # Ring 3: Entire Country, EXCLUDING their state
   defp base_country_query(user) do
-    from p in Post,
-      where: p.origin_country == ^user.country,
-      where: p.origin_state != ^user.state
+    country = user.country || "US"
+    state = user.state || Map.get(user, :origin_state)
+
+    query = from p in Post, where: p.origin_country == ^country
+    if state && state != "", do: from(p in query, where: is_nil(p.origin_state) or p.origin_state != ^state), else: query
   end
 
   # Ring 4: The Entire World, EXCLUDING their country
   defp base_world_query(user) do
-    from p in Post,
-      where: p.origin_country != ^user.country
+    country = user.country || "US"
+    from p in Post, where: is_nil(p.origin_country) or p.origin_country != ^country
   end
 
   @spec has_unread_posts?(any(), :country | :local | :state | :world) :: boolean()
@@ -1332,6 +1355,8 @@ defmodule Kollective.Posts.Posts do
       |> filter_by_category(params["category"])
       # JSONB GIN mention arrays
       |> filter_by_mentions(current_user_id, params["filter"])
+      # Poll filter (if requested via /polls/stream or has_poll param)
+      |> filter_polls(params, current_user_id)
 
     # 🔄 Geographic geofencing for logged-in users vs guest users with detected country!
     query =
@@ -1399,6 +1424,53 @@ defmodule Kollective.Posts.Posts do
     from p in Post, where: is_nil(p.deleted_at)
   end
 
+  # NEW: Poll Filtering engine for /polls/stream
+  defp filter_polls(query, %{"has_poll" => "true"} = params, current_user_id) do
+    status = params["status"] || params["poll_status"]
+    now = DateTime.utc_now()
+
+    cond do
+      status in ["Active", "active"] ->
+        poll_subquery =
+          from pol in Poll,
+            where: (is_nil(pol.expires_at) or pol.expires_at > ^now) and (is_nil(pol.expired) or pol.expired == false),
+            select: pol.post_id
+
+        from p in query, where: p.id in subquery(poll_subquery)
+
+      status in ["Ended", "ended", "Closed", "closed"] ->
+        poll_subquery =
+          from pol in Poll,
+            where: (not is_nil(pol.expires_at) and pol.expires_at <= ^now) or pol.expired == true,
+            select: pol.post_id
+
+        from p in query, where: p.id in subquery(poll_subquery)
+
+      status in ["My Votes", "my_votes"] and not is_nil(current_user_id) ->
+        poll_subquery =
+          from pol in Poll,
+            join: pv in PollVote,
+            on: pv.poll_id == pol.id,
+            where: pv.user_id == ^current_user_id,
+            select: pol.post_id
+
+        from p in query, where: p.id in subquery(poll_subquery)
+
+      true ->
+        poll_subquery =
+          from pol in Poll,
+            select: pol.post_id
+
+        from p in query, where: p.id in subquery(poll_subquery)
+    end
+  end
+
+  defp filter_polls(query, %{"polls_only" => "true"} = params, current_user_id) do
+    filter_polls(query, Map.put(params, "has_poll", "true"), current_user_id)
+  end
+
+  defp filter_polls(query, _params, _current_user_id), do: query
+
   # NEW: Unified Geographic Geofencing Filters
   defp filter_by_guest_geographic_scope(query, params) do
     base_guest_query = from(p in query, where: p.visibility == "public" and p.status == :published)
@@ -1433,22 +1505,36 @@ defmodule Kollective.Posts.Posts do
   defp filter_by_geographic_scope(query, user, "state") do
     # STATE: Post matches the user's state, but EXCLUDES posts that belong in their Local tab
     local_condition = dynamic_local_condition(user)
+    not_local_condition = dynamic([p], not (^local_condition))
+    state = user.state || Map.get(user, :origin_state)
 
-    from p in query,
-      where: p.origin_state == ^user.state,
-      where: not (^local_condition)
+    if state && state != "" do
+      from p in query,
+        where: p.origin_state == ^state,
+        where: ^not_local_condition
+    else
+      query
+    end
   end
 
   defp filter_by_geographic_scope(query, user, "country") do
     # COUNTRY: Post matches the user's country, but EXCLUDES their entire state
-    from p in query,
-      where: p.origin_country == ^user.country,
-      where: p.origin_state != ^user.state
+    country = user.country || "US"
+    state = user.state || Map.get(user, :origin_state)
+
+    query = from p in query, where: p.origin_country == ^country or is_nil(p.origin_country)
+
+    if state && state != "" do
+      from p in query,
+        where: is_nil(p.origin_state) or p.origin_state != ^state
+    else
+      query
+    end
   end
 
   defp dynamic_local_condition(user) do
     cond1 =
-      if user.district_l1_id,
+      if user.district_l1_id && user.district_l1_id != "",
         do:
           dynamic(
             [p],
@@ -1457,7 +1543,7 @@ defmodule Kollective.Posts.Posts do
         else: false
 
     cond2 =
-      if user.district_l2_id,
+      if user.district_l2_id && user.district_l2_id != "",
         do:
           dynamic(
             [p],
@@ -1466,7 +1552,7 @@ defmodule Kollective.Posts.Posts do
         else: false
 
     cond3 =
-      if user.district_l3_id,
+      if user.district_l3_id && user.district_l3_id != "",
         do:
           dynamic(
             [p],
@@ -1475,7 +1561,7 @@ defmodule Kollective.Posts.Posts do
         else: false
 
     cond4 =
-      if user.county && user.state,
+      if user.county && user.county != "" && user.state && user.state != "",
         do:
           dynamic(
             [p],
@@ -1485,7 +1571,7 @@ defmodule Kollective.Posts.Posts do
         else: false
 
     cond5 =
-      if user.city_id,
+      if user.city_id && user.city_id != "",
         do: dynamic([p], not is_nil(p.origin_city_id) and p.origin_city_id == ^user.city_id),
         else: false
 
@@ -2520,6 +2606,26 @@ defmodule Kollective.Posts.Posts do
       )
       |> Map.new()
 
+    # Pre-fetch poll vote markers for any attached polls in batch
+    poll_ids =
+      posts
+      |> Enum.map(&Map.get(&1, :poll))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.reject(&(match?(%Ecto.Association.NotLoaded{}, &1)))
+      |> Enum.map(& &1.id)
+
+    user_poll_votes =
+      if user && poll_ids != [] do
+        from(v in Kollective.Polls.PollVote,
+          where: v.user_id == ^user.id and v.poll_id in ^poll_ids,
+          select: {v.poll_id, v.option_id}
+        )
+        |> Repo.all()
+        |> Enum.group_by(fn {p_id, _o_id} -> p_id end, fn {_p_id, o_id} -> o_id end)
+      else
+        %{}
+      end
+
     # Pre-fetch totals counts for action displays
     likes_counts = fetch_batch_likes_counts(post_ids)
     reblogs_counts = fetch_batch_reblogs_counts(post_ids)
@@ -2551,10 +2657,20 @@ defmodule Kollective.Posts.Posts do
             []
         end
 
+      hydrated_poll =
+        case Map.get(post, :poll) do
+          %Ecto.Association.NotLoaded{} -> nil
+          nil -> nil
+          poll_struct ->
+            own_votes = Map.get(user_poll_votes, poll_struct.id, [])
+            %{poll_struct | voted: own_votes != [], own_votes: own_votes}
+        end
+
       # Mutate structural internal schema fields safely first
       updated_post_struct = %{
         post
-        | bookmarked: is_bookmarked?,
+        | poll: hydrated_poll,
+          bookmarked: is_bookmarked?,
           vote_data: Map.get(user_votes, post.id) || nil,
           emoji_reactions: format_for_ui(post.emoji_reactions),
           data: Map.put(post.data || %{}, "my_reactions", my_active_emojis)

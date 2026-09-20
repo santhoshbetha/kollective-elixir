@@ -48,6 +48,7 @@ defmodule KollectiveWeb.UserJSON do
       # GEOGRAPHY
       city_name: user.city_name || (Ecto.assoc_loaded?(user.city) && user.city && user.city.name),
       state: user.state,
+      state_updated_at: user.state_updated_at,
       country: user.country,
       country_code: user.country,
       street_address: user.street_address,

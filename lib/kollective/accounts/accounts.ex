@@ -896,95 +896,141 @@ defmodule Kollective.Accounts.Accounts do
   defp parse_float_coord(_), do: :error
 
   def update_political_location(user, attrs) do
-    # 1. Parse high-precision coordinates passed or extract via geocoding if street is provided
-    country = attrs["country"] || user.country || "US"
-    street = attrs["street_address"] || attrs["street"] || user.street_address
+    new_state = attrs["state"]
+    changing_state? = new_state != nil && new_state != "" && new_state != user.state
 
-    raw_lon = attrs["exact_lon"] || attrs["lng"] || attrs["longitude"]
-    raw_lat = attrs["exact_lat"] || attrs["lat"] || attrs["latitude"]
+    last_updated_at = user.state_updated_at
 
-    {lon, lat, geo_state, geo_county} =
-      if ((is_nil(raw_lon) or is_nil(raw_lat)) and street) && country == "US" do
-        city_name = resolve_user_city_name(attrs, user)
+    # 30-day cooldown constraint (30 * 86,400 seconds)
+    cooldown_seconds = 30 * 86400
 
-        if city_name do
-          geo_client =
-            Application.get_env(
-              :kollective,
-              :geospatial_client,
-              Kollective.External.GeospatialService
-            )
+    can_change_state? =
+      cond do
+        not changing_state? ->
+          true
 
-          case geo_client.geocode_us_address(street, city_name) do
-            {:ok, geo_data} ->
-              {
-                get_geo_prop(geo_data, :lon),
-                get_geo_prop(geo_data, :lat),
-                get_geo_prop(geo_data, :state),
-                get_geo_prop(geo_data, :county)
-              }
+        is_nil(last_updated_at) ->
+          true
 
-            _ ->
-              {raw_lon, raw_lat, nil, nil}
-          end
+        true ->
+          diff = DateTime.diff(DateTime.utc_now(), last_updated_at, :second)
+          diff >= cooldown_seconds
+      end
+
+    if changing_state? and not can_change_state? do
+      seconds_passed = DateTime.diff(DateTime.utc_now(), last_updated_at, :second)
+      remaining_seconds = cooldown_seconds - seconds_passed
+      remaining_days = max(1, Float.ceil(remaining_seconds / 86400) |> trunc())
+
+      {:error, :state_change_cooldown,
+       "State can only be changed once per month. Next change available in #{remaining_days} day(s)."}
+    else
+      country = attrs["country"] || user.country || "US"
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      enriched_attrs =
+        if changing_state? do
+          # Reset street address, city, and resolved district stack on state change
+          %{
+            "country" => country,
+            "state" => new_state,
+            "state_updated_at" => now,
+            "street_address" => nil,
+            "county" => nil,
+            "city_id" => nil,
+            "district_l1_id" => nil,
+            "district_l2_id" => nil,
+            "district_l3_id" => nil,
+            "location" => nil
+          }
         else
-          {raw_lon, raw_lat, nil, nil}
+          # 1. Parse high-precision coordinates passed or extract via geocoding if street is provided
+          street = attrs["street_address"] || attrs["street"] || user.street_address
+          raw_lon = attrs["exact_lon"] || attrs["lng"] || attrs["longitude"]
+          raw_lat = attrs["exact_lat"] || attrs["lat"] || attrs["latitude"]
+
+          {lon, lat, geo_state, geo_county} =
+            if ((is_nil(raw_lon) or is_nil(raw_lat)) and street) && country == "US" do
+              city_name = resolve_user_city_name(attrs, user)
+
+              if city_name do
+                geo_client =
+                  Application.get_env(
+                    :kollective,
+                    :geospatial_client,
+                    Kollective.External.GeospatialService
+                  )
+
+                case geo_client.geocode_us_address(street, city_name) do
+                  {:ok, geo_data} ->
+                    {
+                      get_geo_prop(geo_data, :lon),
+                      get_geo_prop(geo_data, :lat),
+                      get_geo_prop(geo_data, :state),
+                      get_geo_prop(geo_data, :county)
+                    }
+
+                  _ ->
+                    {raw_lon, raw_lat, nil, nil}
+                end
+              else
+                {raw_lon, raw_lat, nil, nil}
+              end
+            else
+              {raw_lon, raw_lat, nil, nil}
+            end
+
+          # 2. Extract and format the administrative district string (County/District)
+          geo_meta = attrs["geocoder_metadata"] || %{}
+
+          raw_admin =
+            geo_meta["county"] || geo_meta["district"] || geo_county || attrs["county"] ||
+              attrs["district"]
+
+          # Clean the administrative district/county name
+          clean_admin =
+            if raw_admin do
+              raw_admin
+              |> to_string()
+              |> String.replace(~r/\b(County|District)\b/i, "")
+              |> String.trim()
+            else
+              user.county
+            end
+
+          # 3. Compute spatial intersections on-demand using PostGIS GIST indexes
+          l1_dist = Locations.find_district_by_coords(lon, lat, 1, country)
+          l2_dist = Locations.find_district_by_coords(lon, lat, 2, country)
+          l3_dist = Locations.find_district_by_coords(lon, lat, 3, country)
+
+          # 4. Generate FUZZY coordinates for user safety & privacy
+          fuzzy_location =
+            case fuzz_coordinates(lat, lon) do
+              {:ok, _flat, _flon, wkt} -> wkt
+              _ -> user.location
+            end
+
+          # 5. Compile attributes
+          %{
+            "street_address" => street,
+            "country" => country,
+            "state" => attrs["state"] || geo_state || user.state,
+            "county" => clean_admin,
+            "city_id" => attrs["city_id"] || attrs["origin_city_id"] || user.city_id,
+            "district_l1_id" =>
+              (l1_dist && l1_dist.id) || attrs["district_l1_id"] || user.district_l1_id,
+            "district_l2_id" =>
+              (l2_dist && l2_dist.id) || attrs["district_l2_id"] || user.district_l2_id,
+            "district_l3_id" =>
+              (l3_dist && l3_dist.id) || attrs["district_l3_id"] || user.district_l3_id,
+            "location" => fuzzy_location
+          }
         end
-      else
-        {raw_lon, raw_lat, nil, nil}
-      end
 
-    # 2. Extract and format the administrative district string (County/District)
-    geo_meta = attrs["geocoder_metadata"] || %{}
-
-    raw_admin =
-      geo_meta["county"] || geo_meta["district"] || geo_county || attrs["county"] ||
-        attrs["district"]
-
-    # Clean the administrative district/county name
-    clean_admin =
-      if raw_admin do
-        raw_admin
-        |> to_string()
-        |> String.replace(~r/\b(County|District)\b/i, "")
-        |> String.trim()
-      else
-        user.county
-      end
-
-    # 3. Compute spatial intersections on-demand using PostGIS GIST indexes (using exact coords for electoral accuracy)
-    l1_dist = Locations.find_district_by_coords(lon, lat, 1, country)
-    l2_dist = Locations.find_district_by_coords(lon, lat, 2, country)
-    l3_dist = Locations.find_district_by_coords(lon, lat, 3, country)
-
-    # 4. Generate FUZZY coordinates for user safety & privacy
-    # Coordinates are fuzzed to 2 decimal places (~1.1 km / 0.7 mile radius),
-    # obscuring the exact street address/building while preserving neighborhood discovery.
-    fuzzy_location =
-      case fuzz_coordinates(lat, lon) do
-        {:ok, _flat, _flon, wkt} -> wkt
-        _ -> user.location
-      end
-
-    # 5. Compile attributes and apply the strict location changeset validation
-    enriched_attrs = %{
-      "street_address" => street,
-      "country" => country,
-      "state" => attrs["state"] || geo_state || user.state,
-      "county" => clean_admin,
-      "city_id" => attrs["city_id"] || attrs["origin_city_id"] || user.city_id,
-      "district_l1_id" =>
-        (l1_dist && l1_dist.id) || attrs["district_l1_id"] || user.district_l1_id,
-      "district_l2_id" =>
-        (l2_dist && l2_dist.id) || attrs["district_l2_id"] || user.district_l2_id,
-      "district_l3_id" =>
-        (l3_dist && l3_dist.id) || attrs["district_l3_id"] || user.district_l3_id,
-      "location" => fuzzy_location
-    }
-
-    user
-    |> User.political_location_changeset(enriched_attrs)
-    |> Repo.update()
+      user
+      |> User.political_location_changeset(enriched_attrs)
+      |> Repo.update()
+    end
   end
 
   defp resolve_user_city_name(attrs, user) do

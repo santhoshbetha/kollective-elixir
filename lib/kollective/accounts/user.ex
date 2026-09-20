@@ -106,6 +106,7 @@ defmodule Kollective.Accounts.User do
 
     # e.g., "California" or "CA"
     field :state, :string
+    field :state_updated_at, :utc_datetime
     field :country, :string, default: "US"
 
     # Candidate Verification
@@ -680,7 +681,7 @@ defmodule Kollective.Accounts.User do
 
   # Profile Updates
   def profile_changeset(%__MODULE__{} = user, attrs) do
-    attrs = normalize_attrs(attrs)
+    attrs = normalize_profile_attrs(attrs)
 
     user
     # STRICT WHITE-LIST CASTING: Only allow modification of standard layout fields
@@ -705,9 +706,21 @@ defmodule Kollective.Accounts.User do
     |> validate_url_prefix(:cover_image_url)
   end
 
+  defp normalize_profile_attrs(attrs) when is_map(attrs) do
+    avatar = Map.get(attrs, "avatar_url") || Map.get(attrs, "avatar") || Map.get(attrs, :avatar_url) || Map.get(attrs, :avatar)
+    cover = Map.get(attrs, "cover_image_url") || Map.get(attrs, "banner") || Map.get(attrs, "header") || Map.get(attrs, "header_image") || Map.get(attrs, :cover_image_url) || Map.get(attrs, :banner)
+    name = Map.get(attrs, "display_name") || Map.get(attrs, "name") || Map.get(attrs, :display_name) || Map.get(attrs, :name)
+
+    attrs
+    |> Map.put_new("avatar_url", avatar)
+    |> Map.put_new("cover_image_url", cover)
+    |> Map.put_new("display_name", name)
+  end
+  defp normalize_profile_attrs(attrs), do: attrs
+
   defp validate_url_prefix(changeset, field) do
     validate_change(changeset, field, fn _, value ->
-      if String.starts_with?(value, ["http://", "https://", "/"]) do
+      if is_nil(value) or value == "" or String.starts_with?(value, ["http://", "https://", "/", "data:"]) do
         []
       else
         [{field, "must be a valid asset URL"}]
@@ -754,6 +767,8 @@ defmodule Kollective.Accounts.User do
       :street_address,
       :country,
       :state,
+      :state_updated_at,
+      :metadata,
       :county,
       :city_id,
       :district_l1_id,
@@ -761,7 +776,7 @@ defmodule Kollective.Accounts.User do
       :district_l3_id,
       :location
     ])
-    # Guard: If they opt-in, they must supply a valid 3-tier concentric stack
+    # Guard: If street address is provided, validate complete 3-tier concentric district stack
     |> validate_complete_political_stack()
   end
 
@@ -778,30 +793,37 @@ defmodule Kollective.Accounts.User do
   def fuzzy_coordinates(_), do: {nil, nil}
 
   defp validate_complete_political_stack(changeset) do
-    l1 = get_field(changeset, :district_l1_id)
-    l2 = get_field(changeset, :district_l2_id)
-    l3 = get_field(changeset, :district_l3_id)
+    street = get_field(changeset, :street_address)
 
-    case {l1, l2, l3} do
-      {nil, _, _} ->
-        add_error(changeset, :district_l1_id, "National boundary could not be resolved.")
+    # Only validate district stack if user provided a street address
+    if street && street != "" do
+      l1 = get_field(changeset, :district_l1_id)
+      l2 = get_field(changeset, :district_l2_id)
+      l3 = get_field(changeset, :district_l3_id)
 
-      {_, nil, _} ->
-        add_error(
-          changeset,
-          :district_l2_id,
-          "State Upper Chamber boundary could not be resolved."
-        )
+      case {l1, l2, l3} do
+        {nil, _, _} ->
+          add_error(changeset, :district_l1_id, "National boundary could not be resolved.")
 
-      {_, _, nil} ->
-        add_error(
-          changeset,
-          :district_l3_id,
-          "Hyper-local Lower Chamber boundary could not be resolved."
-        )
+        {_, nil, _} ->
+          add_error(
+            changeset,
+            :district_l2_id,
+            "State Upper Chamber boundary could not be resolved."
+          )
 
-      _all_present ->
-        changeset
+        {_, _, nil} ->
+          add_error(
+            changeset,
+            :district_l3_id,
+            "Hyper-local Lower Chamber boundary could not be resolved."
+          )
+
+        _all_present ->
+          changeset
+      end
+    else
+      changeset
     end
   end
 end
