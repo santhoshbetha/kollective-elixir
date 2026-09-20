@@ -707,20 +707,41 @@ defmodule Kollective.Accounts.User do
   end
 
   defp normalize_profile_attrs(attrs) when is_map(attrs) do
-    avatar = Map.get(attrs, "avatar_url") || Map.get(attrs, "avatar") || Map.get(attrs, :avatar_url) || Map.get(attrs, :avatar)
-    cover = Map.get(attrs, "cover_image_url") || Map.get(attrs, "banner") || Map.get(attrs, "header") || Map.get(attrs, "header_image") || Map.get(attrs, :cover_image_url) || Map.get(attrs, :banner)
-    name = Map.get(attrs, "display_name") || Map.get(attrs, "name") || Map.get(attrs, :display_name) || Map.get(attrs, :name)
+    avatar =
+      Map.get(attrs, "avatar_url") || Map.get(attrs, "avatar") || Map.get(attrs, :avatar_url) ||
+        Map.get(attrs, :avatar)
+
+    cover =
+      Map.get(attrs, "cover_image_url") || Map.get(attrs, "banner") || Map.get(attrs, "header") ||
+        Map.get(attrs, "header_image") || Map.get(attrs, :cover_image_url) ||
+        Map.get(attrs, :banner)
+
+    name =
+      Map.get(attrs, "display_name") || Map.get(attrs, "name") || Map.get(attrs, :display_name) ||
+        Map.get(attrs, :name)
+
+    representative =
+      Map.get(attrs, "representative_name") || Map.get(attrs, "representative name") ||
+        Map.get(attrs, :representative_name) || Map.get(attrs, :"representative name")
+
+    attrs = if avatar != nil, do: Map.put_new(attrs, "avatar_url", avatar), else: attrs
+    attrs = if cover != nil, do: Map.put_new(attrs, "cover_image_url", cover), else: attrs
+    attrs = if name != nil, do: Map.put_new(attrs, "display_name", name), else: attrs
+
+    attrs =
+      if representative != nil,
+        do: Map.put_new(attrs, "representative_name", representative),
+        else: attrs
 
     attrs
-    |> Map.put_new("avatar_url", avatar)
-    |> Map.put_new("cover_image_url", cover)
-    |> Map.put_new("display_name", name)
   end
+
   defp normalize_profile_attrs(attrs), do: attrs
 
   defp validate_url_prefix(changeset, field) do
     validate_change(changeset, field, fn _, value ->
-      if is_nil(value) or value == "" or String.starts_with?(value, ["http://", "https://", "/", "data:"]) do
+      if is_nil(value) or value == "" or
+           String.starts_with?(value, ["http://", "https://", "/", "data:"]) do
         []
       else
         [{field, "must be a valid asset URL"}]

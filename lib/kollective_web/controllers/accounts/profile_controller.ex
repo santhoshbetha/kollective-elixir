@@ -5,10 +5,13 @@ defmodule KollectiveWeb.ProfileController do
   # ─── ACTION 1: GENERATE PROFILE ASSET PRESIGNED TICKETS ───
   # GET /api/v1/profile/media/presign
   # Expected params: ?filename=avatar.png&type=avatar&content_type=image/png
-  def presign_asset(conn, %{
-        "filename" => filename,
-        "type" => type
-      } = params)
+  def presign_asset(
+        conn,
+        %{
+          "filename" => filename,
+          "type" => type
+        } = params
+      )
       when type in ["avatar", "cover", "banner", "header"] do
     user = conn.assigns.current_user
     content_type = Map.get(params, "content_type", "image/jpeg")
@@ -32,6 +35,7 @@ defmodule KollectiveWeb.ProfileController do
 
       _ ->
         final_url = "#{Kollective.Storage.cdn_domain()}/#{s3_path}"
+
         json(conn, %{
           status: "success",
           upload_url: final_url,

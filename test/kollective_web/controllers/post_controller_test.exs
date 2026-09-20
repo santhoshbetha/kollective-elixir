@@ -10,25 +10,26 @@ defmodule KollectiveWeb.PostControllerTest do
   import Ecto.Query
 
   describe "unauthenticated post endpoints" do
-    test "GET /api/v1/posts returns 401", %{conn: conn} do
+    test "GET /api/v1/posts allows unauthenticated access", %{conn: conn} do
       conn = get(conn, ~p"/api/v1/posts")
 
-      assert conn.status == 401
-      assert json_response(conn, 401)["message"] =~ "must log in"
+      assert conn.status == 200
     end
 
-    test "GET /api/v1/posts/:id returns 401", %{conn: conn} do
+    test "GET /api/v1/posts/:id returns 404 for non-existent post under optional auth", %{
+      conn: conn
+    } do
       conn = get(conn, ~p"/api/v1/posts/#{Kollective.Schemas.ULIDType.generate()}")
 
-      assert conn.status == 401
-      assert json_response(conn, 401)["message"] =~ "must log in"
+      assert conn.status == 404
     end
 
-    test "GET /api/v1/posts/:id/context returns 401", %{conn: conn} do
+    test "GET /api/v1/posts/:id/context returns 404 for non-existent post under optional auth", %{
+      conn: conn
+    } do
       conn = get(conn, ~p"/api/v1/posts/#{Kollective.Schemas.ULIDType.generate()}/context")
 
-      assert conn.status == 401
-      assert json_response(conn, 401)["message"] =~ "must log in"
+      assert conn.status == 404
     end
 
     test "POST /api/v1/posts returns 401", %{conn: conn} do

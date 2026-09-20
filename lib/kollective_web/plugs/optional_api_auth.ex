@@ -20,7 +20,8 @@ defmodule KollectiveWeb.Plugs.OptionalAPIAuth do
       case get_req_header(conn, "authorization") do
         ["Bearer " <> encoded_token] ->
           with {:ok, raw_token_bytes} <- decode_token(encoded_token),
-               {user, _inserted_at} when not is_nil(user) <- Accounts.get_user_by_session_token(raw_token_bytes) do
+               {user, _inserted_at} when not is_nil(user) <-
+                 Accounts.get_user_by_session_token(raw_token_bytes) do
             assign(conn, :current_user, user)
           else
             _ ->
@@ -35,7 +36,9 @@ defmodule KollectiveWeb.Plugs.OptionalAPIAuth do
 
   defp decode_token(token) do
     case Base.url_decode64(token, padding: false) do
-      {:ok, bytes} -> {:ok, bytes}
+      {:ok, bytes} ->
+        {:ok, bytes}
+
       :error ->
         case Base.url_decode64(token) do
           {:ok, bytes} -> {:ok, bytes}

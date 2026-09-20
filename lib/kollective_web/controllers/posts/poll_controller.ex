@@ -80,7 +80,8 @@ defmodule KollectiveWeb.PollController do
           author_data
 
         is_map(author_data) ->
-          author_data[:username] || author_data["username"] || author_data[:name] || author_data["name"] || "user"
+          author_data[:username] || author_data["username"] || author_data[:name] ||
+            author_data["name"] || "user"
 
         true ->
           "user"
@@ -88,7 +89,8 @@ defmodule KollectiveWeb.PollController do
 
     author_avatar =
       if is_map(author_data) do
-        author_data[:avatar_url] || author_data["avatar_url"] || author_data[:avatar] || author_data["avatar"]
+        author_data[:avatar_url] || author_data["avatar_url"] || author_data[:avatar] ||
+          author_data["avatar"]
       else
         nil
       end
@@ -97,8 +99,13 @@ defmodule KollectiveWeb.PollController do
 
     formatted_options =
       Enum.map(poll_options, fn opt ->
-        title_val = Map.get(opt, :title) || Map.get(opt, "title") || Map.get(opt, :text) || Map.get(opt, "text")
-        votes_val = Map.get(opt, :votes_count) || Map.get(opt, "votes_count") || Map.get(opt, :votes) || Map.get(opt, "votes") || 0
+        title_val =
+          Map.get(opt, :title) || Map.get(opt, "title") || Map.get(opt, :text) ||
+            Map.get(opt, "text")
+
+        votes_val =
+          Map.get(opt, :votes_count) || Map.get(opt, "votes_count") || Map.get(opt, :votes) ||
+            Map.get(opt, "votes") || 0
 
         %{
           id: to_string(Map.get(opt, :id) || Map.get(opt, "id")),
@@ -119,7 +126,8 @@ defmodule KollectiveWeb.PollController do
     voted_index = List.first(own_votes)
 
     Map.merge(post_item, %{
-      question: post_item[:text] || post_item["text"] || post_item[:content] || post_item["content"],
+      question:
+        post_item[:text] || post_item["text"] || post_item[:content] || post_item["content"],
       author: author_name,
       authorAvatar: author_avatar,
       active: not expired,
@@ -129,7 +137,9 @@ defmodule KollectiveWeb.PollController do
       voted: voted,
       votedIndex: voted_index,
       own_votes: own_votes,
-      scope: post_item[:scope] || post_item["scope"] || post_item[:target_scope] || post_item["target_scope"] || "world",
+      scope:
+        post_item[:scope] || post_item["scope"] || post_item[:target_scope] ||
+          post_item["target_scope"] || "world",
       options: formatted_options,
       poll: poll_data
     })

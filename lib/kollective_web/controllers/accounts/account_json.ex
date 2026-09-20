@@ -155,6 +155,9 @@ defmodule KollectiveWeb.AccountJSON do
         is_exempt: user.is_exempt || false,
         is_shadow_banned: user.is_shadow_banned || false,
         account_tier: user.account_tier || 0,
+        is_peer_vouched: (user.account_tier || 0) >= 1,
+        is_vouched: (user.account_tier || 0) >= 1 || (user.is_verified || false),
+        vouch_count: user.account_tier || 0,
         role: to_string(user.role || :user)
       },
 
@@ -204,6 +207,10 @@ defmodule KollectiveWeb.AccountJSON do
 
       # Meta state parameters
       is_verified: user.is_verified || false,
+      account_tier: user.account_tier || 0,
+      is_peer_vouched: (user.account_tier || 0) >= 1,
+      is_vouched: (user.account_tier || 0) >= 1 || (user.is_verified || false),
+      vouch_count: user.account_tier || 0,
       is_admin: user.is_admin || false,
       is_moderator: user.is_moderator || false,
       is_discoverable: user.is_discoverable || true,
@@ -219,6 +226,7 @@ defmodule KollectiveWeb.AccountJSON do
     }
     |> maybe_put_private_settings(user, reading_user)
   end
+
 
   # ─── EXTRACTION RELATIONSHIP HELPER MATRICES (O(1) BATCH PRE-FETCH) ───
 
@@ -298,6 +306,11 @@ defmodule KollectiveWeb.AccountJSON do
 
       data
       |> Map.put(:email, user.email)
+      |> Map.put(:state, user.state)
+      |> Map.put(:street_address, user.street_address)
+      |> Map.put(:district_l1, district_name(user.district_l1))
+      |> Map.put(:district_l2, district_name(user.district_l2))
+      |> Map.put(:district_l3, district_name(user.district_l3))
       |> Map.put(:note, user.bio || "")
       |> Map.put(:raw_bio, user.raw_bio || user.bio || "")
       |> Map.put(:accepts_chat_messages, user.accepts_chat_messages != false)
@@ -449,7 +462,13 @@ defmodule KollectiveWeb.AccountJSON do
           user.is_moderator -> "moderator"
           true -> "user"
         end,
-      registration_reason: user.registration_reason || ""
+      suspended_at:
+        if(user.suspended_at, do: NaiveDateTime.to_iso8601(user.suspended_at), else: nil),
+      suspension_reason: user.suspension_reason
     }
   end
+
+  defp district_name(nil), do: nil
+  defp district_name(%Ecto.Association.NotLoaded{}), do: nil
+  defp district_name(dist), do: dist.name || dist.type_label
 end

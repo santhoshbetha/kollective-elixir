@@ -130,6 +130,7 @@ defmodule KollectiveWeb.UserController do
             |> json(%{
               status: "success",
               message: "Political boundaries successfully synchronized.",
+              user: KollectiveWeb.AccountJSON.show(%{user: updated_user, for: updated_user}),
               data: KollectiveWeb.AccountJSON.show(%{user: updated_user, for: updated_user})
             })
 

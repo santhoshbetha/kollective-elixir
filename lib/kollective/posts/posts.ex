@@ -161,9 +161,21 @@ defmodule Kollective.Posts.Posts do
 
     query = Post
     query = if state && state != "", do: where(query, [p], p.origin_state == ^state), else: query
-    query = if d1 && d1 != "", do: where(query, [p], is_nil(p.origin_district_l1) or p.origin_district_l1 != ^d1), else: query
-    query = if d2 && d2 != "", do: where(query, [p], is_nil(p.origin_district_l2) or p.origin_district_l2 != ^d2), else: query
-    query = if d3 && d3 != "", do: where(query, [p], is_nil(p.origin_district_l3) or p.origin_district_l3 != ^d3), else: query
+
+    query =
+      if d1 && d1 != "",
+        do: where(query, [p], is_nil(p.origin_district_l1) or p.origin_district_l1 != ^d1),
+        else: query
+
+    query =
+      if d2 && d2 != "",
+        do: where(query, [p], is_nil(p.origin_district_l2) or p.origin_district_l2 != ^d2),
+        else: query
+
+    query =
+      if d3 && d3 != "",
+        do: where(query, [p], is_nil(p.origin_district_l3) or p.origin_district_l3 != ^d3),
+        else: query
 
     common_feed_pipeline(query, user, params)
   end
@@ -174,7 +186,11 @@ defmodule Kollective.Posts.Posts do
     state = user.state || Map.get(user, :origin_state)
 
     query = Post |> where([p], p.origin_country == ^country)
-    query = if state && state != "", do: where(query, [p], is_nil(p.origin_state) or p.origin_state != ^state), else: query
+
+    query =
+      if state && state != "",
+        do: where(query, [p], is_nil(p.origin_state) or p.origin_state != ^state),
+        else: query
 
     common_feed_pipeline(query, user, params)
   end
@@ -225,11 +241,26 @@ defmodule Kollective.Posts.Posts do
     d2 = user.district_l2_id
     d3 = user.district_l3_id
 
-    query = from p in Post
-    query = if state && state != "", do: from(p in query, where: p.origin_state == ^state), else: query
-    query = if d1 && d1 != "", do: from(p in query, where: is_nil(p.origin_district_l1) or p.origin_district_l1 != ^d1), else: query
-    query = if d2 && d2 != "", do: from(p in query, where: is_nil(p.origin_district_l2) or p.origin_district_l2 != ^d2), else: query
-    query = if d3 && d3 != "", do: from(p in query, where: is_nil(p.origin_district_l3) or p.origin_district_l3 != ^d3), else: query
+    query = from(p in Post)
+
+    query =
+      if state && state != "", do: from(p in query, where: p.origin_state == ^state), else: query
+
+    query =
+      if d1 && d1 != "",
+        do: from(p in query, where: is_nil(p.origin_district_l1) or p.origin_district_l1 != ^d1),
+        else: query
+
+    query =
+      if d2 && d2 != "",
+        do: from(p in query, where: is_nil(p.origin_district_l2) or p.origin_district_l2 != ^d2),
+        else: query
+
+    query =
+      if d3 && d3 != "",
+        do: from(p in query, where: is_nil(p.origin_district_l3) or p.origin_district_l3 != ^d3),
+        else: query
+
     query
   end
 
@@ -239,7 +270,10 @@ defmodule Kollective.Posts.Posts do
     state = user.state || Map.get(user, :origin_state)
 
     query = from p in Post, where: p.origin_country == ^country
-    if state && state != "", do: from(p in query, where: is_nil(p.origin_state) or p.origin_state != ^state), else: query
+
+    if state && state != "",
+      do: from(p in query, where: is_nil(p.origin_state) or p.origin_state != ^state),
+      else: query
   end
 
   # Ring 4: The Entire World, EXCLUDING their country
@@ -1433,7 +1467,9 @@ defmodule Kollective.Posts.Posts do
       status in ["Active", "active"] ->
         poll_subquery =
           from pol in Poll,
-            where: (is_nil(pol.expires_at) or pol.expires_at > ^now) and (is_nil(pol.expired) or pol.expired == false),
+            where:
+              (is_nil(pol.expires_at) or pol.expires_at > ^now) and
+                (is_nil(pol.expired) or pol.expired == false),
             select: pol.post_id
 
         from p in query, where: p.id in subquery(poll_subquery)
@@ -1473,13 +1509,17 @@ defmodule Kollective.Posts.Posts do
 
   # NEW: Unified Geographic Geofencing Filters
   defp filter_by_guest_geographic_scope(query, params) do
-    base_guest_query = from(p in query, where: p.visibility == "public" and p.status == :published)
+    base_guest_query =
+      from(p in query, where: p.visibility == "public" and p.status == :published)
+
     country = params["country"] || params["country_code"] || params["country_name"]
 
     cond do
       not is_nil(country) and country != "" ->
         from p in base_guest_query,
-          where: p.origin_country == ^country or p.origin_country == "US" or p.target_scope in [:country, :world]
+          where:
+            p.origin_country == ^country or p.origin_country == "US" or
+              p.target_scope in [:country, :world]
 
       params["scope"] == "country" ->
         from p in base_guest_query,
@@ -2611,7 +2651,7 @@ defmodule Kollective.Posts.Posts do
       posts
       |> Enum.map(&Map.get(&1, :poll))
       |> Enum.reject(&is_nil/1)
-      |> Enum.reject(&(match?(%Ecto.Association.NotLoaded{}, &1)))
+      |> Enum.reject(&match?(%Ecto.Association.NotLoaded{}, &1))
       |> Enum.map(& &1.id)
 
     user_poll_votes =
@@ -2659,8 +2699,12 @@ defmodule Kollective.Posts.Posts do
 
       hydrated_poll =
         case Map.get(post, :poll) do
-          %Ecto.Association.NotLoaded{} -> nil
-          nil -> nil
+          %Ecto.Association.NotLoaded{} ->
+            nil
+
+          nil ->
+            nil
+
           poll_struct ->
             own_votes = Map.get(user_poll_votes, poll_struct.id, [])
             %{poll_struct | voted: own_votes != [], own_votes: own_votes}

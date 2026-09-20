@@ -230,6 +230,20 @@ defmodule KollectiveWeb.BusinessControllerTest do
       {:ok, conn: conn, user: user, city: city, business: business, proposal: proposal}
     end
 
+    test "GET /api/v1/businesses returns verified existing businesses without type param", %{
+      conn: conn,
+      business: business
+    } do
+      response =
+        conn
+        |> get(~p"/api/v1/businesses")
+        |> json_response(200)
+
+      assert response["status"] == "success"
+      assert is_list(response["data"])
+      assert Enum.any?(response["data"], fn b -> b["name"] == business.name end)
+    end
+
     test "GET /api/v1/businesses returns verified existing businesses", %{
       conn: conn,
       business: business
@@ -242,6 +256,20 @@ defmodule KollectiveWeb.BusinessControllerTest do
       assert response["status"] == "success"
       assert is_list(response["data"])
       assert Enum.any?(response["data"], fn b -> b["name"] == business.name end)
+    end
+
+    test "GET /api/v1/business_proposals returns proposal ideas without type param", %{
+      conn: conn,
+      proposal: proposal
+    } do
+      response =
+        conn
+        |> get(~p"/api/v1/business_proposals")
+        |> json_response(200)
+
+      assert response["status"] == "success"
+      assert is_list(response["data"])
+      assert Enum.any?(response["data"], fn p -> p["name"] == proposal.name end)
     end
 
     test "GET /api/v1/business_proposals returns proposal ideas", %{

@@ -70,7 +70,7 @@ defmodule KollectiveWeb.Plugs.APIAuth do
         to_string(user.id) == to_string(active_account_id) or
           active_account_id in ["personal", "usr-1"] or
           String.starts_with?(to_string(active_account_id), "usr-") or
-          match?(:error, Ecto.ULID.cast(active_account_id)) ->
+            match?(:error, Ecto.ULID.cast(active_account_id)) ->
           personal_permissions = ["posts:write", "profile:manage"]
 
           conn

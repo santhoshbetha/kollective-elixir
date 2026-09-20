@@ -186,11 +186,20 @@ defmodule KollectiveWeb.BusinessController do
     })
   end
 
-  # GET /api/v1/get_local_businesses?type=existing&scope=federal&category=food_beverage
-  # GET /api/v1/get_local_businesses?type=proposals&scope=federal&category=food_beverage
-  # Expected params: ?type=existing&scope=federal&category=food_beverage
-  def index(conn, %{"type" => type} = params) when type in ["proposals", "existing"] do
+  # GET /api/v1/businesses
+  # GET /api/v1/business_proposals
+  # Expected params: ?type=existing&scope=federal&category=food_beverage (type optional)
+  def index(conn, params) do
     user = conn.assigns.current_user
+
+    type =
+      case Map.get(params, "type") do
+        t when t in ["proposals", "existing"] ->
+          t
+
+        _ ->
+          if List.last(conn.path_info) == "business_proposals", do: "proposals", else: "existing"
+      end
 
     # Package query filters down into clean keyword options arrays
     opts = [

@@ -928,9 +928,18 @@ defmodule Kollective.Accounts.Accounts do
       country = attrs["country"] || user.country || "US"
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
+      street =
+        attrs["street_address"] || attrs["street"] ||
+          if(!changing_state?, do: user.street_address, else: nil)
+
+      raw_lon = attrs["exact_lon"] || attrs["lng"] || attrs["longitude"]
+      raw_lat = attrs["exact_lat"] || attrs["lat"] || attrs["latitude"]
+
+      has_new_loc? = street != nil || (raw_lon != nil && raw_lat != nil)
+
       enriched_attrs =
-        if changing_state? do
-          # Reset street address, city, and resolved district stack on state change
+        if changing_state? and not has_new_loc? do
+          # Reset street address, city, and resolved district stack on state change if no new location is provided
           %{
             "country" => country,
             "state" => new_state,
@@ -945,10 +954,6 @@ defmodule Kollective.Accounts.Accounts do
           }
         else
           # 1. Parse high-precision coordinates passed or extract via geocoding if street is provided
-          street = attrs["street_address"] || attrs["street"] || user.street_address
-          raw_lon = attrs["exact_lon"] || attrs["lng"] || attrs["longitude"]
-          raw_lat = attrs["exact_lat"] || attrs["lat"] || attrs["latitude"]
-
           {lon, lat, geo_state, geo_county} =
             if ((is_nil(raw_lon) or is_nil(raw_lat)) and street) && country == "US" do
               city_name = resolve_user_city_name(attrs, user)
@@ -995,7 +1000,7 @@ defmodule Kollective.Accounts.Accounts do
               |> String.replace(~r/\b(County|District)\b/i, "")
               |> String.trim()
             else
-              user.county
+              if(!changing_state?, do: user.county, else: nil)
             end
 
           # 3. Compute spatial intersections on-demand using PostGIS GIST indexes
@@ -1007,14 +1012,15 @@ defmodule Kollective.Accounts.Accounts do
           fuzzy_location =
             case fuzz_coordinates(lat, lon) do
               {:ok, _flat, _flon, wkt} -> wkt
-              _ -> user.location
+              _ -> if(!changing_state?, do: user.location, else: nil)
             end
 
-          # 5. Compile attributes
-          %{
-            "street_address" => street,
+          state_val = new_state || geo_state || user.state
+
+          base = %{
             "country" => country,
-            "state" => attrs["state"] || geo_state || user.state,
+            "state" => state_val,
+            "street_address" => street,
             "county" => clean_admin,
             "city_id" => attrs["city_id"] || attrs["origin_city_id"] || user.city_id,
             "district_l1_id" =>
