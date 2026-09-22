@@ -409,6 +409,22 @@ defmodule KollectiveWeb.Router do
     delete("/events/:id", EventController, :delete)
 
     post("/events/:id/invite", EventController, :invite)
+
+    # ─── EVENT PARTICIPATION & RSVP ROUTES ───
+    post("/events/:event_id/join", EventParticipantController, :join)
+    post("/kollective/events/:event_id/join", EventParticipantController, :join)
+    post("/events/:event_id/leave", EventParticipantController, :leave)
+    post("/kollective/events/:event_id/leave", EventParticipantController, :leave)
+    post("/events/:event_id/rsvp", EventParticipantController, :rsvp)
+    post("/kollective/events/:event_id/rsvp", EventParticipantController, :rsvp)
+    post("/events/requests/:participant_id/approve", EventParticipantController, :approve)
+    post("/kollective/events/requests/:participant_id/approve", EventParticipantController, :approve)
+    post("/events/requests/:participant_id/reject", EventParticipantController, :reject)
+    post("/kollective/events/requests/:participant_id/reject", EventParticipantController, :reject)
+    get("/events/:event_id/participants", EventParticipantController, :participations)
+    get("/kollective/events/:event_id/participants", EventParticipantController, :participations)
+    get("/events/:event_id/requests", EventParticipantController, :list_requests)
+    get("/kollective/events/:event_id/requests", EventParticipantController, :list_requests)
   end
 
   scope "/api/v1", KollectiveWeb do

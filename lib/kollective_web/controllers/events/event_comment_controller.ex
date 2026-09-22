@@ -50,9 +50,14 @@ defmodule KollectiveWeb.EventCommentController do
   end
 
   # POST /api/v1/events_comments/:event_id/comment
-  def create(conn, %{"event_id" => event_id, "comment" => comment_params}) do
+  def create(conn, %{"event_id" => event_id} = params) do
     user = conn.assigns.current_user
     ip = guest_ip(conn)
+
+    raw_params = Map.get(params, "comment") || params
+    content_text = Map.get(raw_params, "content") || Map.get(raw_params, "text") || ""
+    parent_id = Map.get(raw_params, "parent_id") || Map.get(raw_params, "parentId")
+    comment_params = Map.put(raw_params, "content", content_text)
 
     # 1. EVALUATE CONTENT: Run text inputs directly through your 5-priority matrix
     case Moderation.determine_status(user, comment_params) do
@@ -106,10 +111,14 @@ defmodule KollectiveWeb.EventCommentController do
           end
 
         final_params =
-          comment_params
-          |> Map.put("event_id", event_id)
-          |> Map.put("user_id", user.id)
-          |> Map.put("moderation_status", db_status)
+          %{
+            "event_id" => event_id,
+            "user_id" => user.id,
+            "content" => content_text,
+            "moderation_status" => db_status
+          }
+          |> Map.put_new("parent_id", parent_id)
+          |> Map.put_new("image_url", Map.get(raw_params, "image_url") || Map.get(raw_params, "imageUrl"))
 
         case Events.create_comment(final_params) do
           {:ok, comment} ->

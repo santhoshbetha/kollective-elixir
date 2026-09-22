@@ -19,6 +19,7 @@ defmodule KollectiveWeb.EventController do
       if user do
         Events.list_visible_events_query(user)
         |> Kollective.Repo.all()
+        |> Events.attach_user_join_states(user)
       else
         Events.list_visible_events_query(nil)
         |> Kollective.Repo.all()
@@ -32,7 +33,7 @@ defmodule KollectiveWeb.EventController do
   # POST /api/v1/events/filter_by_date
   def filter_by_date(conn, params) do
     user = conn.assigns[:current_user]
-    events = Events.list_events_filtered(user, params)
+    events = Events.list_events_filtered(user, params) |> Events.attach_user_join_states(user)
 
     conn
     |> put_status(:ok)
@@ -42,12 +43,16 @@ defmodule KollectiveWeb.EventController do
   # ─── ACTION 1: FETCH DASHBOARD FEED CARD (WITH USER RSVP STATE) ───
   # GET /api/v1/kollective/events/:id
   def show(conn, %{"id" => id}) do
-    current_user = conn.assigns.current_user
+    current_user = conn.assigns[:current_user]
     event = Events.get_event!(id)
 
     # Fetch the user's active RSVP state record mapping to this event node
     my_rsvp =
-      Repo.get_by(Kollective.Events.Participant, event_id: event.id, user_id: current_user.id)
+      if current_user do
+        Repo.get_by(Kollective.Events.EventParticipant, event_id: event.id, user_id: current_user.id)
+      else
+        nil
+      end
 
     rsvp_status_str = if my_rsvp, do: my_rsvp.status, else: nil
 

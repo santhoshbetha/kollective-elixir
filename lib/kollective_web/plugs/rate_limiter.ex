@@ -88,6 +88,13 @@ defmodule KollectiveWeb.Plugs.RateLimiter do
             log_rate_limit_trigger(id, conn)
             render_standard_rate_limit_error(conn)
         end
+
+      {:error, reason} ->
+        Logger.warning(
+          "RATE_LIMITER_BACKEND_ERROR: #{inspect(reason)}. Bypassing rate limit check."
+        )
+
+        conn
     end
   end
 

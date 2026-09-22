@@ -511,22 +511,33 @@ defmodule Kollective.Events.Events do
         from(e in Event, where: e.id == ^event_id, lock: "FOR UPDATE")
         |> Repo.one!()
 
-      # 2. CALENDAR OVERLAP ANALYSIS: Verify the user isn't already double-booked
-      conflicts = check_calendar_conflicts(user.id, event)
+      existing = Repo.get_by(EventParticipant, user_id: user.id, event_id: event.id)
 
-      if Enum.any?(conflicts) do
-        conflict_names = Enum.map(conflicts, & &1.name) |> Enum.join(", ")
+      cond do
+        existing && existing.status in ["accepted", "joined"] ->
+          # User is already attending -> toggle (leave event)
+          Repo.delete!(existing)
+          recalculate_and_broadcast_counters(event.id)
+          :left
 
-        Repo.rollback(
-          "Conflict: You are already attending overlapping event(s): #{conflict_names}"
-        )
-      else
-        # 3. IDENTIFY CAPACITY BOUNDARIES
-        max_seats = Map.get(event.metadata || %{}, "max_participants") || 999_999
-        is_full = event.participants_count >= max_seats
+        true ->
+          # 2. CALENDAR OVERLAP ANALYSIS: Verify the user isn't already double-booked
+          conflicts = check_calendar_conflicts(user.id, event)
 
-        # 4. DISPATCH REGISTRATION PIPELINE
-        execute_join_state(user, event, is_full)
+          if Enum.any?(conflicts) do
+            conflict_names = Enum.map(conflicts, &(&1.title || &1[:title])) |> Enum.join(", ")
+
+            Repo.rollback(
+              "Conflict: You are already attending overlapping event(s): #{conflict_names}"
+            )
+          else
+            # 3. IDENTIFY CAPACITY BOUNDARIES
+            max_seats = Map.get(event.metadata || %{}, "max_participants") || 999_999
+            is_full = event.participants_count >= max_seats
+
+            # 4. DISPATCH REGISTRATION PIPELINE WITH UPSERT OR EXISTING RECORD UPDATE
+            execute_join_state(user, event, is_full, existing)
+          end
       end
     end)
     |> case do
@@ -537,15 +548,23 @@ defmodule Kollective.Events.Events do
 
   # --- Structural Isolated Registration Pipelines ---
 
+  defp upsert_participant(user, event, new_status, existing) do
+    case existing do
+      nil ->
+        %EventParticipant{user_id: user.id, event_id: event.id, status: new_status}
+        |> Repo.insert!()
+
+      record ->
+        record
+        |> Ecto.Changeset.change(status: new_status)
+        |> Repo.update!()
+    end
+  end
+
   # CASE A: TARGET EVENT IS FULL -> Append to waitlist instantly across all modes
-  defp execute_join_state(user, event, _is_full = true) do
-    Multi.new()
-    |> Multi.insert(:attendance, %EventParticipant{
-      user_id: user.id,
-      event_id: event.id,
-      status: "waitlisted"
-    })
-    |> Repo.transaction()
+  defp execute_join_state(user, event, _is_full = true, existing) do
+    upsert_participant(user, event, "waitlisted", existing)
+    recalculate_and_broadcast_counters(event.id)
 
     # Dispatch persistent history rows and real-time alert toast popups
     Notifications.notify(
@@ -556,45 +575,26 @@ defmodule Kollective.Events.Events do
         event_id: event.id,
         target_id: event.id,
         target_type: "Event",
-        metadata: %{sub_type: "event_waitlisted", event_title: event.name}
+        metadata: %{sub_type: "event_waitlisted", event_title: event.title}
       },
-      %{post_id: nil, preview: "⚠️ You have been placed on the waitlist for '#{event.name}'."}
+      %{post_id: nil, preview: "⚠️ You have been placed on the waitlist for '#{event.title}'."}
     )
 
     :waitlisted
   end
 
   # CASE B: JOIN MODE IS FREE & SPACE IS AVAILABLE -> Instant acceptance allocation
-  defp execute_join_state(user, event, _is_full = false) when event.join_mode == "free" do
-    Multi.new()
-    |> Multi.insert(:attendance, %EventParticipant{
-      user_id: user.id,
-      event_id: event.id,
-      status: "accepted"
-    })
-    |> Multi.update_all(:inc_counter, from(e in Event, where: e.id == ^event.id),
-      inc: [participants_count: 1]
-    )
-    |> Repo.transaction()
-
-    # Live PubSub push to update timeline cards and attendee rosters across the UI natively
-    broadcast_event_update(event.id)
+  defp execute_join_state(user, event, _is_full = false, existing) when event.join_mode == "free" or is_nil(event.join_mode) do
+    upsert_participant(user, event, "accepted", existing)
+    recalculate_and_broadcast_counters(event.id)
 
     :joined
   end
 
   # CASE C: JOIN MODE IS RESTRICTED & SPACE IS AVAILABLE -> Queue for review approval
-  defp execute_join_state(user, event, _is_full = false) when event.join_mode == "restricted" do
-    Multi.new()
-    |> Multi.insert(:attendance, %EventParticipant{
-      user_id: user.id,
-      event_id: event.id,
-      status: "pending"
-    })
-    |> Multi.update_all(:inc_counter, from(e in Event, where: e.id == ^event.id),
-      inc: [participation_request_count: 1]
-    )
-    |> Repo.transaction()
+  defp execute_join_state(user, event, _is_full = false, existing) when event.join_mode == "restricted" do
+    upsert_participant(user, event, "pending", existing)
+    recalculate_and_broadcast_counters(event.id)
 
     # Notify the Event Creator/Organizer permanently that a new slot request is pending approval
     Notifications.notify(
@@ -605,11 +605,11 @@ defmodule Kollective.Events.Events do
         event_id: event.id,
         target_id: event.id,
         target_type: "Event",
-        metadata: %{event_title: event.name}
+        metadata: %{event_title: event.title}
       },
       %{
         post_id: nil,
-        preview: "📥 @#{user.username} requested to join your event '#{event.name}'."
+        preview: "📥 @#{user.username} requested to join your event '#{event.title}'."
       }
     )
 
@@ -619,17 +619,23 @@ defmodule Kollective.Events.Events do
   # --- Internal Geometry & Calendar Sync Helpers ---
 
   defp check_calendar_conflicts(user_id, event) do
-    # Locate other events this user is attending that overlap with the target timeframe
-    # Overlap Formula: (existing.start_time < new.end_time) AND (existing.end_time > new.start_time)
-    from(e in Event,
-      join: p in EventParticipant,
-      on: p.event_id == e.id,
-      where: p.user_id == ^user_id and p.status == "accepted",
-      where: e.id != ^event.id,
-      where: e.start_time < ^event.end_time and e.end_time > ^event.start_time,
-      select: %{id: e.id, name: e.name}
-    )
-    |> Repo.all()
+    start_time = event.start_time
+    end_time = event.end_time || (start_time && DateTime.add(start_time, 2, :hour))
+
+    if is_nil(start_time) or is_nil(end_time) do
+      []
+    else
+      from(e in Event,
+        join: p in EventParticipant,
+        on: p.event_id == e.id,
+        where: p.user_id == ^user_id and p.status == "accepted",
+        where: e.id != ^event.id,
+        where: not is_nil(e.start_time) and not is_nil(e.end_time),
+        where: e.start_time < ^end_time and e.end_time > ^start_time,
+        select: %{id: e.id, title: e.title}
+      )
+      |> Repo.all()
+    end
   end
 
   @doc """
@@ -820,7 +826,7 @@ defmodule Kollective.Events.Events do
         |> Repo.one!()
 
       # 2. LOCATE AND REMOVE ATTENDANCE LOG
-      case Repo.get_by(Participant, user_id: user.id, event_id: event.id) do
+      case Repo.get_by(EventParticipant, user_id: user.id, event_id: event.id) do
         nil ->
           Repo.rollback("You are not registered for this event.")
 
@@ -1177,11 +1183,12 @@ defmodule Kollective.Events.Events do
   Maybe, and No (rejected) counters while maintaining capacity boundaries and locks atomically.
   """
   def rsvp_to_event(%User{} = user, event_id, input_status)
-      when input_status in ["going", "maybe", "no"] do
+      when is_binary(input_status) do
     # Normalize input states to match our strict schema boundaries
     target_status =
       case input_status do
         "going" -> "accepted"
+        "attending" -> "accepted"
         "no" -> "rejected"
         other -> other
       end
@@ -1195,7 +1202,7 @@ defmodule Kollective.Events.Events do
         if target_status == "accepted", do: check_calendar_conflicts(user.id, event), else: []
 
       if Enum.any?(conflicts) do
-        conflict_names = Enum.map(conflicts, & &1.name) |> Enum.join(", ")
+        conflict_names = Enum.map(conflicts, &(&1.title || &1[:title])) |> Enum.join(", ")
 
         Repo.rollback(
           "Conflict: You are already attending overlapping event(s): #{conflict_names}"
@@ -1210,24 +1217,31 @@ defmodule Kollective.Events.Events do
           if target_status == "accepted" and is_full, do: "waitlisted", else: target_status
 
         # 4. COMMUTE ATTENDANCE STORAGE STATE
-        existing_rsvp = Repo.get_by(Participant, user_id: user.id, event_id: event.id)
+        existing_rsvp = Repo.get_by(EventParticipant, user_id: user.id, event_id: event.id)
 
-        case existing_rsvp do
-          nil ->
-            %EventParticipant{user_id: user.id, event_id: event.id, status: final_status}
-            |> Repo.insert!()
+        result_code =
+          case existing_rsvp do
+            nil ->
+              %EventParticipant{user_id: user.id, event_id: event.id, status: final_status}
+              |> Repo.insert!()
+              String.to_atom(final_status)
 
-          rsvp ->
-            rsvp
-            |> Ecto.Changeset.change(status: final_status)
-            |> Repo.update!()
-        end
+            rsvp ->
+              if rsvp.status == final_status do
+                Repo.delete!(rsvp)
+                :removed
+              else
+                rsvp
+                |> Ecto.Changeset.change(status: final_status)
+                |> Repo.update!()
+                String.to_atom(final_status)
+              end
+          end
 
         # 5. RECALCULATE CACHE COUNTERS & RE-STREAM METRICS TO THE UI
         recalculate_and_broadcast_counters(event.id)
 
-        # Return specific status code out of the lock transaction window
-        {:ok, String.to_atom(final_status)}
+        result_code
       end
     end)
     |> case do
@@ -1805,6 +1819,24 @@ defmodule Kollective.Events.Events do
         preload: [:user, :origin_city]
       )
     end
+  end
+
+  def attach_user_join_states(events, nil), do: events
+  def attach_user_join_states(events, %User{} = user) do
+    event_ids = Enum.map(events, & &1.id)
+
+    user_rsvps =
+      from(p in EventParticipant,
+        where: p.user_id == ^user.id and p.event_id in ^event_ids,
+        select: {p.event_id, p.status}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    Enum.map(events, fn event ->
+      join_state = Map.get(user_rsvps, event.id)
+      Map.put(event, :join_state, join_state)
+    end)
   end
 
   @doc """

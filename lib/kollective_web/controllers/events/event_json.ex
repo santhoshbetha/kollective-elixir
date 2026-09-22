@@ -38,9 +38,15 @@ defmodule KollectiveWeb.EventJSON do
       # Engagement & Capacity
       participants_count: event.participants_count,
       attendeesCount: event.participants_count,
-      interestedCount: 0,
+      interestedCount: Map.get(event, :interested_count, 0) || 0,
       comments_count: event.comments_count,
       capacity: get_capacity(event.metadata),
+
+      join_state: Map.get(event, :join_state, nil),
+      isAttending: Map.get(event, :is_attending, false) || (Map.get(event, :join_state, nil) in ["accepted", "joined"]),
+      is_attending: Map.get(event, :is_attending, false) || (Map.get(event, :join_state, nil) in ["accepted", "joined"]),
+      isInterested: Map.get(event, :is_interested, false) || (Map.get(event, :join_state, nil) == "interested"),
+      is_interested: Map.get(event, :is_interested, false) || (Map.get(event, :join_state, nil) == "interested"),
 
       # Location string convenience and preloaded structured geography
       location_name: event.location_name,

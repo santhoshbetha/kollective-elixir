@@ -809,6 +809,7 @@ defmodule Kollective.Moderation.Moderation do
     case Hammer.check_rate("post_denied:#{user_id}", 600_000, 1) do
       {:allow, _count} -> :ok
       {:deny, _limit} -> :cooldown
+      {:error, _reason} -> :ok
     end
   end
 

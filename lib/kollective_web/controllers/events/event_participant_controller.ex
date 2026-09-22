@@ -16,7 +16,18 @@ defmodule KollectiveWeb.EventParticipantController do
         |> json(%{
           status: "success",
           code: "joined",
+          isAttending: true,
           message: "Successfully registered for this event."
+        })
+
+      {:ok, :left} ->
+        conn
+        |> put_status(:ok)
+        |> json(%{
+          status: "success",
+          code: "left",
+          isAttending: false,
+          message: "Successfully left the event."
         })
 
       {:ok, :requested} ->
@@ -25,6 +36,7 @@ defmodule KollectiveWeb.EventParticipantController do
         |> json(%{
           status: "success",
           code: "requested",
+          isAttending: false,
           message: "Your participation request is pending organizer approval."
         })
 
@@ -34,7 +46,17 @@ defmodule KollectiveWeb.EventParticipantController do
         |> json(%{
           status: "success",
           code: "waitlisted",
+          isAttending: false,
           message: "Event is at full capacity. You have been added to the waitlist queue."
+        })
+
+      {:ok, other_code} ->
+        conn
+        |> put_status(:ok)
+        |> json(%{
+          status: "success",
+          code: to_string(other_code),
+          message: "Event attendance updated."
         })
 
       {:error, conflict_message} ->
@@ -119,38 +141,57 @@ defmodule KollectiveWeb.EventParticipantController do
   end
 
   # POST /api/v1/kollective/events/:event_id/rsvp
-  # Expected payload parameter: %{"status" => "going"} or "maybe", "no"
-  def rsvp(conn, %{"event_id" => event_id, "status" => status}) do
+  # Expected payload parameter: %{"status" => "going"} or "maybe", "no", "interested"
+  def rsvp(conn, %{"event_id" => event_id} = params) do
     user = conn.assigns.current_user
+    status = Map.get(params, "status", "interested")
 
     case Events.rsvp_to_event(user, event_id, status) do
-      {:ok, :accepted} ->
-        conn
-        |> put_status(:ok)
-        |> json(%{status: "success", code: "going", message: "RSVP updated to: Going"})
-
-      {:ok, :waitlisted} ->
+      {:ok, code} when code in [:removed, "removed"] ->
         conn
         |> put_status(:ok)
         |> json(%{
           status: "success",
-          code: "waitlisted",
-          message: "Event is full. You have been waitlisted."
+          code: "removed",
+          isInterested: false,
+          isAttending: false,
+          message: "RSVP removed."
         })
 
-      {:ok, final_code} ->
+      {:ok, {:ok, inner_code}} ->
+        code_str = to_string(inner_code)
+        is_interested = code_str == "interested"
+        is_attending = code_str in ["accepted", "joined"]
+
         conn
         |> put_status(:ok)
         |> json(%{
           status: "success",
-          code: Atom.to_string(final_code),
-          message: "RSVP successfully submitted."
+          code: code_str,
+          isInterested: is_interested,
+          isAttending: is_attending,
+          message: "RSVP updated to: #{status}"
         })
 
-      {:error, conflict_message} ->
+      {:ok, final_code} when is_atom(final_code) or is_binary(final_code) ->
+        code_str = to_string(final_code)
+        is_interested = code_str == "interested"
+        is_attending = code_str in ["accepted", "joined"]
+
         conn
-        |> put_status(:conflict)
-        |> json(%{error: "calendar_conflict", message: conflict_message})
+        |> put_status(:ok)
+        |> json(%{
+          status: "success",
+          code: code_str,
+          isInterested: is_interested,
+          isAttending: is_attending,
+          message: "RSVP updated to: #{status}"
+        })
+
+      {:error, error_msg} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "rsvp_failed", message: error_msg})
     end
   end
 
