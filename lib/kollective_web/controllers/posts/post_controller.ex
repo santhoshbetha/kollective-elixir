@@ -35,6 +35,45 @@ defmodule KollectiveWeb.PostController do
   def create(conn, %{"post" => post_params} = params) do
     user = conn.assigns.current_user
     ip = conn.remote_ip |> :inet.ntoa() |> to_string()
+    do_create(conn, user, ip, post_params, params)
+  end
+
+  def create(conn, params) do
+    user = conn.assigns.current_user
+    ip = conn.remote_ip |> :inet.ntoa() |> to_string()
+    do_create(conn, user, ip, params, params)
+  end
+
+  defp do_create(conn, user, ip, post_params, params) do
+    # Normalize content and text attributes
+    content_text = post_params["content"] || post_params["text"] || ""
+
+    # Normalize category: "Voices" / "voice" -> "voice", else "post"
+    raw_category = post_params["category"] || (if post_params["isVoice"], do: "voice", else: "post")
+    category =
+      case to_string(raw_category || "") |> String.downcase() do
+        "voice" -> "voice"
+        "voices" -> "voice"
+        _ -> "post"
+      end
+
+    # Normalize audience / target_scope
+    raw_audience = post_params["target_scope"] || post_params["audience"] || "world"
+    target_scope =
+      case to_string(raw_audience || "") |> String.downcase() do
+        s when s in ["local", "my_location"] -> "local"
+        "state" -> "state"
+        s when s in ["country", "national"] -> "country"
+        _ -> "world"
+      end
+
+    post_params =
+      post_params
+      |> Map.put("content", content_text)
+      |> Map.put("text", content_text)
+      |> Map.put("category", category)
+      |> Map.put("target_scope", target_scope)
+      |> Map.put_new("visibility", if(raw_audience == "Followers Only", do: "private", else: "public"))
 
     # 1. Organization / Identity Context Gateway
     org_id = post_params["organization_id"] || post_params["override_author_id"]
@@ -108,12 +147,6 @@ defmodule KollectiveWeb.PostController do
               })
             end
 
-          # {:error, :forbidden_content, error_msg} ->
-          # HARD REJECTION: Drop the request instantly and return an explicit validation message
-          # conn
-          # |> put_status(:unprocessable_entity)
-          # |> json(%{errors: %{content: [error_msg]}})
-
           {:ok, status} ->
             # SOFT PASS / CLEAN: Inject the returned status (:published or :pending) into params
             post_params =
@@ -132,6 +165,8 @@ defmodule KollectiveWeb.PostController do
                 Posts.create_post(posting_author, post_params)
               end
 
+            IO.inspect(post_params, label: "POST_CONTROLLER INCOMING PARAMS")
+
             # 3. Handle pipeline output delivery
             case execution_result do
               {:ok, post} ->
@@ -139,10 +174,35 @@ defmodule KollectiveWeb.PostController do
                 |> put_status(:created)
                 |> json(%{status: "ok", data: PostJSON.show(post)})
 
-              {:error, changeset} ->
+              {:error, %Ecto.Changeset{} = changeset} ->
+                errors_map = Ecto.Changeset.traverse_errors(changeset, &KollectiveWeb.ChangesetJSON.translate_error/1)
+                error_msg =
+                  Enum.map_join(errors_map, "; ", fn {field, msgs} ->
+                    "#{field}: #{Enum.join(List.wrap(msgs), ", ")}"
+                  end)
+
+                IO.inspect(errors_map, label: "POST_CONTROLLER VALIDATION ERRORS")
+
                 conn
                 |> put_status(:unprocessable_entity)
-                |> json(%{status: "error", errors: ChangesetJSON.error(changeset)})
+                |> json(%{
+                  status: "error",
+                  message: error_msg,
+                  error: error_msg,
+                  errors: errors_map
+                })
+
+              {:error, reason} ->
+                error_msg = inspect(reason)
+                IO.inspect(reason, label: "POST_CONTROLLER OTHER ERROR")
+
+                conn
+                |> put_status(:unprocessable_entity)
+                |> json(%{
+                  status: "error",
+                  message: error_msg,
+                  error: error_msg
+                })
             end
         end
     end
@@ -488,6 +548,12 @@ defmodule KollectiveWeb.PostController do
         |> json(%{error: "The post you are trying to reply to does not exist."})
 
       parent_post ->
+        # Inherit category and target_scope from parent post if missing
+        post_params =
+          post_params
+          |> Map.put_new("category", parent_post.category || "post")
+          |> Map.put_new("target_scope", parent_post.target_scope || "local")
+
         # 2. CONTENT AUDITING GATES: Run the reply text through your master priority matrix
         case Moderation.determine_status(user, post_params) do
           {:error, :forbidden_content, matched_word} ->

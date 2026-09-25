@@ -253,7 +253,7 @@ sample_posts = [
     attrs: %{
       "title" => "The Digital Renaissance: Why Decentralized Identity is our Final Frontier.",
       "content" =>
-        "We are standing at the precipice of a new era. The current structures of data ownership are failing us. It is no longer enough to simply participate in the digital economy—we must own the digital soul of our existence.",
+        "Mock seed: We are standing at the precipice of a new era. The current structures of data ownership are failing us. It is no longer enough to simply participate in the digital economy—we must own the digital soul of our existence.",
       "target_scope" => "world",
       "category" => "voice",
       "status" => "published"

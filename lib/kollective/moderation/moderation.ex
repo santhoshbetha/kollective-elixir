@@ -531,9 +531,10 @@ defmodule Kollective.Moderation.Moderation do
   # This reduces memory overhead when iterating over words to check a post's content.
   def list_active_keyword_strings do
     query =
-      from r in RestrictedKeyword,
+      from(r in RestrictedKeyword,
         where: r.is_active == true,
         select: r.word
+      )
 
     Repo.all(query)
   end
@@ -703,11 +704,13 @@ defmodule Kollective.Moderation.Moderation do
 
   defp calculate_content_score(text) do
     # Pulls soft words from cache/database and sums their relative numeric weights
-    soft_keywords = list_active_keywords_by_level("soft")
+    soft_keywords = list_active_keywords_structs_by_level("soft")
     downcased_text = String.downcase(text)
 
     Enum.reduce(soft_keywords, 0, fn k, acc ->
-      if String.contains?(downcased_text, String.downcase(k.word)) do
+      word_str = to_string(k.word) |> String.trim() |> String.downcase()
+
+      if word_str != "" and String.contains?(downcased_text, word_str) do
         acc + (k.weight || 1)
       else
         acc
@@ -730,7 +733,8 @@ defmodule Kollective.Moderation.Moderation do
     keywords = list_active_keywords_by_level(level)
 
     case Enum.find(keywords, fn word ->
-           String.contains?(downcased_content, String.downcase(word))
+           word_str = to_string(word) |> String.trim() |> String.downcase()
+           word_str != "" and String.contains?(downcased_content, word_str)
          end) do
       nil -> :none
       word -> {:ok, word}
@@ -738,21 +742,32 @@ defmodule Kollective.Moderation.Moderation do
   end
 
   defp contains_level?(text, level) do
-    # Connects to your standard DB keyword dictionary check pipeline
-    # e.g., query restricted keywords where level == "hard" or "soft"
     keywords = list_active_keywords_by_level(level)
+    downcased_text = String.downcase(text)
 
-    Enum.any?(keywords, fn k ->
-      String.contains?(String.downcase(text), String.downcase(k.word))
+    Enum.any?(keywords, fn word ->
+      word_str = to_string(word) |> String.trim() |> String.downcase()
+      word_str != "" and String.contains?(downcased_text, word_str)
     end)
   end
 
   defp list_active_keywords_by_level(level) do
-    # Fetch active keywords for the given level
     Repo.all(
-      from k in RestrictedKeyword,
-        where: k.level == ^level and k.is_active == true,
+      from(k in RestrictedKeyword,
+        where: k.level == ^level and k.is_active == true and not is_nil(k.word),
         select: k.word
+      )
+    )
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp list_active_keywords_structs_by_level(level) do
+    Repo.all(
+      from(k in RestrictedKeyword,
+        where: k.level == ^level and k.is_active == true and not is_nil(k.word),
+        select: %{word: k.word, weight: k.weight}
+      )
     )
   end
 
@@ -1039,8 +1054,8 @@ defmodule Kollective.Moderation.Moderation do
     force = Map.get(params, "force") || Map.get(params, :force) || false
 
     # 1. Use light aggregate lookups to read queue counts before pulling full record pools
-    post_count = Repo.one(from p in Post, where: p.status == "pending", select: count(p.id))
-    event_count = Repo.one(from e in Event, where: e.status == "pending", select: count(e.id))
+    post_count = Repo.one(from(p in Post, where: p.status == "pending", select: count(p.id)))
+    event_count = Repo.one(from(e in Event, where: e.status == "pending", select: count(e.id)))
     total = post_count + event_count
 
     cond do
@@ -1070,8 +1085,8 @@ defmodule Kollective.Moderation.Moderation do
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       # 1. Capture specific arrays of IDs inside the lock boundaries for strict auditing
-      post_ids = Repo.all(from p in Post, where: p.status == "pending", select: p.id)
-      event_ids = Repo.all(from e in Event, where: e.status == "pending", select: e.id)
+      post_ids = Repo.all(from(p in Post, where: p.status == "pending", select: p.id))
+      event_ids = Repo.all(from(e in Event, where: e.status == "pending", select: e.id))
 
       # 2. High-speed Bulk Update on Post records
       {posts_updated, _} =
@@ -1382,7 +1397,7 @@ defmodule Kollective.Moderation.Moderation do
   def cleanup_expired_keywords do
     now = DateTime.utc_now()
 
-    query = from k in RestrictedKeyword, where: k.expires_at < ^now
+    query = from(k in RestrictedKeyword, where: k.expires_at < ^now)
 
     {count, _} = Repo.delete_all(query)
 

@@ -49,7 +49,7 @@ defmodule KollectiveWeb.EventController do
     # Fetch the user's active RSVP state record mapping to this event node
     my_rsvp =
       if current_user do
-        Repo.get_by(Kollective.Events.EventParticipant, event_id: event.id, user_id: current_user.id)
+        Repo.get_by(Kollective.Events.Participant, event_id: event.id, user_id: current_user.id)
       else
         nil
       end
@@ -57,7 +57,7 @@ defmodule KollectiveWeb.EventController do
     rsvp_status_str = if my_rsvp, do: my_rsvp.status, else: nil
 
     # Inject the value into the preloaded struct map virtual field safely
-    event_with_status = Map.put(event, :join_state, rsvp_status_str)
+    event_with_status = if rsvp_status_str, do: Map.put(event, :join_state, rsvp_status_str), else: event
 
     # Present via your strict uniform EventJSON data schema format contract
     conn

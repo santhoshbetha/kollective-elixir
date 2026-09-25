@@ -26,10 +26,10 @@ defmodule KollectiveWeb.PostJSON do
   def show(%Kollective.Posts.Post{} = post) do
     show(%{
       post: post,
-      likes_count: 0,
-      reblogs_count: 0,
-      has_liked: false,
-      has_reblogged: false
+      likes_count: Map.get(post, :likes_count, 0) || 0,
+      reblogs_count: Map.get(post, :reblogs_count, 0) || 0,
+      has_liked: Map.get(post, :liked, false) || Map.get(post, :has_liked, false) || false,
+      has_reblogged: Map.get(post, :reblogged, false) || Map.get(post, :has_reblogged, false) || false
     })
   end
 
@@ -41,7 +41,7 @@ defmodule KollectiveWeb.PostJSON do
   def data(item), do: show(item)
 
   defp render_item(item) do
-    post = item.post
+    post = is_map(item) && Map.get(item, :post) || item
     # Dynamically interpolate your base canonical domain path with the row's ULID key [INDEX]
     base_domain = KollectiveWeb.Endpoint.url()
     computed_permalink = "#{base_domain}/posts/#{to_string(post.id)}"
@@ -49,8 +49,10 @@ defmodule KollectiveWeb.PostJSON do
     attachments = Map.get(post, :attachments)
     image_urls = if is_list(attachments), do: Enum.map(attachments, & &1.url), else: []
 
-    likes_cnt = Map.get(item, :likes_count, 0) || Map.get(post, :likes_count, 0)
-    has_liked = Map.get(item, :has_liked, false) || Map.get(post, :liked, false)
+    likes_cnt = Map.get(item, :likes_count, 0) || Map.get(post, :likes_count, 0) || 0
+    reblogs_cnt = Map.get(item, :reblogs_count, 0) || Map.get(post, :reblogs_count, 0) || 0
+    has_liked = Map.get(item, :has_liked, false) || Map.get(post, :liked, false) || Map.get(post, :has_liked, false) || false
+    has_reblogged = Map.get(item, :has_reblogged, false) || Map.get(post, :reblogged, false) || Map.get(post, :has_reblogged, false) || false
     replies_cnt = Map.get(post, :replies_count) || Map.get(item, :replies_count) || 0
 
     %{
@@ -69,15 +71,15 @@ defmodule KollectiveWeb.PostJSON do
       # Social engagement metrics and flags
       likes: likes_cnt,
       likes_count: likes_cnt,
-      reblogs_count: item.reblogs_count,
+      reblogs_count: reblogs_cnt,
       commentsCount: replies_cnt,
       replies_count: replies_cnt,
       liked: has_liked,
       has_liked: has_liked,
-      has_reblogged: item.has_reblogged,
-      bookmarked: post.bookmarked || false,
+      has_reblogged: has_reblogged,
+      bookmarked: Map.get(post, :bookmarked, false) || Map.get(item, :bookmarked, false) || false,
       favourited: Map.get(post, :favourited, false),
-      reblogged: Map.get(post, :reblogged, false),
+      reblogged: has_reblogged,
       vote_data: post.vote_data,
       my_reactions: Map.get(post.data || %{}, "my_reactions", []),
 
@@ -109,6 +111,9 @@ defmodule KollectiveWeb.PostJSON do
 
       # Additional Mastodon-like fields
       in_reply_to_id: (post.in_reply_to_id && to_string(post.in_reply_to_id)) || nil,
+      in_reply_to_account_id: (post.in_reply_to_id && to_string(post.in_reply_to_id)) || nil,
+      in_reply_to_username: Map.get(post, :in_reply_to_username),
+      root_post_id: (post.root_post_id && to_string(post.root_post_id)) || nil,
       muted: Map.get(post, :muted) || Map.get(item, :muted) || false,
       sensitive: Map.get(post, :sensitive) || false,
       spoiler_text: Map.get(post, :spoiler_text) || "",
@@ -168,12 +173,19 @@ defmodule KollectiveWeb.PostJSON do
   defp serialize_reblog(%Ecto.Association.NotLoaded{}), do: nil
   defp serialize_reblog(nil), do: nil
 
-  defp serialize_reblog(reblog_post) do
+  defp serialize_reblog(%Kollective.Posts.Post{} = reblog_post) do
     reblog_post =
-      Kollective.Repo.preload(reblog_post, [:author, :attachments, :hashtags, poll: :options])
+      if Ecto.assoc_loaded?(reblog_post.author) do
+        reblog_post
+      else
+        Kollective.Repo.preload(reblog_post, [:author, :attachments, :hashtags, poll: :options])
+      end
 
-    KollectiveWeb.PostJSON.show(reblog_post)
+    reblog_data = show(reblog_post)
+    Map.put(reblog_data, :reblog, nil)
   end
+
+  defp serialize_reblog(_), do: nil
 
   defp serialize_tags(%Ecto.Association.NotLoaded{}), do: []
   defp serialize_tags(nil), do: []

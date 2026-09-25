@@ -219,6 +219,8 @@ defmodule KollectiveWeb.AccountJSON do
 
       # Dynamic relationship attachment layer mapping heart/follow badge indicators
       relationship: relationship,
+      following: Map.get(relationship, :following, false),
+      followed_by: Map.get(relationship, :followed_by, false),
       created_at: Calendar.strftime(user.inserted_at, "%Y-%m-%dT%H:%M:%SZ"),
       location: user.location,
       age:

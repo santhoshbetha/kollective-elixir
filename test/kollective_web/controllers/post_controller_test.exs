@@ -92,6 +92,141 @@ defmodule KollectiveWeb.PostControllerTest do
   describe "authenticated post endpoints" do
     setup :authenticate_user
 
+    test "GET /api/v1/posts?feed=following returns only posts from followed users", %{
+      conn: conn,
+      user: user
+    } do
+      user_b = user_fixture()
+      user_c = user_fixture()
+
+      post_b = post_fixture(user_b, %{content: "Post from followed user B"})
+      post_c = post_fixture(user_c, %{content: "Post from unfollowed user C"})
+
+      # User follows user_b
+      Repo.insert!(%Kollective.Accounts.UserRelationship{
+        source_id: user.id,
+        target_id: user_b.id,
+        type: "follow"
+      })
+
+      conn_res = get(conn, ~p"/api/v1/posts", %{"feed" => "following"})
+      assert conn_res.status == 200
+      data = json_response(conn_res, 200)["data"]
+      returned_ids = Enum.map(data, & &1["id"])
+
+      assert to_string(post_b.id) in returned_ids
+      refute to_string(post_c.id) in returned_ids
+
+      # Also test category=following alias
+      conn_cat = get(conn, ~p"/api/v1/posts", %{"category" => "following"})
+      assert conn_cat.status == 200
+      data_cat = json_response(conn_cat, 200)["data"]
+      returned_cat_ids = Enum.map(data_cat, & &1["id"])
+      assert to_string(post_b.id) in returned_cat_ids
+      refute to_string(post_c.id) in returned_cat_ids
+    end
+
+    test "GET /api/v1/posts?feed=following returns empty list when user follows nobody", %{
+      conn: conn
+    } do
+      other_user = user_fixture()
+      _post = post_fixture(other_user, %{content: "Post from other user"})
+
+      conn_res = get(conn, ~p"/api/v1/posts", %{"feed" => "following"})
+      assert conn_res.status == 200
+      data = json_response(conn_res, 200)["data"]
+      assert data == []
+    end
+
+    test "GET /api/v1/posts?category=voices returns only voice posts", %{
+      conn: conn,
+      user: user
+    } do
+      voice_post = post_fixture(user, %{content: "Voice post", category: :voice})
+      standard_post = post_fixture(user, %{content: "Standard post", category: :post})
+
+      conn_res = get(conn, ~p"/api/v1/posts", %{"category" => "voices"})
+      assert conn_res.status == 200
+      data = json_response(conn_res, 200)["data"]
+      returned_ids = Enum.map(data, & &1["id"])
+
+      assert to_string(voice_post.id) in returned_ids
+      refute to_string(standard_post.id) in returned_ids
+    end
+
+    test "GET /api/v1/posts?scope=world excludes posts from user's country", %{
+      conn: conn
+    } do
+      # User has country: "US"
+      ca_user = user_fixture(%{country: "CA"})
+      us_user = user_fixture(%{country: "US"})
+
+      ca_post = post_fixture(ca_user, %{content: "Post from Canada", origin_country: "CA"})
+      us_post = post_fixture(us_user, %{content: "Post from US", origin_country: "US"})
+
+      conn_res = get(conn, ~p"/api/v1/posts", %{"scope" => "world"})
+      assert conn_res.status == 200
+      data = json_response(conn_res, 200)["data"]
+      returned_ids = Enum.map(data, & &1["id"])
+
+      assert to_string(ca_post.id) in returned_ids
+      refute to_string(us_post.id) in returned_ids
+    end
+
+    test "GET /api/v1/posts?scope=country excludes user's state when state is set", %{
+      conn: conn,
+      user: user
+    } do
+      user = Kollective.Repo.update!(Ecto.Changeset.change(user, state: "CA", country: "US"))
+      conn = assign(conn, :current_user, user)
+
+      ny_user = user_fixture(%{state: "NY", country: "US"})
+      ca_user = user_fixture(%{state: "CA", country: "US"})
+
+      ny_post = post_fixture(ny_user, %{content: "Post from NY", origin_state: "NY", origin_country: "US"})
+      ca_post = post_fixture(ca_user, %{content: "Post from CA", origin_state: "CA", origin_country: "US"})
+
+      conn_res = get(conn, ~p"/api/v1/posts", %{"scope" => "country"})
+      assert conn_res.status == 200
+      data = json_response(conn_res, 200)["data"]
+      returned_ids = Enum.map(data, & &1["id"])
+
+      assert to_string(ny_post.id) in returned_ids
+      refute to_string(ca_post.id) in returned_ids
+    end
+
+    test "GET /api/v1/posts?scope=state is empty if state is not set", %{
+      conn: conn,
+      user: user
+    } do
+      user = Kollective.Repo.update!(Ecto.Changeset.change(user, state: nil))
+      conn = assign(conn, :current_user, user)
+
+      other_user = user_fixture(%{state: "CA"})
+      _ca_post = post_fixture(other_user, %{content: "Post from CA", origin_state: "CA"})
+
+      conn_res = get(conn, ~p"/api/v1/posts", %{"scope" => "state"})
+      assert conn_res.status == 200
+      data = json_response(conn_res, 200)["data"]
+      assert data == []
+    end
+
+    test "GET /api/v1/posts?scope=local is empty if address/districts are not set", %{
+      conn: conn,
+      user: user
+    } do
+      user = Kollective.Repo.update!(Ecto.Changeset.change(user, district_l1_id: nil, county: nil, city_id: nil))
+      conn = assign(conn, :current_user, user)
+
+      other_user = user_fixture()
+      _post = post_fixture(other_user, %{content: "Local post", origin_district_l1: "CA-12"})
+
+      conn_res = get(conn, ~p"/api/v1/posts", %{"scope" => "local"})
+      assert conn_res.status == 200
+      data = json_response(conn_res, 200)["data"]
+      assert data == []
+    end
+
     test "GET /api/v1/posts/:id returns 404 for missing post", %{conn: conn} do
       conn = get(conn, ~p"/api/v1/posts/#{Kollective.Schemas.ULIDType.generate()}")
 
@@ -137,6 +272,15 @@ defmodule KollectiveWeb.PostControllerTest do
 
       assert conn.status == 422
       assert json_response(conn, 422)["error"] == "You cannot reblog your own post."
+    end
+
+    test "POST /api/v1/posts/:id/reply creates a reply for a post", %{conn: conn, user: user} do
+      parent_post = post_fixture(user)
+
+      conn = post(conn, ~p"/api/v1/posts/#{parent_post.id}/reply", %{"text" => "Reply text here"})
+
+      assert response = json_response(conn, 201)
+      assert response["status"] == "success"
     end
 
     test "GET /api/v1/posts lists public posts", %{conn: conn, user: user} do

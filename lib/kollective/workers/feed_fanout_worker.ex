@@ -14,7 +14,7 @@ defmodule Kollective.Workers.FeedFanoutWorker do
     else
       import Ecto.Query
 
-      # 1. Gather all follower IDs for this author
+      # 1. Gather all follower IDs for this author + include author for their own home feed cache
       follower_ids =
         from(r in Kollective.Accounts.UserRelationship,
           where: r.target_id == ^author_id and r.type == "follow",
@@ -22,14 +22,16 @@ defmodule Kollective.Workers.FeedFanoutWorker do
         )
         |> Repo.all()
 
+      all_recipient_ids = Enum.uniq([author_id | follower_ids])
+
       # 2. Bulk insert rows into the Home Feed Cache table
       # This is a high-speed bulk database insertion pass
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       entries =
-        Enum.map(follower_ids, fn follower_id ->
+        Enum.map(all_recipient_ids, fn recipient_id ->
           %{
-            user_id: follower_id,
+            user_id: recipient_id,
             post_id: post_id,
             inserted_at: now,
             updated_at: now
@@ -42,11 +44,11 @@ defmodule Kollective.Workers.FeedFanoutWorker do
         Repo.insert_all("home_feed_entries", chunk, on_conflict: :nothing)
       end)
 
-      # 3. Stream real-time alerts over WebSockets to currently active followers
-      Enum.each(follower_ids, fn follower_id ->
+      # 3. Stream real-time alerts over WebSockets to currently active followers and the author
+      Enum.each(all_recipient_ids, fn recipient_id ->
         Phoenix.PubSub.broadcast(
           Kollective.PubSub,
-          "timeline:home:#{follower_id}",
+          "timeline:home:#{recipient_id}",
           {:new_timeline_post, %{post_id: post_id}}
         )
       end)

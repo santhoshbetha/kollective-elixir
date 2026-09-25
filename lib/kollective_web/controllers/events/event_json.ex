@@ -15,7 +15,9 @@ defmodule KollectiveWeb.EventJSON do
       event.banner_url || Kollective.Events.EventHelpers.get_banner_url(event) ||
         default_banner()
 
-    %{
+    join_state = Map.get(event, :join_state, nil)
+
+    map = %{
       id: event.id,
       title: event.title,
       description: event.description,
@@ -42,11 +44,10 @@ defmodule KollectiveWeb.EventJSON do
       comments_count: event.comments_count,
       capacity: get_capacity(event.metadata),
 
-      join_state: Map.get(event, :join_state, nil),
-      isAttending: Map.get(event, :is_attending, false) || (Map.get(event, :join_state, nil) in ["accepted", "joined"]),
-      is_attending: Map.get(event, :is_attending, false) || (Map.get(event, :join_state, nil) in ["accepted", "joined"]),
-      isInterested: Map.get(event, :is_interested, false) || (Map.get(event, :join_state, nil) == "interested"),
-      is_interested: Map.get(event, :is_interested, false) || (Map.get(event, :join_state, nil) == "interested"),
+      isAttending: Map.get(event, :is_attending, false) || (join_state in ["accepted", "joined"]),
+      is_attending: Map.get(event, :is_attending, false) || (join_state in ["accepted", "joined"]),
+      isInterested: Map.get(event, :is_interested, false) || (join_state == "interested"),
+      is_interested: Map.get(event, :is_interested, false) || (join_state == "interested"),
 
       # Location string convenience and preloaded structured geography
       location_name: event.location_name,
@@ -62,11 +63,16 @@ defmodule KollectiveWeb.EventJSON do
         district_l2: PoliticalDistrictJSON.data(event.origin_district_l2),
         district_l3: PoliticalDistrictJSON.data(event.origin_district_l3)
       },
-
       # Author/Candidate Info
       organizer: serialize_organizer(event.user),
       inserted_at: event.inserted_at
     }
+
+    if join_state do
+      Map.put(map, :join_state, join_state)
+    else
+      map
+    end
   end
 
   defp format_label("in_person"), do: "In-Person"

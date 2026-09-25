@@ -14,11 +14,13 @@ defmodule KollectiveWeb.BookmarkController do
     posts = Posts.list_bookmarked_posts(user, params)
     next_cursor = if posts != [], do: List.last(posts).bookmark_cursor_id, else: nil
 
+    hydrated_posts = Posts.hydrate_virtual_fields(posts, user)
+
     conn
     |> put_status(:ok)
     |> json(%{
       status: "success",
-      data: PostJSON.index(posts),
+      data: PostJSON.index(hydrated_posts),
       next_cursor: to_string(next_cursor)
     })
   end

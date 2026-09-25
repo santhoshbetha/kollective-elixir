@@ -51,7 +51,7 @@ defmodule KollectiveWeb.EventControllerTest do
 
       assert response["status"] == "success"
       assert response["data"]["id"] == event.id
-      refute Map.has_key?(response["data"], "join_state")
+      assert response["data"]["join_state"] == "accepted"
     end
   end
 

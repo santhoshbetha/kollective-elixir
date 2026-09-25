@@ -66,48 +66,57 @@ defmodule Kollective.Posts.Posts do
   Returns `{:ok, %{ancestors: [...], focus: ..., descendants: [...]}}` or `{:error, :not_found}`.
   """
   def get_post_context(post_id, current_user \\ nil) do
-    case get_post(post_id) do
-      {:error, :not_found} ->
-        {:error, :not_found}
+    try do
+      case get_post(post_id) do
+        {:error, :not_found} ->
+          {:error, :not_found}
 
-      {:ok, focus_post} ->
-        ancestors = get_ancestors(focus_post, [])
-        descendants = get_descendants(focus_post)
+        {:ok, focus_post} ->
+          ancestors = get_ancestors(focus_post, [])
+          descendants = get_descendants(focus_post)
 
-        all_posts = ancestors ++ [focus_post] ++ descendants
-        hydrated_items = hydrate_virtual_fields(all_posts, current_user)
+          all_posts = ancestors ++ [focus_post] ++ descendants
+          hydrated_items = hydrate_virtual_fields(all_posts, current_user)
 
-        ancestors_count = length(ancestors)
+          ancestors_count = length(ancestors)
 
-        {hydrated_ancestors, [hydrated_focus | hydrated_descendants]} =
-          Enum.split(hydrated_items, ancestors_count)
+          {hydrated_ancestors, [hydrated_focus | hydrated_descendants]} =
+            Enum.split(hydrated_items, ancestors_count)
 
-        {:ok,
-         %{
-           ancestors: hydrated_ancestors,
-           focus: hydrated_focus,
-           descendants: hydrated_descendants
-         }}
+          {:ok,
+           %{
+             ancestors: hydrated_ancestors,
+             focus: hydrated_focus,
+             descendants: hydrated_descendants
+           }}
+      end
+    rescue
+      _ -> {:error, :not_found}
     end
   end
 
   defp get_ancestors(%Post{in_reply_to_id: nil}, acc), do: acc
 
-  defp get_ancestors(%Post{in_reply_to_id: parent_id}, acc) when not is_nil(parent_id) do
-    case get_post(parent_id) do
-      {:ok, parent_post} ->
-        get_ancestors(parent_post, [parent_post | acc])
+  defp get_ancestors(%Post{in_reply_to_id: parent_id, id: current_id}, acc) when not is_nil(parent_id) do
+    if parent_id == current_id or length(acc) >= 10 or Enum.any?(acc, &(&1.id == parent_id)) do
+      acc
+    else
+      case get_post(parent_id) do
+        {:ok, parent_post} ->
+          get_ancestors(parent_post, [parent_post | acc])
 
-      {:error, _} ->
-        acc
+        {:error, _} ->
+          acc
+      end
     end
   end
 
   defp get_descendants(%Post{id: focus_id}) do
     Post
-    |> where([p], p.in_reply_to_id == ^focus_id or p.root_post_id == ^focus_id)
+    |> where([p], (p.in_reply_to_id == ^focus_id or p.root_post_id == ^focus_id) and p.id != ^focus_id)
     |> where([p], is_nil(p.deleted_at))
     |> order_by([p], asc: p.inserted_at)
+    |> limit(50)
     |> preload([:author, :organization, :attachments, :hashtags, :reblog_of, poll: :options])
     |> Repo.all()
   end
@@ -509,8 +518,25 @@ defmodule Kollective.Posts.Posts do
   """
   def create_post(%Kollective.Accounts.User{} = user, attrs \\ %{}, uploaded_images \\ []) do
     # 1. Resolve content parameter safety and metadata state variants
-    content_text = attrs["content"] || attrs[:content] || ""
+    content_text = attrs["content"] || attrs[:content] || attrs["text"] || attrs[:text] || ""
     is_reply = not is_nil(attrs["in_reply_to_id"] || attrs[:in_reply_to_id])
+
+    raw_category = attrs["category"] || attrs[:category] || (if attrs["isVoice"] || attrs[:isVoice], do: "voice", else: "post")
+    category =
+      case to_string(raw_category || "") |> String.downcase() do
+        "voice" -> :voice
+        "voices" -> :voice
+        _ -> :post
+      end
+
+    raw_audience = attrs["target_scope"] || attrs[:target_scope] || attrs["audience"] || attrs[:audience] || :world
+    target_scope =
+      case to_string(raw_audience || "") |> String.downcase() do
+        s when s in ["local", "my_location"] -> :local
+        "state" -> :state
+        s when s in ["country", "national"] -> :country
+        _ -> :world
+      end
 
     # 2. Extract tags, mentions, and look for pasted external links outside the transaction window
     tag_names = extract_hashtags(content_text)
@@ -544,6 +570,10 @@ defmodule Kollective.Posts.Posts do
       |> Map.put("organization_id", org_id)
       |> Map.put("link_url", extracted_link)
       |> Map.put("status", initial_status)
+      |> Map.put("content", content_text)
+      |> Map.put("text", content_text)
+      |> Map.put("category", category)
+      |> Map.put("target_scope", target_scope)
 
     # Extract the nested poll data parameters from incoming attributes
     poll_attrs = attrs["poll"] || attrs[:poll]
@@ -671,7 +701,7 @@ defmodule Kollective.Posts.Posts do
       end)
 
       # B. Mention Notification Worker Queue (Only if post is clear/published)
-      if post.status == "published" do
+      if post.status in [:published, "published"] do
         %{
           "actor_id" => user.id,
           "text" => post.content,
@@ -698,7 +728,7 @@ defmodule Kollective.Posts.Posts do
       end
 
       # E. Queue up the background fan-out process seamlessly
-      if Map.get(post, :visibility) == "public" and post.status == "published" do
+      if Map.get(post, :visibility, "public") == "public" and post.status in [:published, "published"] do
         %{post_id: post.id, author_id: post.user_id}
         |> FeedFanoutWorker.new()
         |> Oban.insert!()
@@ -717,7 +747,7 @@ defmodule Kollective.Posts.Posts do
 
         # ─── UNIVERSAL REAL-TIME BROADCAST MATRIX ───
         # Only stream if the content successfully bypasses standard moderation queues
-        if hydrated_post.status == "published" and
+        if hydrated_post.status in [:published, "published"] and
              Map.get(hydrated_post, :visibility, "public") == "public" do
           # Build the exact format contract your React timeline listeners expect warning-free
           serialized_payload =
@@ -1111,6 +1141,7 @@ defmodule Kollective.Posts.Posts do
       from p in Post,
         join: u in assoc(p, :author),
         where: is_nil(p.deleted_at),
+        where: is_nil(p.in_reply_to_id),
         # ENFORCE BIDIRECTIONAL SOCIAL SAFETY SHIELDS
         where: p.user_id not in subquery(hidden_ids_subquery),
         # UNIFIED TIERS: Follows + Organizations + Geofenced Districts
@@ -1385,28 +1416,49 @@ defmodule Kollective.Posts.Posts do
       base_post_query()
       # Block safety shields
       |> apply_bidirectional_block_masks(current_user_id)
+      # Following feed filter (only posts from users/organizations the current user follows)
+      |> filter_by_following(current_user, params)
       # Text vs. Voice filter
-      |> filter_by_category(params["category"])
+      |> filter_by_category(
+        params["category"] ||
+          if(to_string(params["tab"]) in ["Voices", "voices", "voice"], do: "voice", else: nil)
+      )
       # JSONB GIN mention arrays
       |> filter_by_mentions(current_user_id, params["filter"])
       # Poll filter (if requested via /polls/stream or has_poll param)
       |> filter_polls(params, current_user_id)
 
-    # 🔄 Geographic geofencing for logged-in users vs guest users with detected country!
-    query =
-      if current_user do
-        # Filters by Local, State, Country, or World based on user properties
-        filter_by_geographic_scope(base_query, current_user, params["scope"])
+    # Filter out reply posts from main feeds unless explicitly requested
+    base_query =
+      if params["include_replies"] in ["true", true, "1"] or params["exclude_replies"] in ["false", false, "0"] do
+        base_query
       else
-        # For anonymous guests, filter by detected country parameter or public posts
-        filter_by_guest_geographic_scope(base_query, params)
+        from(p in base_query, where: is_nil(p.in_reply_to_id))
+      end
+
+    # 🔄 Geographic geofencing for logged-in users vs guest users with detected country!
+    # For following feed, bypass geographic restrictions so user sees posts from all followed creators
+    query =
+      if is_following_feed?(params) do
+        base_query
+      else
+        if current_user do
+          # Filters by Local, State, Country, or World based on user properties
+          filter_by_geographic_scope(base_query, current_user, params["scope"])
+        else
+          # For anonymous guests, filter by detected country parameter or public posts
+          filter_by_guest_geographic_scope(base_query, params)
+        end
       end
 
     # Continue the rest of your dynamic query builder pipeline without interruption
     query =
       query
       |> apply_cursor_pagination(params["cursor"] || params["max_id"])
-      |> sort_by_strategy(params["sort"])
+      |> sort_by_strategy(
+        params["sort"] ||
+          if(to_string(params["tab"]) in ["Popular", "popular"], do: "top", else: nil)
+      )
       |> limit(^limit)
       # Preload core dependencies using clean base constraints
       |> preload([
@@ -1445,6 +1497,92 @@ defmodule Kollective.Posts.Posts do
       case List.last(hydrated_entries) do
         nil -> nil
         last_item -> last_item.post.id
+      end
+
+    %{
+      entries: hydrated_entries,
+      next_cursor: next_cursor
+    }
+  end
+
+  @doc """
+  Fetches timeline posts published by or on behalf of a target user or organization account.
+  Supports exclude_replies, pinned, only_media, cursor/max_id pagination, and limit params.
+  Hydrates virtual fields for current_user if provided.
+  """
+  def list_user_posts(target_user, current_user \\ nil, params \\ %{}) do
+    limit =
+      case Map.get(params, "limit") do
+        val when is_binary(val) ->
+          case Integer.parse(val) do
+            {num, _} -> min(max(num, 1), 100)
+            :error -> 20
+          end
+
+        val when is_integer(val) ->
+          min(max(val, 1), 100)
+
+        _ ->
+          20
+      end
+
+    current_user_id = if current_user, do: current_user.id, else: nil
+    target_user_id = target_user.id
+
+    query =
+      base_post_query()
+      |> where([p], p.user_id == ^target_user_id or p.organization_id == ^target_user_id)
+      |> apply_bidirectional_block_masks(current_user_id)
+
+    query =
+      if params["exclude_replies"] in ["true", true, "1"] do
+        from(p in query, where: is_nil(p.in_reply_to_id))
+      else
+        query
+      end
+
+    query =
+      if params["pinned"] in ["true", true, "1"] do
+        from(p in query, where: not is_nil(p.pinned_at))
+      else
+        query
+      end
+
+    query =
+      if params["only_media"] in ["true", true, "1"] do
+        from(p in query,
+          join: a in assoc(p, :attachments),
+          distinct: true
+        )
+      else
+        query
+      end
+
+    query =
+      query
+      |> apply_cursor_pagination(params["max_id"] || params["cursor"])
+      |> order_by([p], desc: p.id)
+      |> limit(^limit)
+      |> preload([
+        :author,
+        :organization,
+        reblog_of: ^base_post_query(),
+        hashtags: [],
+        attachments: [],
+        poll: :options
+      ])
+
+    raw_posts = Repo.all(query)
+    hydrated_entries = hydrate_virtual_fields(raw_posts, current_user)
+
+    next_cursor =
+      case List.last(hydrated_entries) do
+        nil ->
+          nil
+
+        last_item ->
+          post = if is_map(last_item) && Map.has_key?(last_item, :post), do: last_item.post, else: last_item
+          to_string(post.id)
       end
 
     %{
@@ -1513,63 +1651,118 @@ defmodule Kollective.Posts.Posts do
       from(p in query, where: p.visibility == "public" and p.status == :published)
 
     country = params["country"] || params["country_code"] || params["country_name"]
+    normalized_country = if country, do: String.downcase(String.trim(to_string(country))), else: nil
+    scope = params["scope"] && String.downcase(String.trim(to_string(params["scope"])))
 
-    cond do
-      not is_nil(country) and country != "" ->
+    case scope do
+      s when s in ["local", "state"] ->
+        # Unauthenticated guests cannot have local or state
+        from p in base_guest_query, where: false
+
+      s when s in ["world", "global"] ->
+        if not is_nil(country) and country != "" do
+          from p in base_guest_query,
+            where: not is_nil(p.origin_country) and p.origin_country != ^country
+        else
+          base_guest_query
+        end
+
+      s when s in ["country", "national"] or (not is_nil(normalized_country) and s == normalized_country) ->
+        c = if not is_nil(country) and country != "", do: country, else: "US"
         from p in base_guest_query,
-          where:
-            p.origin_country == ^country or p.origin_country == "US" or
-              p.target_scope in [:country, :world]
+          where: p.origin_country == ^c or is_nil(p.origin_country)
 
-      params["scope"] == "country" ->
-        from p in base_guest_query,
-          where: p.target_scope == :country or p.origin_country == "US"
-
-      true ->
-        base_guest_query
+      _ ->
+        if not is_nil(country) and country != "" do
+          from p in base_guest_query,
+            where:
+              p.origin_country == ^country or p.origin_country == "US" or
+                p.target_scope in [:country, :world]
+        else
+          base_guest_query
+        end
     end
   end
 
   # Anonymous users bypass geo-fencing
   defp filter_by_geographic_scope(query, nil, _scope), do: query
 
-  defp filter_by_geographic_scope(query, _user, scope) when scope in [nil, "", "world", "all"],
-    do: query
-
-  defp filter_by_geographic_scope(query, user, "local") do
-    # LOCAL: Post matches EITHER political representation (L1, L2, L3) OR administrative locality (County/District/City)
-    local_condition = dynamic_local_condition(user)
-    from p in query, where: ^local_condition
+  defp filter_by_geographic_scope(query, user, scope) when is_atom(scope) do
+    filter_by_geographic_scope(query, user, to_string(scope))
   end
 
-  defp filter_by_geographic_scope(query, user, "state") do
-    # STATE: Post matches the user's state, but EXCLUDES posts that belong in their Local tab
-    local_condition = dynamic_local_condition(user)
-    not_local_condition = dynamic([p], not (^local_condition))
-    state = user.state || Map.get(user, :origin_state)
+  defp filter_by_geographic_scope(query, user, scope) when is_binary(scope) do
+    user_country = user.country || "US"
+    normalized_user_country = if user.country, do: String.downcase(String.trim(to_string(user.country))), else: nil
 
-    if state && state != "" do
-      from p in query,
-        where: p.origin_state == ^state,
-        where: ^not_local_condition
-    else
-      query
+    case String.downcase(String.trim(scope)) do
+      s when s in ["world", "global"] ->
+        # "World" tabs should display all the world posts except for the user's country
+        if user_country && user_country != "" do
+          from p in query,
+            where: not is_nil(p.origin_country) and p.origin_country != ^user_country
+        else
+          query
+        end
+
+      "local" ->
+        # "Local" will have user's district/city/county posts. Local tab is empty if address is not set.
+        if has_local_details?(user) do
+          local_condition = dynamic_local_condition(user)
+          from p in query, where: ^local_condition
+        else
+          from p in query, where: false
+        end
+
+      "state" ->
+        # "State" tab would have all user state's posts if local districts (via street address) is not provided,
+        # otherwise it would have all districts/cities/counties posts except of those of user.
+        # State tab is empty if state is not set.
+        state = user.state || Map.get(user, :origin_state)
+
+        if state && state != "" do
+          if has_local_details?(user) do
+            local_condition = dynamic_local_condition(user)
+            not_local_condition = dynamic([p], not (^local_condition))
+
+            from p in query,
+              where: p.origin_state == ^state,
+              where: ^not_local_condition
+          else
+            from p in query, where: p.origin_state == ^state
+          end
+        else
+          from p in query, where: false
+        end
+
+      s when s in ["country", "united states", "us", "usa", "united_states", "national"] or
+             (not is_nil(normalized_user_country) and s == normalized_user_country) ->
+        # "Country" tab should display all user country's posts if state is not provided by user,
+        # otherwise if state is provided, it will have posts from all states except from user's state.
+        state = user.state || Map.get(user, :origin_state)
+        base_country_query =
+          from p in query, where: p.origin_country == ^user_country or is_nil(p.origin_country)
+
+        if state && state != "" do
+          from p in base_country_query,
+            where: is_nil(p.origin_state) or p.origin_state != ^state
+        else
+          base_country_query
+        end
+
+      _other ->
+        query
     end
   end
 
-  defp filter_by_geographic_scope(query, user, "country") do
-    # COUNTRY: Post matches the user's country, but EXCLUDES their entire state
-    country = user.country || "US"
-    state = user.state || Map.get(user, :origin_state)
+  defp filter_by_geographic_scope(query, _user, _scope), do: query
 
-    query = from p in query, where: p.origin_country == ^country or is_nil(p.origin_country)
-
-    if state && state != "" do
-      from p in query,
-        where: is_nil(p.origin_state) or p.origin_state != ^state
-    else
-      query
-    end
+  defp has_local_details?(user) do
+    (not is_nil(user.district_l1_id) and user.district_l1_id != "") or
+      (not is_nil(user.district_l2_id) and user.district_l2_id != "") or
+      (not is_nil(user.district_l3_id) and user.district_l3_id != "") or
+      (not is_nil(user.county) and user.county != "" and not is_nil(user.state) and user.state != "") or
+      (not is_nil(user.city_id) and user.city_id != "")
   end
 
   defp dynamic_local_condition(user) do
@@ -1660,9 +1853,65 @@ defmodule Kollective.Posts.Posts do
     end
   end
 
-  defp filter_by_category(query, "voice") do
-    # Prioritizes emergency audio content sorting layers dynamically
-    from p in query, where: p.category == "voice", order_by: [desc: p.urgency_level]
+  defp is_following_feed?(params) do
+    val =
+      params["feed"] ||
+        params["filter"] ||
+        params["tab"] ||
+        params["category"] ||
+        ""
+
+    String.downcase(to_string(val)) in ["following"] or
+      params["following"] in ["true", true, "1", 1]
+  end
+
+  defp filter_by_following(query, current_user, params) do
+    if is_following_feed?(params) do
+      user_id =
+        case current_user do
+          %{id: uid} when not is_nil(uid) -> uid
+          _ -> nil
+        end
+
+      if user_id do
+        following_ids = Accounts.get_following_ids(user_id)
+        followed_org_ids = Accounts.get_followed_org_ids(user_id)
+        author_pool = Enum.uniq(following_ids ++ followed_org_ids)
+
+        if Enum.empty?(author_pool) do
+          from p in query, where: false
+        else
+          from p in query,
+            where: p.user_id in ^author_pool or p.organization_id in ^author_pool
+        end
+      else
+        # Anonymous or unauthenticated user has no follows
+        from p in query, where: false
+      end
+    else
+      query
+    end
+  end
+
+  defp filter_by_category(query, cat) when is_binary(cat) do
+    case String.downcase(String.trim(cat)) do
+      val when val in ["voice", "voices"] ->
+        from p in query, where: p.category == :voice, order_by: [desc: p.urgency_level]
+
+      val when val in ["post", "posts"] ->
+        from p in query, where: p.category == :post
+
+      _ ->
+        query
+    end
+  end
+
+  defp filter_by_category(query, :voice) do
+    from p in query, where: p.category == :voice, order_by: [desc: p.urgency_level]
+  end
+
+  defp filter_by_category(query, :post) do
+    from p in query, where: p.category == :post
   end
 
   defp filter_by_category(query, _), do: query
@@ -1675,9 +1924,9 @@ defmodule Kollective.Posts.Posts do
 
   defp filter_by_mentions(query, _, _), do: query
 
-  defp sort_by_strategy(query, "top") do
+  defp sort_by_strategy(query, s) when s in ["top", "popular"] do
     # Rank by hotness score velocity, using sequential chronological fallbacks
-    from p in query, order_by: [desc: p.score, desc: p.id]
+    from p in query, order_by: [desc: p.trending_score, desc: p.id]
   end
 
   defp sort_by_strategy(query, _) do
@@ -2393,7 +2642,7 @@ defmodule Kollective.Posts.Posts do
     post = Repo.get!(Post, post_id) |> Repo.preload(:author)
 
     # Security Guard: Only allow an appeal if the post is rejected and belongs to the user
-    if post.status == "rejected" and post.user_id == user.id do
+    if post.status in [:rejected, "rejected"] and post.user_id == user.id do
       Multi.new()
       # Update status to appealed
       |> Multi.update(
@@ -2592,14 +2841,27 @@ defmodule Kollective.Posts.Posts do
   end
 
   # --- Structural Helpers ---
+  defp extract_post(%{post: %Kollective.Posts.Post{} = p}), do: p
+  defp extract_post(%{post: %{} = p}) when is_map(p), do: p
+  defp extract_post(%Kollective.Posts.Post{} = p), do: p
+  defp extract_post(p) when is_map(p), do: Map.get(p, :post, p)
+  defp extract_post(_), do: nil
+
   def hydrate_virtual_fields(posts, nil) do
     # For anonymous/unauthenticated sessions, fetch counts in a single batch query
-    post_ids = Enum.map(posts, & &1.id)
+    post_ids =
+      posts
+      |> Enum.map(&extract_post/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.flat_map(fn p -> [p.id, p.reblog_of_id] end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
 
     likes_counts = fetch_batch_likes_counts(post_ids)
     reblogs_counts = fetch_batch_reblogs_counts(post_ids)
 
-    Enum.map(posts, fn post ->
+    Enum.map(posts, fn item ->
+      post = extract_post(item)
       %{
         post: %{post | emoji_reactions: format_for_ui(post.emoji_reactions)},
         likes_count: Map.get(likes_counts, post.id, 0),
@@ -2611,21 +2873,29 @@ defmodule Kollective.Posts.Posts do
   end
 
   def hydrate_virtual_fields(posts, user) do
-    post_ids = Enum.map(posts, & &1.id)
+    extracted_posts =
+      posts
+      |> Enum.map(&extract_post/1)
+      |> Enum.reject(&is_nil/1)
+
+    all_post_ids =
+      extracted_posts
+      |> Enum.flat_map(fn p -> [p.id, p.reblog_of_id] end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
 
     liked_ids =
       Repo.all(
         from l in Kollective.Posts.Like,
-          where: l.user_id == ^user.id and l.post_id in ^post_ids,
+          where: l.user_id == ^user.id and l.post_id in ^all_post_ids,
           select: l.post_id
       )
-      # Drops raw numbers into a super-fast MapSet index
       |> MapSet.new()
 
     reblogged_ids =
       Repo.all(
         from p in Kollective.Posts.Post,
-          where: p.user_id == ^user.id and p.reblog_of_id in ^post_ids,
+          where: p.user_id == ^user.id and p.reblog_of_id in ^all_post_ids and is_nil(p.deleted_at),
           select: p.reblog_of_id
       )
       |> MapSet.new()
@@ -2633,7 +2903,7 @@ defmodule Kollective.Posts.Posts do
     bookmarked_ids =
       Repo.all(
         from b in Kollective.Posts.PostBookmark,
-          where: b.user_id == ^user.id and b.post_id in ^post_ids,
+          where: b.user_id == ^user.id and b.post_id in ^all_post_ids,
           select: b.post_id
       )
       |> MapSet.new()
@@ -2641,14 +2911,14 @@ defmodule Kollective.Posts.Posts do
     user_votes =
       Repo.all(
         from v in Kollective.Posts.Vote,
-          where: v.user_id == ^user.id and v.post_id in ^post_ids,
+          where: v.user_id == ^user.id and v.post_id in ^all_post_ids,
           select: {v.post_id, v.type}
       )
       |> Map.new()
 
     # Pre-fetch poll vote markers for any attached polls in batch
     poll_ids =
-      posts
+      extracted_posts
       |> Enum.map(&Map.get(&1, :poll))
       |> Enum.reject(&is_nil/1)
       |> Enum.reject(&match?(%Ecto.Association.NotLoaded{}, &1))
@@ -2667,15 +2937,21 @@ defmodule Kollective.Posts.Posts do
       end
 
     # Pre-fetch totals counts for action displays
-    likes_counts = fetch_batch_likes_counts(post_ids)
-    reblogs_counts = fetch_batch_reblogs_counts(post_ids)
+    likes_counts = fetch_batch_likes_counts(all_post_ids)
+    reblogs_counts = fetch_batch_reblogs_counts(all_post_ids)
 
     # 2. DATA HYDRATION LOOP
-    Enum.map(posts, fn post ->
-      # Calculate membership states exactly ONCE per iteration pass to save CPU cycles
-      is_liked? = MapSet.member?(liked_ids, post.id)
-      is_reblogged? = MapSet.member?(reblogged_ids, post.id)
-      is_bookmarked? = MapSet.member?(bookmarked_ids, post.id)
+    Enum.map(posts, fn item ->
+      post = extract_post(item)
+      target_id = post.reblog_of_id || post.id
+
+      # Calculate membership states taking reblog target or direct post ID into account
+      is_liked? = MapSet.member?(liked_ids, post.id) || MapSet.member?(liked_ids, target_id)
+      is_reblogged? =
+        MapSet.member?(reblogged_ids, post.id) ||
+        MapSet.member?(reblogged_ids, target_id) ||
+        (post.reblog_of_id != nil and post.user_id == user.id)
+      is_bookmarked? = MapSet.member?(bookmarked_ids, post.id) || MapSet.member?(bookmarked_ids, target_id)
 
       # Extract structural user emojis from internal schema lists
       my_active_emojis =
@@ -2715,6 +2991,8 @@ defmodule Kollective.Posts.Posts do
         post
         | poll: hydrated_poll,
           bookmarked: is_bookmarked?,
+          liked: is_liked?,
+          reblogged: is_reblogged?,
           vote_data: Map.get(user_votes, post.id) || nil,
           emoji_reactions: format_for_ui(post.emoji_reactions),
           data: Map.put(post.data || %{}, "my_reactions", my_active_emojis)
@@ -2724,8 +3002,8 @@ defmodule Kollective.Posts.Posts do
       # Packages data properties perfectly to match Feed and Tab streams
       %{
         post: updated_post_struct,
-        likes_count: Map.get(likes_counts, post.id, 0),
-        reblogs_count: Map.get(reblogs_counts, post.id, 0),
+        likes_count: Map.get(likes_counts, post.id, 0) || Map.get(likes_counts, target_id, 0),
+        reblogs_count: Map.get(reblogs_counts, post.id, 0) || Map.get(reblogs_counts, target_id, 0),
         # Authoritative flat variables consumed directly by your React icons
         has_liked: is_liked?,
         has_reblogged: is_reblogged?
@@ -2757,6 +3035,7 @@ defmodule Kollective.Posts.Posts do
   defp format_for_ui(_), do: %{}
 
   # --- Fast Aggregate Batch Queries ---
+  defp fetch_batch_likes_counts([]), do: %{}
   defp fetch_batch_likes_counts(post_ids) do
     from(l in Kollective.Posts.Like,
       where: l.post_id in ^post_ids,
@@ -2767,6 +3046,7 @@ defmodule Kollective.Posts.Posts do
     |> Map.new()
   end
 
+  defp fetch_batch_reblogs_counts([]), do: %{}
   defp fetch_batch_reblogs_counts(post_ids) do
     from(p in Kollective.Posts.Post,
       where: p.reblog_of_id in ^post_ids,
@@ -2797,6 +3077,18 @@ defmodule Kollective.Posts.Posts do
 
     in_reply_to_username = (author && author.username) || nil
 
+    clean_attrs =
+      Map.drop(attrs, [
+        "id",
+        :id,
+        "in_reply_to_id",
+        :in_reply_to_id,
+        "root_post_id",
+        :root_post_id,
+        "in_reply_to_username",
+        :in_reply_to_username
+      ])
+
     # 2. Build full transactional Multi sequence
     Multi.new()
     # Step A: Insert the reply with all explicit relational metadata mappings
@@ -2810,7 +3102,7 @@ defmodule Kollective.Posts.Posts do
         in_reply_to_username: in_reply_to_username
         # in_reply_to_account_id: reply_to.user_id
       }
-      |> Post.changeset(attrs)
+      |> Post.changeset(clean_attrs)
     end)
     |> Multi.update_all(
       :increment_note_count,

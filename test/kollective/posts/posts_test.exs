@@ -276,5 +276,32 @@ defmodule Kollective.Posts.PostsTest do
       assert hydrated_liked.has_liked == true
       assert hydrated_liked.likes_count == 1
     end
+
+    test "get_post_context returns descendants for a post with replies", %{user: user} do
+      replier = user_fixture(%{username: "context_replier"})
+
+      {:ok, root_post} =
+        Posts.create_post(user, %{
+          "content" => "Parent post for context test",
+          "visibility" => "public"
+        })
+
+      {:ok, reply} =
+        Posts.create_reply(replier, root_post, %{
+          "content" => "Reply post for context test",
+          "visibility" => "public"
+        })
+
+      assert {:ok, context} = Posts.get_post_context(root_post.id, user)
+      assert context.focus.post.id == root_post.id
+      assert length(context.descendants) == 1
+      assert hd(context.descendants).post.id == reply.id
+
+      # Verify main feed excludes replies by default
+      feed = Posts.list_posts_for_feed(user, %{})
+      feed_ids = Enum.map(feed.entries, & &1.post.id)
+      assert root_post.id in feed_ids
+      refute reply.id in feed_ids
+    end
   end
 end

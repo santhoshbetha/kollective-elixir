@@ -11,7 +11,7 @@ defmodule Kollective.Posts.Post do
   @allowed_scopes [:local, :state, :country, :world]
   @visibilities ["public", "private", "unlisted", "direct"]
 
-  @regular_limit 280
+  @regular_limit 500
   @voice_limit 1000
 
   schema "posts" do
@@ -25,76 +25,76 @@ defmodule Kollective.Posts.Post do
     # 2. Cleanup for Discovery/Social Actions
     # This ensures that if a post is deleted, all related "liked", "reblogged",
     # or "replied" notifications are wiped from the DB.
-    has_many :notifications, Notification, on_delete: :delete_all
-    has_many :likes, Like
+    has_many(:notifications, Notification, on_delete: :delete_all)
+    has_many(:likes, Like)
 
     # --- CONTENT & DISPLAY ---
     # HTML/Formatted content
-    field :content, :string
+    field(:content, :string)
     # Plain text (Searchable)
-    field :text, :string
+    field(:text, :string)
     # Content warning text
-    field :sensitive, :boolean, default: false
-    field :spoiler_text, :string
+    field(:sensitive, :boolean, default: false)
+    field(:spoiler_text, :string)
     # Short snippet
-    field :summary, :string
+    field(:summary, :string)
     # Store as 'english', 'spanish', etc.
-    field :language, :string, default: "english"
+    field(:language, :string, default: "english")
 
     # Virtual field: exists only in memory during the changeset
-    field :language_override, :string, virtual: true
-    field :content_type, :string, default: "text/html"
+    field(:language_override, :string, virtual: true)
+    field(:content_type, :string, default: "text/html")
 
     # Store custom emoji shortcodes if you want :smile: support
     # Store a list of maps: [%{shortcode: "elixir", url: "https://..."}]
-    field :emojis, {:array, :map}, virtual: true, default: []
+    field(:emojis, {:array, :map}, virtual: true, default: [])
 
     # Store reactions as: %{"🚀" => 5, "🔥" => 2}
-    field :emoji_reactions, {:array, :map}, default: []
+    field(:emoji_reactions, {:array, :map}, default: [])
 
     # Track which app created the post (Web, Mobile, API)
-    field :application_name, :string
+    field(:application_name, :string)
 
     # Post Category: :post (standard) or :voice (urgent/protest)
-    field :category, Ecto.Enum, values: [:post, :voice], default: :post
+    field(:category, Ecto.Enum, values: [:post, :voice], default: :post)
 
     # Trending score calculation column:
-    field :trending_score, :float, default: 0.0
+    field(:trending_score, :float, default: 0.0)
 
     # Optional: Level of urgency for Voice posts (1-5)
-    field :urgency_level, :integer, default: 0
+    field(:urgency_level, :integer, default: 0)
 
     # --- CATEGORIZATION & RANKING ---
-    field :visibility, :string, default: "public"
+    field(:visibility, :string, default: "public")
 
-    field :local, :boolean, default: true
+    field(:local, :boolean, default: true)
 
     # Range: :local, :state, :country, :world
-    field :target_scope, Ecto.Enum, values: @allowed_scopes, default: :local
+    field(:target_scope, Ecto.Enum, values: @allowed_scopes, default: :local)
 
     # The Geographic Anchor (Where it appears in "Local" tabs)
-    field :origin_city_id, :integer
-    field :origin_state, :string
-    field :origin_country, :string, default: "US"
-    field :origin_county, :string
+    field(:origin_city_id, :integer)
+    field(:origin_state, :string)
+    field(:origin_country, :string, default: "US")
+    field(:origin_county, :string)
     # federal_district
-    field :origin_district_l1, :string
+    field(:origin_district_l1, :string)
     # state_senate_district
-    field :origin_district_l2, :string
+    field(:origin_district_l2, :string)
     # state_district
-    field :origin_district_l3, :string
+    field(:origin_district_l3, :string)
 
     # Discovery/Voting / Quora-style Ranking
-    field :upvotes_count, :integer, virtual: true, default: 0
-    field :downvotes_count, :integer, virtual: true, default: 0
-    field :score, :integer, virtual: true, default: 0
+    field(:upvotes_count, :integer, virtual: true, default: 0)
+    field(:downvotes_count, :integer, virtual: true, default: 0)
+    field(:score, :integer, virtual: true, default: 0)
 
     # Engagement Cache
-    field :likes_count, :integer, virtual: true, default: 0
-    field :reblogs_count, :integer, virtual: true, default: 0
-    field :replies_count, :integer, virtual: true, default: 0
-    field :quotes_count, :integer, virtual: true, default: 0
-    field :vote_data, :any, virtual: true
+    field(:likes_count, :integer, virtual: true, default: 0)
+    field(:reblogs_count, :integer, virtual: true, default: 0)
+    field(:replies_count, :integer, virtual: true, default: 0)
+    field(:quotes_count, :integer, virtual: true, default: 0)
+    field(:vote_data, :any, virtual: true)
 
     # --- THREADING ---
     # Self-referential relationships for replies
@@ -103,9 +103,9 @@ defmodule Kollective.Posts.Post do
     # Self-Referential: The database guarantees that if a post has a root_post_id, that "root_post" must
     # actually exist in the posts table. If you try to delete the parent, the database can automatically
     # delete all children
-    belongs_to :root_post, __MODULE__, foreign_key: :root_post_id
+    belongs_to(:root_post, __MODULE__, foreign_key: :root_post_id)
     # The Direct Parent
-    belongs_to :in_reply_to_post, __MODULE__, foreign_key: :in_reply_to_id
+    belongs_to(:in_reply_to_post, __MODULE__, foreign_key: :in_reply_to_id)
 
     # These allow a post to see its "subordinates"
     # Retrieves all posts nested under this one (the "children")
@@ -113,63 +113,64 @@ defmodule Kollective.Posts.Post do
     #              current module followed by _id (e.g., post_id). Since you used custom names like
     #              root_post_id and in_reply_to_id, you must tell the "has_many" side exactly which
     #              column to look for in the database.
-    has_many :children, __MODULE__, foreign_key: :root_post_id
+    has_many(:children, __MODULE__, foreign_key: :root_post_id)
     # Retrieves all posts that were sent as a direct reply to this one
     # parent ID
-    has_many :all_direct_replies, __MODULE__, foreign_key: :in_reply_to_id
+    has_many(:all_direct_replies, __MODULE__, foreign_key: :in_reply_to_id)
 
     # Virtual field to hold the nested reply tree when fetching a thread
     # With this, Elixir can hold the nested replies without trying to save them to a database column
     # <--- Virtual field for the tree
-    field :replies, {:array, :map}, virtual: true, default: []
+    field(:replies, {:array, :map}, virtual: true, default: [])
 
     # Denormalized handle for "Replying to @user" display without extra joins
-    field :in_reply_to_username, :string
+    field(:in_reply_to_username, :string)
     # Conversation ID for threading
-    field :context, :string
+    field(:context, :string)
     # For "Direct Messages" or "Group" specific threads
-    field :direct_conversation_id, :integer
+    field(:direct_conversation_id, :integer)
 
     # Quotes & Reblogs % Votes
-    belongs_to :quote, __MODULE__, foreign_key: :quote_id
-    field :quote_url, :string
+    belongs_to(:quote, __MODULE__, foreign_key: :quote_id)
+    field(:quote_url, :string)
 
     # The post being amplified
-    belongs_to :reblog_of, __MODULE__, foreign_key: :reblog_of_id
+    belongs_to(:reblog_of, __MODULE__, foreign_key: :reblog_of_id)
 
-    has_many :votes, Vote
+    has_many(:votes, Vote)
 
     # Link to Hashtags via the join table string
-    many_to_many :hashtags, Hashtag,
+    many_to_many(:hashtags, Hashtag,
       join_through: "posts_hashtags",
       on_replace: :delete
+    )
 
     # For tagging users: [%{username: "alice", id: 1}, ...]
     # MISSING: List of tagged users
-    field :mentions, {:array, :map}, default: []
+    field(:mentions, {:array, :map}, default: [])
 
     # To support "Voice" posts if they have a physical location/time
-    field :event_data, :map
+    field(:event_data, :map)
 
     # --- VIRTUAL (Per-User State) ---
     # These are populated during fetch based on the "current_user"
-    field :liked, :boolean, virtual: true, default: false
-    field :reblogged, :boolean, virtual: true, default: false
-    field :muted, :boolean, virtual: true, default: false
+    field(:liked, :boolean, virtual: true, default: false)
+    field(:reblogged, :boolean, virtual: true, default: false)
+    field(:muted, :boolean, virtual: true, default: false)
     # Virtual field to hide specific loud threads for the current user
-    field :thread_muted, :boolean, virtual: true, default: false
-    field :bookmarked, :boolean, virtual: true, default: false
-    field :pinned, :boolean, virtual: true, default: false
+    field(:thread_muted, :boolean, virtual: true, default: false)
+    field(:bookmarked, :boolean, virtual: true, default: false)
+    field(:pinned, :boolean, virtual: true, default: false)
 
     # --- DATES & LIFECYCLE ---
-    field :published_at, :utc_datetime
-    field :edited_at, :utc_datetime
-    field :edit_count, :integer, default: 0
+    field(:published_at, :utc_datetime)
+    field(:edited_at, :utc_datetime)
+    field(:edit_count, :integer, default: 0)
     # Useful for temporary "Voice" posts
-    field :expires_at, :utc_datetime
-    field :pinned_at, :utc_datetime
+    field(:expires_at, :utc_datetime)
+    field(:pinned_at, :utc_datetime)
     # For soft delete
-    field :deleted_at, :utc_datetime
+    field(:deleted_at, :utc_datetime)
 
     # --- EXTENSIONS ---
     has_one(:poll, Poll)
@@ -179,42 +180,45 @@ defmodule Kollective.Posts.Post do
     #   1. Add a new field to track the processing status of the video.
     #   this allows your React frontend to show a "Processing..." state and disable interactions
     #   until the video is ready.
-    field :processing_status, Ecto.Enum,
+    field(:processing_status, Ecto.Enum,
       values: [:pending, :processing, :completed, :failed],
       default: :pending
+    )
 
-    field :status, Ecto.Enum,
+    field(:status, Ecto.Enum,
       values: [:published, :pending, :rejected, :appealed],
       default: :published
+    )
 
     # OpenGraph Link Preview Parameters (Stored directly on the row for fast O(1) feed reads)
     # "https://bbc.com..."
-    field :link_url, :string
+    field(:link_url, :string)
     # "Breaking News: AI Milestones reached"
-    field :link_title, :string
+    field(:link_title, :string)
     # "BBC coverage on newest technology shifts..."
-    field :link_description, :string
+    field(:link_description, :string)
     # Extracted OpenGraph image thumbnail URL
-    field :link_preview_image, :string
+    field(:link_preview_image, :string)
 
-    has_many :attachments, PostAttachment,
+    has_many(:attachments, PostAttachment,
       foreign_key: :post_id,
       on_replace: :delete
+    )
 
-    field :rejection_reason, :string
-    field :rejected_at, :utc_datetime
+    field(:rejection_reason, :string)
+    field(:rejected_at, :utc_datetime)
 
-    belongs_to :rejected_by, User, foreign_key: :rejected_by_id
+    belongs_to(:rejected_by, User, foreign_key: :rejected_by_id)
 
-    field :appeal_reason, :string
-    field :appealed_at, :utc_datetime
+    field(:appeal_reason, :string)
+    field(:appealed_at, :utc_datetime)
 
     # Event Coordination logic for those "Voice" posts
     # Stores: %{meeting_time: "...", location_name: "...", lat: 0.0, lng: 0.0}
-    field :coordination_data, :map, default: %{}
+    field(:coordination_data, :map, default: %{})
 
-    field :data, :map, default: %{}
-    field :metadata, :map, default: %{}
+    field(:data, :map, default: %{})
+    field(:metadata, :map, default: %{})
     timestamps()
   end
 

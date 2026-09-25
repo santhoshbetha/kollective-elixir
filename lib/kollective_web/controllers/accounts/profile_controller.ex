@@ -103,6 +103,36 @@ defmodule KollectiveWeb.ProfileController do
   end
 
   @doc """
+  GET /api/v1/accounts/:username_or_id/posts
+  Returns timeline posts published by or on behalf of the requested account handle/ULID.
+  """
+  def user_posts(conn, %{"username_or_id" => username_or_id} = params) do
+    current_user = conn.assigns[:current_user]
+
+    case Accounts.get_user_profile(username_or_id) do
+      nil ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found", message: "Account profile not found."})
+
+      target_user ->
+        %{entries: entries, next_cursor: next_cursor} =
+          Kollective.Posts.Posts.list_user_posts(target_user, current_user, params)
+
+        serialized = KollectiveWeb.PostJSON.index(%{entries: entries})
+
+        conn
+        |> put_status(:ok)
+        |> json(%{
+          status: "success",
+          data: serialized,
+          posts: serialized,
+          next_cursor: next_cursor
+        })
+    end
+  end
+
+  @doc """
   GET /api/v1/profile/authorized_organizations
   Exposes all organization profiles the authenticated viewer has permission to act/post as.
   Feeds the identity toggle select dropdown row inside the React post composer .

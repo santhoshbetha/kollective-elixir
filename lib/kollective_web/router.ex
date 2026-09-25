@@ -118,8 +118,6 @@ defmodule KollectiveWeb.Router do
   scope "/api/v1", KollectiveWeb do
     pipe_through([:api, :api_authenticated])
 
-    get("/accounts/:username_or_id", ProfileController, :show)
-
     # Accessible account profiles (personal + active orgs)
     get("/profiles", ProfileController, :index_profiles)
 
@@ -148,6 +146,10 @@ defmodule KollectiveWeb.Router do
 
     # Single universal button toggle route handling follow, block, and mutes uniformly
     post("/relationships/toggle", RelationshipController, :toggle)
+
+    # Explicit follow / unfollow account routes
+    post("/accounts/:id/follow", RelationshipController, :follow_account)
+    post("/accounts/:id/unfollow", RelationshipController, :unfollow_account)
   end
 
   ## Authentication routes
@@ -163,7 +165,6 @@ defmodule KollectiveWeb.Router do
     pipe_through([:api, :api_authenticated])
 
     # Public Search and Request Pipelines
-    get("/organizations/search", OrganizationController, :search)
     post("/organizations/:org_id/join", OrganizationController, :join_request)
 
     # Internal Corporate Governance Panels
@@ -255,6 +256,10 @@ defmodule KollectiveWeb.Router do
   scope "/api/v1", KollectiveWeb do
     pipe_through([:api, KollectiveWeb.Plugs.OptionalAPIAuth])
 
+    # 👤 Account Profiles & Profile Timeline Posts (Optional Auth)
+    get("/accounts/:username_or_id", ProfileController, :show)
+    get("/accounts/:username_or_id/posts", ProfileController, :user_posts)
+
     # GET /api/v1/posts -> Returns Home or Communities Feed (supports unauthenticated guests with ?country=US parameter)
     get("/posts", PostController, :index)
     get("/posts/:id", PostController, :show)
@@ -262,6 +267,10 @@ defmodule KollectiveWeb.Router do
 
     # 🗳️ GET /api/v1/polls/stream -> Streams Poll posts across Local, State, Country, and World scopes
     get("/polls/stream", PollController, :stream)
+
+    # 📈 Optional Auth Public Discovery & Search
+    get("/trending/tags", TrendingController, :index)
+    get("/organizations/search", OrganizationController, :search)
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -356,7 +365,6 @@ defmodule KollectiveWeb.Router do
     # ─── 📰 USER FEEDS & TIMELINES ───
     get("/timeline/home", FeedController, :home)
     get("/communities/feed", FeedController, :feed)
-    get("/trending/tags", TrendingController, :index)
   end
 
   scope "/api/v1", KollectiveWeb do
