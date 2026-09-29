@@ -259,6 +259,8 @@ defmodule KollectiveWeb.Router do
     # 👤 Account Profiles & Profile Timeline Posts (Optional Auth)
     get("/accounts/:username_or_id", ProfileController, :show)
     get("/accounts/:username_or_id/posts", ProfileController, :user_posts)
+    get("/accounts/:username_or_id/followers", ProfileController, :followers)
+    get("/accounts/:username_or_id/following", ProfileController, :following)
 
     # GET /api/v1/posts -> Returns Home or Communities Feed (supports unauthenticated guests with ?country=US parameter)
     get("/posts", PostController, :index)
@@ -328,6 +330,7 @@ defmodule KollectiveWeb.Router do
     # /api/v1/posts/:id/replies -> Creates a new reply to the specified post, with content and optional image
     post("/posts/:id/replies", PostController, :create_reply)
     post("/posts/:post_id/bookmark", BookmarkController, :toggle)
+    delete("/posts/:post_id/bookmark", BookmarkController, :delete)
 
     # Grassroots Registrations & Launch Wizards
     post("/businesses", BusinessController, :create)
@@ -381,6 +384,7 @@ defmodule KollectiveWeb.Router do
 
     # Bookmark Timeline Feed & Action Switches
     get("/bookmarks", BookmarkController, :index)
+    delete("/bookmarks/:bookmark_id", BookmarkController, :delete)
   end
 
   scope "/api/v1", KollectiveWeb do

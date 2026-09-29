@@ -49,7 +49,8 @@ defmodule KollectiveWeb.PostController do
     content_text = post_params["content"] || post_params["text"] || ""
 
     # Normalize category: "Voices" / "voice" -> "voice", else "post"
-    raw_category = post_params["category"] || (if post_params["isVoice"], do: "voice", else: "post")
+    raw_category = post_params["category"] || if post_params["isVoice"], do: "voice", else: "post"
+
     category =
       case to_string(raw_category || "") |> String.downcase() do
         "voice" -> "voice"
@@ -59,6 +60,7 @@ defmodule KollectiveWeb.PostController do
 
     # Normalize audience / target_scope
     raw_audience = post_params["target_scope"] || post_params["audience"] || "world"
+
     target_scope =
       case to_string(raw_audience || "") |> String.downcase() do
         s when s in ["local", "my_location"] -> "local"
@@ -73,7 +75,10 @@ defmodule KollectiveWeb.PostController do
       |> Map.put("text", content_text)
       |> Map.put("category", category)
       |> Map.put("target_scope", target_scope)
-      |> Map.put_new("visibility", if(raw_audience == "Followers Only", do: "private", else: "public"))
+      |> Map.put_new(
+        "visibility",
+        if(raw_audience == "Followers Only", do: "private", else: "public")
+      )
 
     # 1. Organization / Identity Context Gateway
     org_id = post_params["organization_id"] || post_params["override_author_id"]
@@ -175,7 +180,12 @@ defmodule KollectiveWeb.PostController do
                 |> json(%{status: "ok", data: PostJSON.show(post)})
 
               {:error, %Ecto.Changeset{} = changeset} ->
-                errors_map = Ecto.Changeset.traverse_errors(changeset, &KollectiveWeb.ChangesetJSON.translate_error/1)
+                errors_map =
+                  Ecto.Changeset.traverse_errors(
+                    changeset,
+                    &KollectiveWeb.ChangesetJSON.translate_error/1
+                  )
+
                 error_msg =
                   Enum.map_join(errors_map, "; ", fn {field, msgs} ->
                     "#{field}: #{Enum.join(List.wrap(msgs), ", ")}"
@@ -463,20 +473,30 @@ defmodule KollectiveWeb.PostController do
   def handle_like(conn, %{"id" => post_id}) do
     user = conn.assigns.current_user
 
+    # 🚀 The controller now reads the count directly out of the context return tuple!
     case Posts.toggle_like(user.id, post_id) do
-      {:ok, :liked} ->
+      {:ok, :liked, updated_count} ->
         conn
         |> put_status(:ok)
-        |> json(%{status: "success", count: Posts.get_like_count(post_id), has_liked: true})
+        |> json(%{
+          status: "success",
+          count: updated_count,
+          has_liked: true
+        })
 
-      {:ok, :unliked} ->
+      {:ok, :unliked, updated_count} ->
         conn
         |> put_status(:ok)
-        |> json(%{status: "success", count: Posts.get_like_count(post_id), has_liked: false})
+        |> json(%{
+          status: "success",
+          count: updated_count,
+          has_liked: false
+        })
 
       {:error, _reason} ->
-        # Always handle the error fallback path to prevent 500 errors
-        send_resp(conn, 422, "Unable to process request")
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{status: "error", error: "Unable to process preference state toggle."})
     end
   end
 
@@ -484,28 +504,31 @@ defmodule KollectiveWeb.PostController do
   def handle_reblog(conn, %{"id" => post_id}) do
     user = conn.assigns.current_user
 
-    # Execute the atomic social toggle block in your context layer
+    IO.inspect("handle_reblog")
+    IO.inspect(post_id, label: "post_id")
+
     case Posts.reblog_post(user.id, post_id) do
       {:ok, :reblogged, reblog_struct} ->
-        # 1. SUCCESS TIER A: Post successfully boosted
-        # Preload author and attachments for your uniform JSON layout contract
-        hydrated_post = Kollective.Repo.preload(reblog_struct, [:author, :attachments])
-        [hydrated_item] = Posts.hydrate_virtual_fields([hydrated_post], user)
+        # Preload and hydrate the original target post so the returned card has updated reblogs_count
+        original_post =
+          Posts.get_post!(post_id)
+          |> Kollective.Repo.preload([:author, :attachments, :hashtags, poll: :options])
+
+        [hydrated_item] = Posts.hydrate_virtual_fields([original_post], user)
 
         conn
         |> put_status(:created)
         |> json(%{
           status: "success",
           action: "reblogged",
-          # Return the complete serialized card to replace state arrays in React atomically
-          data: PostJSON.show(hydrated_item)
+          data: PostJSON.show(hydrated_item),
+          reblog: PostJSON.show(reblog_struct)
         })
 
       {:ok, :unreblogged} ->
-        # 2. SUCCESS TIER B: Boost successfully retracted (undone)
-        # Fetch the original post to return updated count metrics cleanly
         original_post =
-          Posts.get_post!(post_id) |> Kollective.Repo.preload([:author, :attachments])
+          Posts.get_post!(post_id)
+          |> Kollective.Repo.preload([:author, :attachments, :hashtags, poll: :options])
 
         [hydrated_item] = Posts.hydrate_virtual_fields([original_post], user)
 
@@ -518,7 +541,6 @@ defmodule KollectiveWeb.PostController do
         })
 
       {:error, :self_reblog_not_allowed} ->
-        # 3. SAFETY CONTROLS: Rejection block shielding self-referencing actions
         conn
         |> put_status(:unprocessable_entity)
         |> json(%{error: "You cannot reblog your own post."})
@@ -532,7 +554,7 @@ defmodule KollectiveWeb.PostController do
 
   # POST /api/v1/posts/:id/replies
   # POST /api/v1/posts/:id/reply
-  def create_reply(conn, %{"id" => parent_id} = params) do
+  def create_replyX(conn, %{"id" => parent_id} = params) do
     user = conn.assigns.current_user
     ip = guest_ip(conn)
 
@@ -614,6 +636,131 @@ defmodule KollectiveWeb.PostController do
 
                 # 4. DISPATCH REAL-TIME WEBSOCKET PUSHES DOWNSTREAM
                 # Broadcast to the thread details room channel to append the comment on active screens live
+                Phoenix.PubSub.broadcast(
+                  Kollective.PubSub,
+                  "post_details:#{parent_post.root_post_id || parent_post.id}",
+                  {"new_reply",
+                   %{reply: hydrated_reply, author_shadow_banned?: user.is_shadow_banned}}
+                )
+
+                if parent_post.user_id && parent_post.user_id != user.id do
+                  %{
+                    "recipient_id" => parent_post.user_id,
+                    "actor_id" => user.id,
+                    "reply_id" => hydrated_reply.id
+                  }
+                  |> Kollective.Workers.ReplyNotificationWorker.new()
+                  |> Oban.insert()
+                end
+
+                conn
+                |> put_status(:created)
+                |> json(%{
+                  status: "success",
+                  data: PostJSON.show(hydrated_item)
+                })
+
+              {:error, changeset} ->
+                conn
+                |> put_status(:unprocessable_entity)
+                |> json(%{status: "error", errors: ChangesetJSON.error(changeset)})
+            end
+        end
+    end
+  end
+
+  # POST /api/v1/posts/:id/replies
+  # POST /api/v1/posts/:id/reply
+  def create_reply(conn, %{"id" => route_id} = params) do
+    user = conn.assigns.current_user
+    ip = guest_ip(conn)
+
+    post_params = Map.get(params, "post", params)
+    content_text = post_params["text"] || post_params["content"] || ""
+    post_params = Map.put(post_params, "content", content_text)
+
+    # 🚀 THE ELIXIR PARAMETER FIX:
+    # Check if an explicit "parent_id" was sent in the body JSON payload.
+    # Fall back directly to the route_id parameter if a top-level focus post reply path is fired.
+    target_parent_id =
+      Map.get(params, "parent_id") || Map.get(post_params, "parent_id") || route_id
+
+    # 1. Locate the target parent post first to verify existence and preload assets
+    case Repo.get(Post, target_parent_id) |> Repo.preload([:author]) do
+      nil ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "The post you are trying to reply to does not exist."})
+
+      parent_post ->
+        # Inherit category and target_scope from parent post if missing
+        post_params =
+          post_params
+          |> Map.put_new("category", parent_post.category || "post")
+          |> Map.put_new("target_scope", parent_post.target_scope || "local")
+
+        # 2. CONTENT AUDITING GATES: Run the reply text through your master priority matrix
+        case Moderation.determine_status(user, post_params) do
+          {:error, :forbidden_content, matched_word} ->
+            # ENFORCE TWO-STRIKE BLACKLIST SHIELD COOLDOWN
+            Moderation.track_denied_word(user.id, matched_word)
+
+            case Moderation.record_denial(user.id) do
+              :cooldown ->
+                triggered_words = Moderation.get_denied_words(user.id)
+
+                Security.blacklist_ip_temporary(
+                  ip,
+                  :timer.hours(1)
+                )
+
+                Accounts.flag_user_for_spam("user:#{user.id}")
+
+                enqueue_security_alert(
+                  "cooldown_triggered",
+                  user.id,
+                  ip,
+                  2,
+                  "Triggered reply words: #{triggered_words}"
+                )
+
+                # Trick the bot with fake success codes
+                conn
+                |> put_status(:created)
+                |> json(%{
+                  status: "success",
+                  message: "Post successfully queued for system delivery."
+                })
+
+              :ok ->
+                enqueue_security_alert(
+                  "hard_ban_attempt",
+                  user.id,
+                  ip,
+                  1,
+                  "Triggered reply word: #{matched_word}"
+                )
+
+                conn
+                |> put_status(:unprocessable_entity)
+                |> json(%{error: "Your reply contains prohibited language."})
+            end
+
+          {:ok, status} ->
+            # 3. NORMAL PROCESSING PIPELINE
+            status_str = Atom.to_string(status)
+            final_params = Map.put(post_params, "status", status_str)
+
+            # Pass the dynamic sub-reply target block down into your database insertion layers
+            case Posts.create_reply(user, parent_post, final_params) do
+              {:ok, reply} ->
+                # Preload core dependencies to fulfill your strict PostJSON rendering layout contract
+                hydrated_reply = Repo.preload(reply, [:author, :attachments])
+                [hydrated_item] = Posts.hydrate_virtual_fields([hydrated_reply], user)
+
+                # 4. DISPATCH REAL-TIME WEBSOCKET PUSHES DOWNSTREAM
+                # Broadcast to the thread details room channel to append the comment on active screens live
+                # Tracks the thread via root_post_id fallback so deep replies stay inside the active view
                 Phoenix.PubSub.broadcast(
                   Kollective.PubSub,
                   "post_details:#{parent_post.root_post_id || parent_post.id}",

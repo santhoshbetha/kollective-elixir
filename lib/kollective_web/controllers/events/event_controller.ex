@@ -9,10 +9,48 @@ defmodule KollectiveWeb.EventController do
   alias KollectiveWeb.{ChangesetJSON, EventJSON}
 
   # Apply the same rate limit as posts (or stricter, e.g., 2 events/min)
-  plug KollectiveWeb.Plugs.RateLimiter when action in [:create]
+  plug(KollectiveWeb.Plugs.RateLimiter when action in [:create])
 
   # GET /api/v1/events
-  def index(conn, _params) do
+  # Destructure params to capture the incoming optional "cursor" string query param
+  def index(conn, params) do
+    user = conn.assigns[:current_user]
+    cursor = Map.get(params, "cursor")
+    limit = 15
+
+    # 1. Build base visibility query scope matching user authorization context
+    base_query = Events.list_visible_events_query(user)
+
+    # 2. Dynamically apply cursor filtering and page sizing constraints
+    paginated_query =
+      base_query
+      |> Events.apply_cursor_pagination_events(cursor, limit)
+
+    # 3. Fetch current segment rows from Postgres
+    raw_events = Kollective.Repo.all(paginated_query)
+
+    # 4. Inject transient user join (RSVP/Interested) membership flags if logged in
+    events =
+      if user do
+        Events.attach_user_join_states(raw_events, user)
+      else
+        raw_events
+      end
+
+    # 5. Extract the ID of the last item in the list array to serve as the next page pointer
+    next_cursor =
+      case List.last(events) do
+        nil -> nil
+        last_item -> to_string(last_item.id)
+      end
+
+    conn
+    |> put_status(:ok)
+    |> json(EventJSON.index(%{events: events, next_cursor: next_cursor}))
+  end
+
+  # GET /api/v1/events
+  def indexX(conn, _params) do
     user = conn.assigns[:current_user]
 
     events =
@@ -57,7 +95,8 @@ defmodule KollectiveWeb.EventController do
     rsvp_status_str = if my_rsvp, do: my_rsvp.status, else: nil
 
     # Inject the value into the preloaded struct map virtual field safely
-    event_with_status = if rsvp_status_str, do: Map.put(event, :join_state, rsvp_status_str), else: event
+    event_with_status =
+      if rsvp_status_str, do: Map.put(event, :join_state, rsvp_status_str), else: event
 
     # Present via your strict uniform EventJSON data schema format contract
     conn

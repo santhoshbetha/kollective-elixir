@@ -584,7 +584,8 @@ defmodule Kollective.Events.Events do
   end
 
   # CASE B: JOIN MODE IS FREE & SPACE IS AVAILABLE -> Instant acceptance allocation
-  defp execute_join_state(user, event, _is_full = false, existing) when event.join_mode == "free" or is_nil(event.join_mode) do
+  defp execute_join_state(user, event, _is_full = false, existing)
+       when event.join_mode == "free" or is_nil(event.join_mode) do
     upsert_participant(user, event, "accepted", existing)
     recalculate_and_broadcast_counters(event.id)
 
@@ -592,7 +593,8 @@ defmodule Kollective.Events.Events do
   end
 
   # CASE C: JOIN MODE IS RESTRICTED & SPACE IS AVAILABLE -> Queue for review approval
-  defp execute_join_state(user, event, _is_full = false, existing) when event.join_mode == "restricted" do
+  defp execute_join_state(user, event, _is_full = false, existing)
+       when event.join_mode == "restricted" do
     upsert_participant(user, event, "pending", existing)
     recalculate_and_broadcast_counters(event.id)
 
@@ -947,7 +949,7 @@ defmodule Kollective.Events.Events do
   Constructs the Ecto.Query for nearby events using earth_distance / cube indexing.
   """
   def list_nearby_events_query(lat, lng, radius_meters, limit \\ 50) do
-    from e in Event,
+    from(e in Event,
       where:
         e.event_status == "published" and
           (is_nil(e.end_time) or e.end_time > fragment("NOW()")) and
@@ -996,6 +998,7 @@ defmodule Kollective.Events.Events do
       ],
       limit: ^limit,
       preload: [:user, :origin_city]
+    )
   end
 
   defp resolve_user_coordinates(user, params) do
@@ -1042,11 +1045,12 @@ defmodule Kollective.Events.Events do
 
           %Kollective.Locations.PoliticalDistrict{geom: %_{}} ->
             query =
-              from d in Kollective.Locations.PoliticalDistrict,
+              from(d in Kollective.Locations.PoliticalDistrict,
                 where: d.id == ^district_id,
                 select:
                   {fragment("ST_Y(ST_Centroid(?))", d.geom),
                    fragment("ST_X(ST_Centroid(?))", d.geom)}
+              )
 
             case Repo.one(query) do
               {lat, lng} when is_number(lat) and is_number(lng) -> {lat, lng}
@@ -1224,6 +1228,7 @@ defmodule Kollective.Events.Events do
             nil ->
               %EventParticipant{user_id: user.id, event_id: event.id, status: final_status}
               |> Repo.insert!()
+
               String.to_atom(final_status)
 
             rsvp ->
@@ -1234,6 +1239,7 @@ defmodule Kollective.Events.Events do
                 rsvp
                 |> Ecto.Changeset.change(status: final_status)
                 |> Repo.update!()
+
                 String.to_atom(final_status)
               end
           end
@@ -1689,7 +1695,7 @@ defmodule Kollective.Events.Events do
         # 2. BATCH LOOKUP: Fetch all matching user profiles in a single query pass
         # This completely avoids running repetitive individual database checks
         mentioned_users =
-          Repo.all(from u in User, where: u.username in ^mentioned_usernames)
+          Repo.all(from(u in User, where: u.username in ^mentioned_usernames))
 
         # 3. Iterate through found users and dispatch alerts via the unified pipeline
         Enum.each(mentioned_users, fn mentioned_user ->
@@ -1753,9 +1759,10 @@ defmodule Kollective.Events.Events do
 
     # 1. Base query bound to the parent event target
     query =
-      from c in Comment,
+      from(c in Comment,
         where: c.event_id == ^event_id,
         preload: [:user]
+      )
 
     # 2. Integrate the Shadow Ban Moderation Engine
     query = apply_moderation_scope(query, viewer_id)
@@ -1822,6 +1829,7 @@ defmodule Kollective.Events.Events do
   end
 
   def attach_user_join_states(events, nil), do: events
+
   def attach_user_join_states(events, %User{} = user) do
     event_ids = Enum.map(events, & &1.id)
 
@@ -1986,6 +1994,23 @@ defmodule Kollective.Events.Events do
         (c.moderation_status == "rejected" and c.user_id == ^viewer_id) or
         (c.moderation_status == "pending" and c.user_id == ^viewer_id)
     )
+  end
+
+  def apply_cursor_pagination_events(query, cursor, limit) do
+    import Ecto.Query
+
+    # Enforce strict chronological order layout rules
+    base_ordered_query =
+      from(e in query, order_by: [desc: e.inserted_at, desc: e.id], limit: ^limit)
+
+    if cursor && cursor != "" && cursor != "null" do
+      # THE PIB PIPELINE: Use cursor string indices to boundary select subsequent page segments
+      # Assuming you use a chronologically orderable ID scheme like ULID/UUIDv7.
+      # If using standard integers, change '<' to match your ordering paradigm.
+      from(e in base_ordered_query, where: e.id < ^cursor)
+    else
+      base_ordered_query
+    end
   end
 
   # Looks up the position of the last element loaded to return older content segments safely

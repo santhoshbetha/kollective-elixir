@@ -54,4 +54,38 @@ defmodule KollectiveWeb.BookmarkController do
         |> json(ChangesetJSON.error(changeset))
     end
   end
+
+  # DELETE /api/v1/bookmarks/:bookmark_id
+  # DELETE /api/v1/posts/:post_id/bookmark
+  def delete(conn, %{"bookmark_id" => bookmark_id}) do
+    user = conn.assigns.current_user
+
+    case Posts.delete_bookmark_post(user, bookmark_id) do
+      :ok ->
+        conn
+        |> put_status(:ok)
+        |> json(%{
+          status: "success",
+          action: "deleted",
+          message: "Bookmark successfully removed."
+        })
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{
+          status: "error",
+          message: "Bookmark not found."
+        })
+
+      {:error, changeset} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(ChangesetJSON.error(changeset))
+    end
+  end
+
+  def delete(conn, %{"post_id" => post_id}) do
+    delete(conn, %{"bookmark_id" => post_id})
+  end
 end

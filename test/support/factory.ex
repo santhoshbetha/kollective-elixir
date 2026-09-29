@@ -138,6 +138,14 @@ defmodule Kollective.Factory do
     }
   end
 
+  def post_bookmark_factory do
+    %Kollective.Posts.PostBookmark{
+      id: Ecto.ULID.generate(),
+      user: build(:user),
+      post: build(:post)
+    }
+  end
+
   # test/support/factory.ex
   def user_relationship_factory do
     # Maps directly to the has_many relationships declared inside your User schema snippets

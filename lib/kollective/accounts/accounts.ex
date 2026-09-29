@@ -736,6 +736,98 @@ defmodule Kollective.Accounts.Accounts do
     |> Repo.all()
   end
 
+  @doc """
+  Lists followers of the target_user with cursor pagination based on max_id / cursor params.
+  """
+  def list_followers(target_user, params \\ %{}) do
+    limit = parse_limit_param(params["limit"])
+    max_id = params["max_id"] || params["cursor"]
+
+    query =
+      from(r in UserRelationship,
+        join: u in assoc(r, :source),
+        where: r.target_id == ^target_user.id and r.type == "follow",
+        select: {r.id, u}
+      )
+
+    query =
+      if max_id && max_id != "" do
+        from([r, u] in query, where: r.id < ^max_id)
+      else
+        query
+      end
+
+    query =
+      query
+      |> order_by([r, u], desc: r.id)
+      |> limit(^limit)
+
+    results = Repo.all(query)
+    users = Enum.map(results, fn {_rel_id, user} -> user end)
+
+    next_cursor =
+      case List.last(results) do
+        nil -> nil
+        {last_rel_id, _user} -> last_rel_id
+      end
+
+    %{entries: users, next_cursor: next_cursor}
+  end
+
+  @doc """
+  Lists accounts that the target_user is following with cursor pagination based on max_id / cursor params.
+  """
+  def list_following(target_user, params \\ %{}) do
+    limit = parse_limit_param(params["limit"])
+    max_id = params["max_id"] || params["cursor"]
+
+    query =
+      from(r in UserRelationship,
+        join: u in assoc(r, :target),
+        where: r.source_id == ^target_user.id and r.type == "follow",
+        select: {r.id, u}
+      )
+
+    query =
+      if max_id && max_id != "" do
+        from([r, u] in query, where: r.id < ^max_id)
+      else
+        query
+      end
+
+    query =
+      query
+      |> order_by([r, u], desc: r.id)
+      |> limit(^limit)
+
+    results = Repo.all(query)
+    users = Enum.map(results, fn {_rel_id, user} -> user end)
+
+    next_cursor =
+      case List.last(results) do
+        nil -> nil
+        {last_rel_id, _user} -> last_rel_id
+      end
+
+    %{entries: users, next_cursor: next_cursor}
+  end
+
+  defp parse_limit_param(limit_param) do
+    case limit_param do
+      val when is_binary(val) ->
+        case Integer.parse(val) do
+          {num, _} -> min(max(num, 1), 100)
+          :error -> 20
+        end
+
+      val when is_integer(val) ->
+        min(max(val, 1), 100)
+
+      _ ->
+        20
+    end
+  end
+
   @doc "Returns a quick boolean if user_a follows user_b"
   def following?(user_a_id, user_b_id) do
     Repo.exists?(

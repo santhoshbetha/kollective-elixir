@@ -183,8 +183,11 @@ defmodule KollectiveWeb.PostControllerTest do
       ny_user = user_fixture(%{state: "NY", country: "US"})
       ca_user = user_fixture(%{state: "CA", country: "US"})
 
-      ny_post = post_fixture(ny_user, %{content: "Post from NY", origin_state: "NY", origin_country: "US"})
-      ca_post = post_fixture(ca_user, %{content: "Post from CA", origin_state: "CA", origin_country: "US"})
+      ny_post =
+        post_fixture(ny_user, %{content: "Post from NY", origin_state: "NY", origin_country: "US"})
+
+      ca_post =
+        post_fixture(ca_user, %{content: "Post from CA", origin_state: "CA", origin_country: "US"})
 
       conn_res = get(conn, ~p"/api/v1/posts", %{"scope" => "country"})
       assert conn_res.status == 200
@@ -215,7 +218,11 @@ defmodule KollectiveWeb.PostControllerTest do
       conn: conn,
       user: user
     } do
-      user = Kollective.Repo.update!(Ecto.Changeset.change(user, district_l1_id: nil, county: nil, city_id: nil))
+      user =
+        Kollective.Repo.update!(
+          Ecto.Changeset.change(user, district_l1_id: nil, county: nil, city_id: nil)
+        )
+
       conn = assign(conn, :current_user, user)
 
       other_user = user_fixture()
@@ -486,12 +493,17 @@ defmodule KollectiveWeb.PostControllerTest do
     test "POST /api/v1/posts/:id/reblog successfully reblogs and unreblogs another user's post",
          %{
            conn: conn,
-           user: _user
+           user: user
          } do
       other_user = user_fixture()
       post = post_fixture(other_user)
 
-      # 1. Reblog the post
+      # Verify initial reblogs_count from DB hydration is 0
+      [initial_hydrated] = Kollective.Posts.Posts.hydrate_virtual_fields([post], user)
+      assert initial_hydrated.reblogs_count == 0
+      assert initial_hydrated.has_reblogged == false
+
+      # 1. Reblog the post via API
       response1 =
         conn
         |> post(~p"/api/v1/posts/#{post.id}/reblog")
@@ -499,8 +511,17 @@ defmodule KollectiveWeb.PostControllerTest do
 
       assert response1["status"] == "success"
       assert response1["action"] == "reblogged"
+      assert response1["data"]["reblogs_count"] == 1
+      assert response1["data"]["reblogsCount"] == 1
+      assert response1["data"]["shares"] == 1
+      assert response1["data"]["has_reblogged"] == true
 
-      # 2. Unreblog the post
+      # Verify reblogs_count from DB hydration after reblogging is 1
+      [reblogged_hydrated] = Kollective.Posts.Posts.hydrate_virtual_fields([post], user)
+      assert reblogged_hydrated.reblogs_count == 1
+      assert reblogged_hydrated.has_reblogged == true
+
+      # 2. Unreblog the post via API
       response2 =
         conn
         |> post(~p"/api/v1/posts/#{post.id}/reblog")
@@ -508,6 +529,13 @@ defmodule KollectiveWeb.PostControllerTest do
 
       assert response2["status"] == "success"
       assert response2["action"] == "unreblogged"
+      assert response2["data"]["reblogs_count"] == 0
+      assert response2["data"]["has_reblogged"] == false
+
+      # Verify reblogs_count from DB hydration after unreblogging returns back to 0
+      [unreblogged_hydrated] = Kollective.Posts.Posts.hydrate_virtual_fields([post], user)
+      assert unreblogged_hydrated.reblogs_count == 0
+      assert unreblogged_hydrated.has_reblogged == false
     end
 
     test "POST /api/v1/posts/:id/replies successfully posts a reply", %{conn: conn} do

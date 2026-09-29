@@ -26,10 +26,12 @@ defmodule KollectiveWeb.PostJSON do
   def show(%Kollective.Posts.Post{} = post) do
     show(%{
       post: post,
-      likes_count: Map.get(post, :likes_count, 0) || 0,
-      reblogs_count: Map.get(post, :reblogs_count, 0) || 0,
+      likes_count: Map.get(post, :likes_count) || 0,
+      reblogs_count: Map.get(post, :reblogs_count) || 0,
+      replies_count: Map.get(post, :replies_count) || 0,
       has_liked: Map.get(post, :liked, false) || Map.get(post, :has_liked, false) || false,
-      has_reblogged: Map.get(post, :reblogged, false) || Map.get(post, :has_reblogged, false) || false
+      has_reblogged:
+        Map.get(post, :reblogged, false) || Map.get(post, :has_reblogged, false) || false
     })
   end
 
@@ -40,8 +42,20 @@ defmodule KollectiveWeb.PostJSON do
   @doc "Alias for show/1 to maintain uniformity across JSON serializers."
   def data(item), do: show(item)
 
+  defp extract_first_integer(list) do
+    Enum.find_value(list, nil, fn val ->
+      if is_integer(val) and val >= 0, do: val, else: nil
+    end) || 0
+  end
+
+  defp extract_first_boolean(list) do
+    Enum.find_value(list, false, fn val ->
+      if is_boolean(val), do: val, else: nil
+    end)
+  end
+
   defp render_item(item) do
-    post = is_map(item) && Map.get(item, :post) || item
+    post = (is_map(item) && Map.get(item, :post)) || item
     # Dynamically interpolate your base canonical domain path with the row's ULID key [INDEX]
     base_domain = KollectiveWeb.Endpoint.url()
     computed_permalink = "#{base_domain}/posts/#{to_string(post.id)}"
@@ -49,11 +63,55 @@ defmodule KollectiveWeb.PostJSON do
     attachments = Map.get(post, :attachments)
     image_urls = if is_list(attachments), do: Enum.map(attachments, & &1.url), else: []
 
-    likes_cnt = Map.get(item, :likes_count, 0) || Map.get(post, :likes_count, 0) || 0
-    reblogs_cnt = Map.get(item, :reblogs_count, 0) || Map.get(post, :reblogs_count, 0) || 0
-    has_liked = Map.get(item, :has_liked, false) || Map.get(post, :liked, false) || Map.get(post, :has_liked, false) || false
-    has_reblogged = Map.get(item, :has_reblogged, false) || Map.get(post, :reblogged, false) || Map.get(post, :has_reblogged, false) || false
-    replies_cnt = Map.get(post, :replies_count) || Map.get(item, :replies_count) || 0
+    # 🚀 Clean Waterfalls: Empty/nil indicators are cleanly skipped, guaranteeing true counts are parsed
+    likes_cnt =
+      extract_first_integer([
+        Map.get(item, :likes_count),
+        Map.get(item, :likes),
+        Map.get(post, :likes_count),
+        Map.get(post, :likes)
+      ])
+
+    reblogs_cnt =
+      extract_first_integer([
+        Map.get(item, :reblogs_count),
+        Map.get(item, :reblogsCount),
+        Map.get(item, :reblogs),
+        Map.get(post, :reblogs_count),
+        Map.get(post, :shares)
+      ])
+
+    replies_cnt =
+      extract_first_integer([
+        Map.get(item, :replies_count),
+        Map.get(item, :commentsCount),
+        Map.get(post, :replies_count),
+        Map.get(post, :commentsCount)
+      ])
+
+    has_liked =
+      extract_first_boolean([
+        Map.get(item, :has_liked),
+        Map.get(item, :liked),
+        Map.get(post, :has_liked),
+        Map.get(post, :liked)
+      ])
+
+    has_reblogged =
+      extract_first_boolean([
+        Map.get(item, :has_reblogged),
+        Map.get(item, :reblogged),
+        Map.get(post, :has_reblogged),
+        Map.get(post, :reblogged)
+      ])
+
+    bookmarked_val =
+      extract_first_boolean([
+        Map.get(item, :bookmarked),
+        Map.get(item, :isBookmarked),
+        Map.get(post, :bookmarked),
+        Map.get(post, :isBookmarked)
+      ])
 
     %{
       id: to_string(post.id),
@@ -72,12 +130,15 @@ defmodule KollectiveWeb.PostJSON do
       likes: likes_cnt,
       likes_count: likes_cnt,
       reblogs_count: reblogs_cnt,
+      reblogsCount: reblogs_cnt,
+      shares: reblogs_cnt,
       commentsCount: replies_cnt,
       replies_count: replies_cnt,
+      repliesCount: replies_cnt,
       liked: has_liked,
       has_liked: has_liked,
       has_reblogged: has_reblogged,
-      bookmarked: Map.get(post, :bookmarked, false) || Map.get(item, :bookmarked, false) || false,
+      bookmarked: bookmarked_val,
       favourited: Map.get(post, :favourited, false),
       reblogged: has_reblogged,
       vote_data: post.vote_data,
