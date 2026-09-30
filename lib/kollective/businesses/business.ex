@@ -45,64 +45,65 @@ defmodule Kollective.Businesses.Business do
   ]
 
   schema "businesses" do
-    field :name, :string
-    field :description, :string
+    field(:name, :string)
+    field(:description, :string)
 
     # Standardized to direct string properties to match PostGIS and timeline query filters
     # "proposals" or "existing"
-    field :type, :string, default: "proposals"
+    field(:type, :string, default: "proposals")
     # From @categories list
-    field :category, :string, default: "other"
+    field(:category, :string, default: "other")
     # From @sub_categories list
-    field :sub_category, :string, default: "general_other"
+    field(:sub_category, :string, default: "general_other")
 
     # Physical Contact metrics fields
-    field :address, :string
+    field(:address, :string)
     # Municipal city name text string
-    field :city, :string
+    field(:city, :string)
     # State code (e.g., "TX")
-    field :state, :string
-    field :zip, :string
-    field :country, :string, default: "US"
-    field :email, :string
-    field :phone, :string
-    field :website, :string
+    field(:state, :string)
+    field(:zip, :string)
+    field(:country, :string, default: "US")
+    field(:email, :string)
+    field(:phone, :string)
+    field(:website, :string)
 
     # Operational & Corporate Metadata Fields
-    field :year_established, :integer
-    field :number_of_employees, :integer
+    field(:year_established, :integer)
+    field(:number_of_employees, :integer)
     # Restricted to @legal_structures
-    field :legal_structure, :string
+    field(:legal_structure, :string)
     # Direct-to-R2 profile thumbnail pointer
-    field :profile_image_url, :string
+    field(:profile_image_url, :string)
+    field(:is_image_processed, :boolean, default: false)
 
     # Political Boundary Caches & PostGIS Data Layer
     # Political Boundary Cache Nodes (Enables instant geofence grouping partitions)
-    field :district_l1, :string
-    field :district_l2, :string
-    field :district_l3, :string
+    field(:district_l1, :string)
+    field(:district_l2, :string)
+    field(:district_l3, :string)
 
-    belongs_to :city_relation, Kollective.Locations.City, foreign_key: :city_id
+    belongs_to(:city_relation, Kollective.Locations.City, foreign_key: :city_id)
 
     # PostGIS geometric coordinates footprint data layer
-    field :location, Geo.PostGIS.Geometry
+    field(:location, Geo.PostGIS.Geometry)
 
     # Administrative Trust & Compliance Markers
     # "unverified", "pending", "verified"
-    field :verification_status, :string, default: "unverified"
+    field(:verification_status, :string, default: "unverified")
     # Flexible JSONB block for business hours, etc.
-    field :metadata, :map, default: %{}
+    field(:metadata, :map, default: %{})
 
-    field :verification_token, :string
-    field :verified_at, :utc_datetime
+    field(:verification_token, :string)
+    field(:verified_at, :utc_datetime)
 
     # COUNTER CACHE OPTIMIZATION: Keeps lookups extremely fast
-    field :upvotes_count, :integer, default: 0
-    field :comments_count, :integer, default: 0
+    field(:upvotes_count, :integer, default: 0)
+    field(:comments_count, :integer, default: 0)
 
-    belongs_to :user, Kollective.Accounts.User, foreign_key: :user_id
-    has_many :upvotes, Kollective.Businesses.Upvote, foreign_key: :business_id
-    has_many :comments, Kollective.Businesses.Comment, foreign_key: :business_id
+    belongs_to(:user, Kollective.Accounts.User, foreign_key: :user_id)
+    has_many(:upvotes, Kollective.Businesses.Upvote, foreign_key: :business_id)
+    has_many(:comments, Kollective.Businesses.Comment, foreign_key: :business_id)
 
     timestamps()
   end
@@ -111,7 +112,15 @@ defmodule Kollective.Businesses.Business do
   Unified changesets validator for regional discovery registrations.
   """
   def creation_changeset(business, attrs) do
-    attrs = normalize_business_attrs(attrs)
+    # 🚀 FIX: Fallback sub_category mapping to avoid frontend validation drop-outs
+    attrs =
+      attrs
+      |> normalize_business_attrs()
+      # If no child classification is provided, default to general_other to clear Ecto guards safely
+      |> then(fn map ->
+        sub = Map.get(map, "sub_category") || Map.get(map, :sub_category)
+        if is_nil(sub) || sub == "", do: Map.put(map, "sub_category", "general_other"), else: map
+      end)
 
     business
     |> cast(attrs, [
@@ -136,7 +145,9 @@ defmodule Kollective.Businesses.Business do
       :state,
       :country,
       :profile_image_url,
-      :metadata
+      :metadata,
+      # 🚀 NEW: Register the processing status flag to allow background worker writes safely
+      :is_image_processed
     ])
     |> validate_required([
       :name,
@@ -162,7 +173,6 @@ defmodule Kollective.Businesses.Business do
     |> validate_number(:year_established, greater_than: 1700, less_than_or_equal_to: 2027)
     |> validate_number(:number_of_employees, greater_than_or_equal_to: 0)
     |> foreign_key_constraint(:user_id)
-    # Strict database structural safety check for your city relationship
     |> foreign_key_constraint(:city_id)
     |> validate_sub_category_alignment()
     |> validate_conditional_fields_by_type()

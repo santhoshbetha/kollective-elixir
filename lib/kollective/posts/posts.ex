@@ -705,12 +705,39 @@ defmodule Kollective.Posts.Posts do
       post.attachments
       |> Enum.filter(&String.starts_with?(&1.media_type || "", "video"))
       |> Enum.each(fn att ->
-        %{attachment_id: att.id}
-        |> VideoTranscoder.new()
+        %{"attachment_id" => att.id}
+        |> Kollective.Workers.VideoTranscoder.new()
         |> Oban.insert!()
       end)
 
-      # B. Mention Notification Worker Queue (Only if post is clear/published)
+      # B. Image Optimization Worker Queue
+      # Automatically routes incoming images through our concurrent background compression pipeline
+      post.attachments
+      |> Enum.filter(fn att ->
+        # FIX: Changed &1 to the explicitly declared 'att' argument
+        type = att.media_type || ""
+        String.starts_with?(type, "image") and not String.contains?(type, "gif")
+      end)
+      |> Enum.each(fn att ->
+        %{"attachment_id" => att.id}
+        |> Kollective.Workers.ImageOptimizer.new()
+        |> Oban.insert!()
+      end)
+
+      # 🎨 NEW: GIF Pause-State Frame Queue
+      # Routes animated gifs through your dedicated first-frame static extractor
+      post.attachments
+      |> Enum.filter(fn att ->
+        type = att.media_type || ""
+        String.contains?(type, "gif")
+      end)
+      |> Enum.each(fn att ->
+        %{"attachment_id" => att.id}
+        |> Kollective.Workers.GifProcessorWorker.new()
+        |> Oban.insert!()
+      end)
+
+      # C. Mention Notification Worker Queue (Only if post is clear/published)
       if post.status in [:published, "published"] do
         %{
           "actor_id" => user.id,
@@ -722,7 +749,7 @@ defmodule Kollective.Posts.Posts do
         |> Oban.insert!()
       end
 
-      # C. Schedule Future Post Date Actions
+      # D. Schedule Future Post Date Actions
       if Map.has_key?(attrs, "published_at") &&
            DateTime.compare(attrs["published_at"], DateTime.utc_now()) == :gt do
         %{post_id: post.id}
@@ -730,14 +757,14 @@ defmodule Kollective.Posts.Posts do
         |> Oban.insert!()
       end
 
-      # D. Schedule Poll Expiry Closures
+      # E. Schedule Poll Expiry Closures
       if Ecto.assoc_loaded?(post.poll) && post.poll do
         %{poll_id: post.poll.id}
         |> PollExpiryWorker.new(scheduled_at: post.poll.expires_at)
         |> Oban.insert!()
       end
 
-      # E. Queue up the background fan-out process seamlessly
+      # F. Queue up the background fan-out process seamlessly
       if Map.get(post, :visibility, "public") == "public" and
            post.status in [:published, "published"] do
         %{post_id: post.id, author_id: post.user_id}

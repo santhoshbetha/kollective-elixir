@@ -1,29 +1,35 @@
-# lib/kollective_web/controllers/user_json.ex
 defmodule KollectiveWeb.UserJSON do
+  @moduledoc """
+  Unified Account Identity Profile Serializer.
+  Formats structural user database metadata matrices safely for the React UI.
+  """
+
   def show(%{user: user}) do
     %{data: data(user)}
   end
 
-  # {
-  #  "user": {
-  #    "username": "voter_123",
-  #    "districts": {
-  #      "l1": "01H7X... (National ID)",
-  #      "l2": "01H8Y... (State ID)",
-  #      "l3": "01H9Z... (Local ID)"
-  #    },
-  #    "district_names": {
-  #      "l1": "Mumbai South",
-  #      "l2": "Maharashtra Upper",
-  #      "l3": "Colaba"
-  #    }
-  #  }
-  # }
   def data(user) do
+    # 🚀 DYNAMIC MEDIA PATH CONSTRUCTORS: Resolve absolute CDN target links safely
+    avatar =
+      if user.avatar_url,
+        do: Kollective.Media.UserAvatar.url({user.avatar_url, user}, :original),
+        else: "/default-avatar.jpg"
+
+    cover =
+      if user.cover_image_url,
+        do: Kollective.Media.UserCover.url({user.cover_image_url, user}, :original),
+        else: "/default-banner-bg.jpg"
+
     %{
       id: user.id,
       username: user.username,
       email: user.email,
+
+      # 📸 HIGH-PERFORMANCE VISUAL ASSET FIELDS
+      avatar_url: avatar,
+      avatar: avatar,
+      cover_image_url: cover,
+      cover: cover,
 
       # POLITICAL IDS (For API Calls)
       districts: %{

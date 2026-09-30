@@ -7,7 +7,7 @@ defmodule Kollective.Workers.CommentMentionsWorker do
   # Adjust to match your application user schema
   alias Kollective.Accounts.User
   # Adjust to match your application comment schema
-  alias Kollective.Comments.Comment
+  alias Kollective.Events.Comment
   alias Kollective.Notifications.Notifications
 
   @impl Oban.Worker

@@ -1,6 +1,6 @@
 defmodule Kollective.Media.PostMedia do
   use Waffle.Definition
-  use Waffle.Ecto.Definition
+  use Kollective.Media.WaffleEctoDefinition
 
   # 1. Define supported versions
   # 'thumb' for the feed, 'original' for the full view, 'poster' for video poster frames
@@ -44,17 +44,23 @@ defmodule Kollective.Media.PostMedia do
     {:convert, "-strip -thumbnail 300x300^ -gravity center -extent 300x300"}
   end
 
-  # 5. Filename Sanitization
+  # 5. Automatic server fallback conversion for the paused GIF state
+  # Forces ImageMagick to isolate frame index 0 and convert it to progressive PNG
+  def transform(:static, _) do
+    {:convert, "-coalesce -frames 0 -format png"}
+  end
+
+  # 6. Filename Sanitization
   def filename(version, {file, _scope}) do
     name = Path.basename(file.file_name, Path.extname(file.file_name))
     "#{version}_#{name}"
   end
 
-  # 6. CDN/R2 Cache Control
+  # 7. CDN/R2 Cache Control
   def s3_object_headers(_version, {file, _scope}) do
     [
       content_type: MIME.from_path(file.file_name),
-      # 1 year cache
+      # 1 year cache configuration
       cache_control: "public, max-age=31536000"
     ]
   end

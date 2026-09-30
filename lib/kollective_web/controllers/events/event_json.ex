@@ -11,9 +11,18 @@ defmodule KollectiveWeb.EventJSON do
   end
 
   def data(event) do
+    # ✅ HIGH-PERFORMANCE SYNC: Automatically resolve absolute R2 CDN url paths
     banner =
-      event.banner_url || Kollective.Events.EventHelpers.get_banner_url(event) ||
-        default_banner()
+      cond do
+        event.banner_url ->
+          Kollective.Media.EventBanner.url({event.banner_url, event}, :original)
+
+        fallback = Kollective.Events.EventHelpers.get_banner_url(event) ->
+          fallback
+
+        true ->
+          default_banner()
+      end
 
     join_state = Map.get(event, :join_state, nil)
 
@@ -43,11 +52,10 @@ defmodule KollectiveWeb.EventJSON do
       interestedCount: Map.get(event, :interested_count, 0) || 0,
       comments_count: event.comments_count,
       capacity: get_capacity(event.metadata),
-
-      isAttending: Map.get(event, :is_attending, false) || (join_state in ["accepted", "joined"]),
-      is_attending: Map.get(event, :is_attending, false) || (join_state in ["accepted", "joined"]),
-      isInterested: Map.get(event, :is_interested, false) || (join_state == "interested"),
-      is_interested: Map.get(event, :is_interested, false) || (join_state == "interested"),
+      isAttending: Map.get(event, :is_attending, false) || join_state in ["accepted", "joined"],
+      is_attending: Map.get(event, :is_attending, false) || join_state in ["accepted", "joined"],
+      isInterested: Map.get(event, :is_interested, false) || join_state == "interested",
+      is_interested: Map.get(event, :is_interested, false) || join_state == "interested",
 
       # Location string convenience and preloaded structured geography
       location_name: event.location_name,
@@ -147,10 +155,15 @@ defmodule KollectiveWeb.EventJSON do
   Serializes a single participant preview for faces row widgets.
   """
   def simple_participant(%{user: %{id: id, username: username} = user}) do
+    avatar =
+      if Map.get(user, :avatar_url),
+        do: Kollective.Media.UserAvatar.url({user.avatar_url, user}, :original),
+        else: nil
+
     %{
       id: id,
       username: username,
-      avatar_url: Map.get(user, :avatar_url)
+      avatar_url: avatar
     }
   end
 
@@ -175,11 +188,16 @@ defmodule KollectiveWeb.EventJSON do
   end
 
   def participant_user(user) do
+    avatar =
+      if Map.get(user, :avatar_url),
+        do: Kollective.Media.UserAvatar.url({user.avatar_url, user}, :original),
+        else: nil
+
     %{
       id: user.id,
       username: user.username,
       display_name: user.display_name,
-      avatar_url: user.avatar_url
+      avatar_url: avatar
     }
   end
 

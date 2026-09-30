@@ -118,7 +118,10 @@ defmodule KollectiveWeb.EventCommentController do
             "moderation_status" => db_status
           }
           |> Map.put_new("parent_id", parent_id)
-          |> Map.put_new("image_url", Map.get(raw_params, "image_url") || Map.get(raw_params, "imageUrl"))
+          |> Map.put_new(
+            "image_url",
+            Map.get(raw_params, "image_url") || Map.get(raw_params, "imageUrl")
+          )
 
         case Events.create_comment(final_params) do
           {:ok, comment} ->

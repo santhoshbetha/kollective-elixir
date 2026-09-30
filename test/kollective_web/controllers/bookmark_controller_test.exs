@@ -86,7 +86,10 @@ defmodule KollectiveWeb.BookmarkControllerTest do
       assert response["message"] == "Bookmark successfully removed."
     end
 
-    test "deletes a bookmark by post_id via /api/v1/posts/:post_id/bookmark", %{conn: conn, post: post} do
+    test "deletes a bookmark by post_id via /api/v1/posts/:post_id/bookmark", %{
+      conn: conn,
+      post: post
+    } do
       response =
         conn
         |> delete(~p"/api/v1/posts/#{post.id}/bookmark")

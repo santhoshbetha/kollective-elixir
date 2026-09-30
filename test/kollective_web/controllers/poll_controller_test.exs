@@ -45,7 +45,15 @@ defmodule KollectiveWeb.PollControllerTest do
   describe "stream/2 (GET /api/v1/polls/stream)" do
     test "returns list of polls successfully", %{conn: conn} do
       author = insert(:user, country: "US")
-      post = insert(:post, author: author, visibility: "public", status: :published, origin_country: "US")
+
+      post =
+        insert(:post,
+          author: author,
+          visibility: "public",
+          status: :published,
+          origin_country: "US"
+        )
+
       _poll = insert(:poll, post: post)
 
       response =
@@ -61,10 +69,27 @@ defmodule KollectiveWeb.PollControllerTest do
 
     test "filters polls by category=voice and tab=Voices", %{conn: conn} do
       author = insert(:user, country: "US")
-      voice_post = insert(:post, author: author, visibility: "public", status: :published, category: :voice, origin_country: "US")
+
+      voice_post =
+        insert(:post,
+          author: author,
+          visibility: "public",
+          status: :published,
+          category: :voice,
+          origin_country: "US"
+        )
+
       insert(:poll, post: voice_post)
 
-      reg_post = insert(:post, author: author, visibility: "public", status: :published, category: :post, origin_country: "US")
+      reg_post =
+        insert(:post,
+          author: author,
+          visibility: "public",
+          status: :published,
+          category: :post,
+          origin_country: "US"
+        )
+
       insert(:poll, post: reg_post)
 
       # 1. category=voice
@@ -93,10 +118,24 @@ defmodule KollectiveWeb.PollControllerTest do
       stranger = insert(:user, country: "US")
       insert(:user_relationship, source_id: user.id, target_id: friend.id, type: "follow")
 
-      friend_post = insert(:post, author: friend, visibility: "public", status: :published, origin_country: "US")
+      friend_post =
+        insert(:post,
+          author: friend,
+          visibility: "public",
+          status: :published,
+          origin_country: "US"
+        )
+
       insert(:poll, post: friend_post)
 
-      stranger_post = insert(:post, author: stranger, visibility: "public", status: :published, origin_country: "US")
+      stranger_post =
+        insert(:post,
+          author: stranger,
+          visibility: "public",
+          status: :published,
+          origin_country: "US"
+        )
+
       insert(:poll, post: stranger_post)
 
       # 1. feed=following
@@ -121,11 +160,23 @@ defmodule KollectiveWeb.PollControllerTest do
     end
 
     test "filters polls by geographic scope (world, local)", %{conn: conn, user: user} do
-      user = Kollective.Repo.update!(Ecto.Changeset.change(user, country: "US", state: "CA", county: "Orange"))
+      user =
+        Kollective.Repo.update!(
+          Ecto.Changeset.change(user, country: "US", state: "CA", county: "Orange")
+        )
+
       conn = assign(conn, :current_user, user)
 
       # Local poll
-      post_local = insert(:post, visibility: "public", status: :published, origin_country: "US", origin_state: "CA", origin_county: "Orange")
+      post_local =
+        insert(:post,
+          visibility: "public",
+          status: :published,
+          origin_country: "US",
+          origin_state: "CA",
+          origin_county: "Orange"
+        )
+
       insert(:poll, post: post_local)
 
       # Foreign poll

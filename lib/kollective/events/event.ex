@@ -1,5 +1,6 @@
 defmodule Kollective.Events.Event do
   use Kollective.Schemas.Schema
+  use Waffle.Ecto.Schema
   import Ecto.Changeset
 
   alias Kollective.Posts.Post
@@ -38,7 +39,7 @@ defmodule Kollective.Events.Event do
     # Free, Restricted, Invite Only
     field(:join_mode, :string, default: "free")
 
-    field(:banner_url, :string)
+    field :banner_url, Kollective.Media.EventBanner.Type
     field(:logo_url, :string)
     field(:show_banner, :boolean, default: true)
 
@@ -140,7 +141,6 @@ defmodule Kollective.Events.Event do
       :city_name,
       :country,
       :metadata,
-      :banner_url,
       :logo_url,
       :show_banner,
       :target_scope,
@@ -155,6 +155,7 @@ defmodule Kollective.Events.Event do
       :longitude,
       :location
     ])
+    |> maybe_cast_banner_attachment(attrs)
     # 1. OPTIMIZATION: Extract capacity limits and stash them directly into the JSONB map buffer
     |> put_capacity_metadata(attrs)
 
@@ -562,13 +563,18 @@ defmodule Kollective.Events.Event do
 
   defp validate_url(changeset, field) do
     validate_change(changeset, field, fn _, value ->
-      if is_nil(value) || value == "" || String.starts_with?(value, ["http://", "https://"]) do
-        []
-      else
-        [
-          {field,
-           "must be a valid secure asset URL structure matching a web prefix (http/https)."}
-        ]
+      cond do
+        is_nil(value) || value == "" || is_struct(value) || is_map(value) ->
+          []
+
+        is_binary(value) and String.starts_with?(value, ["http://", "https://"]) ->
+          []
+
+        true ->
+          [
+            {field,
+             "must be a valid secure asset URL structure matching a web prefix (http/https)."}
+          ]
       end
     end)
   end
@@ -616,7 +622,15 @@ defmodule Kollective.Events.Event do
   #  if longitude >= -180 and longitude <= 180 do
   #    changeset
   #  else
-  #    add_error(changeset, :longitude, "must be between -180 and 180")
-  #  end
-  # end
+  defp maybe_cast_banner_attachment(changeset, attrs) do
+    banner = Map.get(attrs, "banner_url") || Map.get(attrs, :banner_url)
+
+    case banner do
+      url when is_binary(url) ->
+        put_change(changeset, :banner_url, %{file_name: url, updated_at: nil})
+
+      _ ->
+        cast_attachments(changeset, attrs, [:banner_url])
+    end
+  end
 end

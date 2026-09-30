@@ -117,6 +117,7 @@ defmodule Kollective.Events.Events do
 
     # Step 5: SCHEDULE BACKGROUND LIFECYCLE ACTIONS IN THE OBAN QUEUE
     |> Multi.run(:schedule_workers, fn _repo, %{event: event} ->
+      # A. Existing Core Lifecycle Event Workers
       %{"event_id" => event.id}
       |> EventStartWorker.new(scheduled_at: start_time)
       |> Oban.insert!()
@@ -126,6 +127,14 @@ defmodule Kollective.Events.Events do
       if DateTime.compare(one_hour_before, now) == :gt do
         %{"event_id" => event.id}
         |> EventReminderWorker.new(scheduled_at: one_hour_before)
+        |> Oban.insert!()
+      end
+
+      # B. NEW: Panoramic Banner Optimization Worker Queue
+      # Automatically triggers background compression if an asset URL string was provided
+      if Map.get(attrs, "banner_url") || Map.get(attrs, :banner_url) do
+        %{"event_id" => event.id}
+        |> Kollective.Workers.EventBannerOptimizer.new()
         |> Oban.insert!()
       end
 

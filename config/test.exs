@@ -18,6 +18,10 @@ config :kollective, Kollective.Repo,
   types: Kollective.PostgrexTypes
 
 # config/test.exs
+config :waffle,
+  storage: Waffle.Storage.Local,
+  bucket: "test-bucket"
+
 config :kollective, :media_uploader, Kollective.EventsMock
 
 # config/test.exs
@@ -40,10 +44,9 @@ config :kollective, KollectiveWeb.Endpoint,
 
 config :kollective, Oban,
   repo: Kollective.Repo,
-  # Turns off the background engine queues
-  queues: false,
-  # Run jobs immediately inline during tests if needed
   testing: :manual,
+  # Safely isolates your local test runners from competing with active background cron intervals
+  queues: false,
   # 👈 Turn off all cron plugins/pruners for testing
   plugins: false
 

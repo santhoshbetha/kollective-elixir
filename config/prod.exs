@@ -1,5 +1,17 @@
 import Config
 
+# Production environment ensures Oban runs at maximum optimization limits
+config :kollective, Oban,
+  repo: Kollective.Repo,
+  queues: [
+    default: 20,
+    maintenance: 10,
+    # Mass real-time notifications allocation thread limit
+    notifications: [limit: 100],
+    # 📸 Panoramic banner worker thread processing limit
+    media: [limit: 20]
+  ]
+
 # Configures Swoosh API Client
 config :swoosh, api_client: Swoosh.ApiClient.Req
 

@@ -53,6 +53,7 @@ defmodule Kollective.MixProject do
       {:phoenix_html, "~> 4.1"},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:swoosh, "~> 1.16"},
+      # Light-weight HTTP client engine used to stream uncompressed bytes out of your bucket
       {:req, "~> 0.5"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
@@ -80,7 +81,8 @@ defmodule Kollective.MixProject do
       # Pure Elixir implementation
       {:blurhash, "~> 2.0"},
       # Optional: Helps convert images to raw pixels
-      {:mogrify, "~> 0.9"},
+      # Image manipulation wrapper for background scaling routines
+      {:mogrify, "~> 0.9.3"},
       {:mox, "~> 1.0", only: :test},
       {:ex_machina, "~> 2.4", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

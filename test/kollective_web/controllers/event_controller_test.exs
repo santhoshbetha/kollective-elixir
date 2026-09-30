@@ -2,11 +2,18 @@ defmodule KollectiveWeb.EventControllerTest do
   use KollectiveWeb.ConnCase, async: true
 
   import Kollective.Factory
+  import Req.Test
 
   alias Kollective.Moderation.RestrictedKeyword
   alias Kollective.Repo
 
   setup %{conn: conn} do
+    stub(Kollective.Services.GeocodioClient, fn conn ->
+      json(conn, %{
+        "results" => [%{"response" => %{"input" => %{}}, "response_status" => "success"}]
+      })
+    end)
+
     user = insert(:user)
 
     authenticated_conn =

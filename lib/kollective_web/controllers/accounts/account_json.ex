@@ -66,6 +66,9 @@ defmodule KollectiveWeb.AccountJSON do
     fields = extract_verification_fields(user)
     is_sensitive = default_sensitive?(user)
 
+    avatar = resolve_avatar(user)
+    cover = resolve_cover(user)
+
     %{
       # ─── 1. CORE PROFILE DETAILS ───
       id: to_string(user.id),
@@ -75,11 +78,11 @@ defmodule KollectiveWeb.AccountJSON do
       bio: user.bio || "",
       note: user.bio || "",
       raw_bio: user.raw_bio || user.bio || "",
-      avatar: user.avatar_url || "/default-avatar.jpg",
-      avatar_url: user.avatar_url || "/default-avatar.jpg",
-      header: user.cover_image_url || "/default-banner-bg.jpg",
-      header_url: user.cover_image_url || "/default-banner-bg.jpg",
-      cover_image: user.cover_image_url || "/default-banner-bg.jpg",
+      avatar: avatar,
+      avatar_url: avatar,
+      header: cover,
+      header_url: cover,
+      cover_image: cover,
       created_at: Calendar.strftime(user.inserted_at, "%Y-%m-%dT%H:%M:%SZ"),
       email: user.email,
       location: user.location,
@@ -187,18 +190,21 @@ defmodule KollectiveWeb.AccountJSON do
       opts[:relationship_context] ||
         if(reading_user, do: fetch_single_relationship_map(reading_user.id, user.id), else: %{})
 
+    avatar = resolve_avatar(user)
+    cover = resolve_cover(user)
+
     %{
       id: to_string(user.id),
       username: user.username,
       display_name: user.display_name || user.username,
       bio: user.bio || "",
-      avatar: user.avatar_url || "/default-avatar.jpg",
-      avatar_url: user.avatar_url || "/default-avatar.jpg",
-      cover_image: user.cover_image_url || "/default-banner-bg.jpg",
-      cover_image_url: user.cover_image_url || "/default-banner-bg.jpg",
-      banner: user.cover_image_url || "/default-banner-bg.jpg",
-      header: user.cover_image_url || "/default-banner-bg.jpg",
-      header_url: user.cover_image_url || "/default-banner-bg.jpg",
+      avatar: avatar,
+      avatar_url: avatar,
+      cover_image: cover,
+      cover_image_url: cover,
+      banner: cover,
+      header: cover,
+      header_url: cover,
 
       # Counts caches synchronized natively via our atomic context counters
       followers_count: user.follower_count || 0,
@@ -228,7 +234,6 @@ defmodule KollectiveWeb.AccountJSON do
     }
     |> maybe_put_private_settings(user, reading_user)
   end
-
 
   # ─── EXTRACTION RELATIONSHIP HELPER MATRICES (O(1) BATCH PRE-FETCH) ───
 
@@ -473,4 +478,16 @@ defmodule KollectiveWeb.AccountJSON do
   defp district_name(nil), do: nil
   defp district_name(%Ecto.Association.NotLoaded{}), do: nil
   defp district_name(dist), do: dist.name || dist.type_label
+
+  defp resolve_avatar(%{avatar_url: avatar_url} = user) when not is_nil(avatar_url) do
+    Kollective.Media.UserAvatar.url({avatar_url, user}, :original) || "/default-avatar.jpg"
+  end
+
+  defp resolve_avatar(_), do: "/default-avatar.jpg"
+
+  defp resolve_cover(%{cover_image_url: cover_url} = user) when not is_nil(cover_url) do
+    Kollective.Media.UserCover.url({cover_url, user}, :original) || "/default-banner-bg.jpg"
+  end
+
+  defp resolve_cover(_), do: "/default-banner-bg.jpg"
 end

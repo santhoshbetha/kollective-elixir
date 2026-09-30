@@ -23,7 +23,7 @@ defmodule Kollective.Workers.OrgNotificationWorker do
     {subject, body} =
       case action do
         "approved" ->
-          badge_type = Map.get(org.data || %{}, "badge_type", "verified")
+          badge_type = (Map.has_key?(org, :badge_type) && org.badge_type) || "verified"
 
           {
             "Confirmed: You have been added to @#{org.username}!",
@@ -45,6 +45,16 @@ defmodule Kollective.Workers.OrgNotificationWorker do
 
             Your request to join the organization profile '@#{org.username}' was not approved at this time.
             If you believe this was an error, please reach out to the organization's administration team directly.
+            """
+          }
+
+        _other ->
+          {
+            "Update regarding @#{org.username}",
+            """
+            Hello @#{user.username},
+
+            You have an update regarding the organization profile '@#{org.username}'.
             """
           }
       end

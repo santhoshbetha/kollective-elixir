@@ -430,9 +430,21 @@ defmodule KollectiveWeb.Router do
     post("/events/:event_id/rsvp", EventParticipantController, :rsvp)
     post("/kollective/events/:event_id/rsvp", EventParticipantController, :rsvp)
     post("/events/requests/:participant_id/approve", EventParticipantController, :approve)
-    post("/kollective/events/requests/:participant_id/approve", EventParticipantController, :approve)
+
+    post(
+      "/kollective/events/requests/:participant_id/approve",
+      EventParticipantController,
+      :approve
+    )
+
     post("/events/requests/:participant_id/reject", EventParticipantController, :reject)
-    post("/kollective/events/requests/:participant_id/reject", EventParticipantController, :reject)
+
+    post(
+      "/kollective/events/requests/:participant_id/reject",
+      EventParticipantController,
+      :reject
+    )
+
     get("/events/:event_id/participants", EventParticipantController, :participations)
     get("/kollective/events/:event_id/participants", EventParticipantController, :participations)
     get("/events/:event_id/requests", EventParticipantController, :list_requests)
@@ -490,6 +502,9 @@ defmodule KollectiveWeb.Router do
     put("/business_proposals/:id", BusinessController, :update_proposal)
     patch("/business_proposals/:id", BusinessController, :update_proposal)
     delete("/business_proposals/:id", BusinessController, :delete_proposal)
+
+    # 🌐 MAP SEARCH NODE ROUTE REGISTRY
+    get("/businesses/search", BusinessSearchController, :index)
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -589,7 +604,6 @@ defmodule KollectiveWeb.Router do
     post("/verify-peer", VouchController, :execute_peer_vouch)
   end
 
-  # lib/kollective_web/router.ex
   scope "/api/v1", KollectiveWeb do
     pipe_through([:api, :api_authenticated])
 

@@ -64,7 +64,7 @@ defmodule Kollective.Posts.UserDeletionSafeguardTest do
     Repo.delete!(user)
 
     # Liking the post whose author was deleted must succeed smoothly
-    assert {:ok, :liked} = Posts.toggle_like(liker.id, post.id)
+    assert {:ok, :liked, 1} = Posts.toggle_like(liker.id, post.id)
     assert Posts.get_like_count(post.id) == 1
   end
 

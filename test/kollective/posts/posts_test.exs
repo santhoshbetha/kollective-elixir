@@ -53,6 +53,10 @@ defmodule Kollective.Posts.PostsTest do
     end
 
     test "automatically extracts external URL into link_url", %{user: user} do
+      Mox.stub(Kollective.HTTPClientMock, :get, fn _url, _opts ->
+        {:ok, %Req.Response{status: 200, body: "<html></html>"}}
+      end)
+
       {:ok, post} =
         Posts.create_post(user, %{
           "content" => "Check this out https://hexdocs.pm/ecto for documentation",
@@ -72,8 +76,8 @@ defmodule Kollective.Posts.PostsTest do
       assert post.language in ["spanish", "english"]
     end
 
-    test "enforces 280-character limit for standard :post category", %{user: user} do
-      long_text = String.duplicate("a", 281)
+    test "enforces 500-character limit for standard :post category", %{user: user} do
+      long_text = String.duplicate("a", 501)
 
       assert {:error, changeset} =
                Posts.create_post(user, %{
@@ -83,7 +87,7 @@ defmodule Kollective.Posts.PostsTest do
                  "visibility" => "public"
                })
 
-      assert "for post posts cannot exceed 280 characters" in errors_on(changeset).text
+      assert "for post posts cannot exceed 500 characters" in errors_on(changeset).text
     end
 
     test "allows up to 1000 characters for :voice category", %{user: user} do
@@ -188,10 +192,10 @@ defmodule Kollective.Posts.PostsTest do
 
       assert Posts.get_like_count(post.id) == 0
 
-      assert {:ok, :liked} = Posts.toggle_like(liker.id, post.id)
+      assert {:ok, :liked, 1} = Posts.toggle_like(liker.id, post.id)
       assert Posts.get_like_count(post.id) == 1
 
-      assert {:ok, :unliked} = Posts.toggle_like(liker.id, post.id)
+      assert {:ok, :unliked, 0} = Posts.toggle_like(liker.id, post.id)
       assert Posts.get_like_count(post.id) == 0
     end
   end

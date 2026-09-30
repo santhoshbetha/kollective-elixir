@@ -36,14 +36,22 @@ defmodule KollectiveWeb.NotificationChannel do
 
   # 3. INTERCEPT INTERNAL SYSTEM PUBSUB BROADCASTS
   # :new_notification is the internal message name inside your Elixir backend server processes.
-  # "new_alert" is the external event name sent across the network over WebSockets. Your React client must match this string exactly
+  # "new_notification" is the external event name sent across the network over WebSockets. Your React client must match this string exactly
   # to hear the incoming like updates.
   @impl true
   # Catches the message format passed from other internal Elixir modules
   def handle_info({:new_notification, notification_payload}, socket) do
     # Stream the raw notification payload safely over the WebSocket to React
-    push(socket, "new_alert", notification_payload)
+    push(socket, "new_notification", notification_payload)
 
+    {:noreply, socket}
+  end
+
+  # BACKWARD COMPATIBILITY MATCHERS
+  # Catches raw text toast dispatches originating from Endpoint.broadcast calls
+  @impl true
+  def handle_out("new_notification", payload, socket) do
+    push(socket, "new_notification", payload)
     {:noreply, socket}
   end
 end

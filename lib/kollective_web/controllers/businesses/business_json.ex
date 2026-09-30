@@ -1,6 +1,7 @@
 defmodule KollectiveWeb.BusinessJSON do
   @moduledoc """
   JSON serializer for businesses and business proposals.
+  Integrated with async processing state indicators.
   """
 
   def show(%{business: business}) do
@@ -21,6 +22,7 @@ defmodule KollectiveWeb.BusinessJSON do
 
   def registration_data(business) do
     meta = business.metadata || %{}
+    is_processed = Map.get(business, :is_image_processed, false)
 
     %{
       id: to_string(business.id),
@@ -30,6 +32,8 @@ defmodule KollectiveWeb.BusinessJSON do
       hours: Map.get(meta, "business_hours") || Map.get(meta, "hours", "9:00 AM - 5:00 PM"),
       profile_image_url: business.profile_image_url,
       image: business.profile_image_url,
+      # 🚀 ASYNC PRELOAD INTEGRATION: Injects the image optimization flag
+      is_image_processed: is_processed,
       services: Map.get(meta, "services", []),
       tags: Map.get(meta, "tags", [])
     }
@@ -71,6 +75,7 @@ defmodule KollectiveWeb.BusinessJSON do
     money_req = Map.get(funding, "money_required") || Map.get(funding, "fundingGoal") || 0
     min_inv = Map.get(funding, "minimum_amount") || Map.get(funding, "minInvest") || 0
     max_inv = Map.get(funding, "maximum_amount") || Map.get(funding, "maxInvest") || 0
+    is_processed = Map.get(item, :is_image_processed, false)
 
     %{
       id: to_string(item.id),
@@ -87,6 +92,8 @@ defmodule KollectiveWeb.BusinessJSON do
       reviewsCount: Map.get(meta, "reviews_count", 0),
       image: item.profile_image_url,
       profile_image_url: item.profile_image_url,
+      # 🚀 ASYNC PRELOAD INTEGRATION: Injects the image optimization flag
+      is_image_processed: is_processed,
       address: item.address,
       city: item.city,
       state: item.state,
@@ -102,7 +109,6 @@ defmodule KollectiveWeb.BusinessJSON do
           if(item.number_of_employees, do: to_string(item.number_of_employees), else: "1-5"),
       services: Map.get(meta, "services", []),
       tags: Map.get(meta, "tags", []),
-      # Proposal specific fields:
       status: Map.get(funding, "status", "New"),
       fundingGoal: money_req,
       money_required: money_req,
@@ -146,6 +152,7 @@ defmodule KollectiveWeb.BusinessJSON do
     money_req = Map.get(funding, "money_required") || Map.get(funding, "fundingGoal") || 0
     min_inv = Map.get(funding, "minimum_amount") || Map.get(funding, "minInvest") || 0
     max_inv = Map.get(funding, "maximum_amount") || Map.get(funding, "maxInvest") || 0
+    is_processed = Map.get(item, :is_image_processed, false)
 
     %{
       id: to_string(item.id),
@@ -167,6 +174,8 @@ defmodule KollectiveWeb.BusinessJSON do
       hours: Map.get(meta, "business_hours") || Map.get(meta, "hours", "9:00 AM - 5:00 PM"),
       image: item.profile_image_url,
       profile_image_url: item.profile_image_url,
+      # 🚀 ASYNC PRELOAD INTEGRATION: Injects the image optimization flag
+      is_image_processed: is_processed,
       rating: Map.get(meta, "rating", 5.0),
       reviewsCount: Map.get(meta, "reviews_count", 0),
       established: item.year_established,
@@ -176,8 +185,6 @@ defmodule KollectiveWeb.BusinessJSON do
           if(item.number_of_employees, do: to_string(item.number_of_employees), else: "1-5"),
       services: Map.get(meta, "services", []),
       tags: Map.get(meta, "tags", []),
-
-      # Top-level Contact Details
       address: item.address,
       city: item.city,
       state: item.state,
@@ -187,16 +194,10 @@ defmodule KollectiveWeb.BusinessJSON do
       email: item.email,
       website: item.website,
       location: item.city || item.address || item.district_l1 || "Local District",
-
-      # Contact Details
       contact: contact_details(item),
       contact_details: contact_details(item),
-
-      # Corporate / Metrics Details
       metrics: corporate_details(item),
       corporate_details: corporate_details(item),
-
-      # Dynamic JSONB Data Layer Blocks & Proposal Metrics
       status: Map.get(funding, "status", "New"),
       fundingGoal: money_req,
       money_required: money_req,
@@ -208,8 +209,6 @@ defmodule KollectiveWeb.BusinessJSON do
       funding_details: funding,
       additional_metadata: Map.delete(meta, "funding_data"),
       metadata: meta,
-
-      # Geographic Location Properties
       geography: %{
         district_l1: item.district_l1,
         district_l2: item.district_l2,
@@ -219,8 +218,6 @@ defmodule KollectiveWeb.BusinessJSON do
       district_l1: item.district_l1,
       district_l2: item.district_l2,
       district_l3: item.district_l3,
-
-      # Unified Owner Struct Serialization
       owner: serialize_owner_name(item) || "community_member",
       owner_info: serialize_owner(item),
       owner_name: serialize_owner_name(item),

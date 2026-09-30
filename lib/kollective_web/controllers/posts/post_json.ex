@@ -1,4 +1,3 @@
-# lib/kollective_web/controllers/posts/post_json.ex
 defmodule KollectiveWeb.PostJSON do
   @moduledoc """
   Unified Standalone Timeline Post Serializer.
@@ -56,14 +55,31 @@ defmodule KollectiveWeb.PostJSON do
 
   defp render_item(item) do
     post = (is_map(item) && Map.get(item, :post)) || item
-    # Dynamically interpolate your base canonical domain path with the row's ULID key [INDEX]
     base_domain = KollectiveWeb.Endpoint.url()
     computed_permalink = "#{base_domain}/posts/#{to_string(post.id)}"
 
     attachments = Map.get(post, :attachments)
-    image_urls = if is_list(attachments), do: Enum.map(attachments, & &1.url), else: []
 
-    # 🚀 Clean Waterfalls: Empty/nil indicators are cleanly skipped, guaranteeing true counts are parsed
+    # 🚀 REFACTOR: Build rich object models for the images list loop to feed TimelineImagePlayer
+    rich_image_objects =
+      if is_list(attachments) and Ecto.assoc_loaded?(attachments) do
+        Enum.map(attachments, fn att ->
+          %{
+            id: to_string(att.id),
+            url: att.url,
+            # Fallback to base url if background static png worker is still in progress
+            static_url: Map.get(att, :static_url) || att.url,
+            blurhash: Map.get(att, :blurhash) || "",
+            imageMeta: Map.get(att, :description) || post.text || "Timeline attachment asset node"
+          }
+        end)
+      else
+        []
+      end
+
+    # Legacy array string fallback list to prevent un-migrated client elements from breaking
+    legacy_image_string_urls = Enum.map(rich_image_objects, & &1.url)
+
     likes_cnt =
       extract_first_integer([
         Map.get(item, :likes_count),
@@ -125,8 +141,6 @@ defmodule KollectiveWeb.PostJSON do
            Calendar.strftime(post.published_at, "%Y-%m-%dT%H:%M:%SZ")) || nil,
       time: Calendar.strftime(post.inserted_at, "%b %d, %Y"),
       permalink: computed_permalink,
-
-      # Social engagement metrics and flags
       likes: likes_cnt,
       likes_count: likes_cnt,
       reblogs_count: reblogs_cnt,
@@ -143,17 +157,16 @@ defmodule KollectiveWeb.PostJSON do
       reblogged: has_reblogged,
       vote_data: post.vote_data,
       my_reactions: Map.get(post.data || %{}, "my_reactions", []),
-
-      # Author info
       author: serialize_author(Map.get(post, :author)),
       organization_id: (post.organization_id && to_string(post.organization_id)) || nil,
       organization: serialize_organization(Map.get(post, :organization)),
 
-      # Attachments and images
-      images: image_urls,
-      image: List.first(image_urls),
+      # 📸 NEW & UPDATED INTERFACE BINDINGS
+      # Now returns full, feature-rich object collections!
+      images: rich_image_objects,
+      image: List.first(rich_image_objects),
+      legacy_images_fallback: legacy_image_string_urls,
       media_attachments: serialize_attachments(attachments),
-
       # INTERACTIVE CARD PREVIEW OBJECT: Returns nil if no link was pasted
       link_preview:
         if post.link_url do
@@ -166,11 +179,7 @@ defmodule KollectiveWeb.PostJSON do
         else
           nil
         end,
-
-      # POLL: Serializes the poll if attached
       poll: serialize_poll(Map.get(post, :poll)),
-
-      # Additional Mastodon-like fields
       in_reply_to_id: (post.in_reply_to_id && to_string(post.in_reply_to_id)) || nil,
       in_reply_to_account_id: (post.in_reply_to_id && to_string(post.in_reply_to_id)) || nil,
       in_reply_to_username: Map.get(post, :in_reply_to_username),
@@ -271,7 +280,6 @@ defmodule KollectiveWeb.PostJSON do
     end)
   end
 
-  # Safe preloading fallback checker blocks
   defp serialize_poll(%Ecto.Association.NotLoaded{}), do: nil
   defp serialize_poll(nil), do: nil
 
@@ -280,7 +288,6 @@ defmodule KollectiveWeb.PostJSON do
     KollectiveWeb.PollJSON.data(poll)
   end
 
-  # Safe preloading fallback checker blocks
   defp serialize_attachments(%Ecto.Association.NotLoaded{}), do: []
   defp serialize_attachments(nil), do: []
 
@@ -288,11 +295,12 @@ defmodule KollectiveWeb.PostJSON do
     Enum.map(attachments, fn att ->
       %{
         id: to_string(att.id),
-        # e.g. "https://r2.dev..."
         url: att.url,
+        # 🚀 ADD NEW PROCESSING TELEMETRY FIELDS DYNAMICALLY
+        static_url: Map.get(att, :static_url) || att.url,
         type:
           if(String.starts_with?(att.media_type || "image", "video"), do: "video", else: "image"),
-        blurhash: att.blurhash
+        blurhash: att.blurhash || ""
       }
     end)
   end

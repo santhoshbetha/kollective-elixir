@@ -31,8 +31,9 @@ defmodule Kollective.Workers.FeedFanoutWorker do
       entries =
         Enum.map(all_recipient_ids, fn recipient_id ->
           %{
-            user_id: recipient_id,
-            post_id: post_id,
+            id: dump_id(Kollective.Schemas.ULIDType.generate()),
+            user_id: dump_id(recipient_id),
+            post_id: dump_id(post_id),
             inserted_at: now,
             updated_at: now
           }
@@ -56,4 +57,13 @@ defmodule Kollective.Workers.FeedFanoutWorker do
       :ok
     end
   end
+
+  defp dump_id(id) when is_binary(id) do
+    case Ecto.ULID.dump(id) do
+      {:ok, binary} -> binary
+      _ -> id
+    end
+  end
+
+  defp dump_id(id), do: id
 end

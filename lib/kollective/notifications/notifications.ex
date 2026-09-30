@@ -281,4 +281,43 @@ defmodule Kollective.Notifications.Notifications do
     |> limit(^limit)
     |> Repo.all()
   end
+
+  # ─── ASYNC ENQUEUE CONTROLLERS (Offloads work away from the Web Thread) ───
+
+  @doc """
+  Pushes a standard notification payload task onto the background Oban queue.
+  Returns immediately, keeping the client HTTP request running at peak speed.
+  """
+  def enqueue_notify(target_user_id, actor_id, type, attrs \\ %{}, data_payload \\ %{}) do
+    %{
+      "target_user_id" => to_string(target_user_id),
+      "actor_id" => to_string(actor_id),
+      "type" => type,
+      "attrs" => stringify_keys(attrs),
+      "data_payload" => stringify_keys(data_payload)
+    }
+    |> Kollective.Workers.NotificationWorker.new()
+    |> Oban.insert()
+  end
+
+  @doc """
+  Pushes a thread/conversation reply alert challenge onto the background Oban queue.
+  Prevents heavy post threads from stuttering during multi-user interaction spikes.
+  """
+  def enqueue_reply(recipient_id, actor_id, post_id) do
+    %{
+      "recipient_id" => to_string(recipient_id),
+      "actor_id" => to_string(actor_id),
+      "post_id" => to_string(post_id)
+    }
+    |> Kollective.Workers.NotificationWorker.new()
+    |> Oban.insert()
+  end
+
+  # Private normalizer helper to clean atom maps before database storage operations
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), v} end)
+  end
+
+  defp stringify_keys(val), do: val
 end

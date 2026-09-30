@@ -50,7 +50,12 @@ defmodule KollectiveWeb.ConversationJSON do
 
         case user do
           %Kollective.Accounts.User{} ->
-            %{username: user.username, avatar: user.avatar_url}
+            avatar =
+              if user.avatar_url,
+                do: Kollective.Media.UserAvatar.url({user.avatar_url, user}, :original),
+                else: "/default-avatar.jpg"
+
+            %{username: user.username, avatar: avatar}
 
           _ ->
             %{username: "Deleted User", avatar: nil}

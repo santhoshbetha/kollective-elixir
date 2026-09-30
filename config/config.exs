@@ -45,7 +45,8 @@ config :kollective, Oban,
     maintenance: 5,
     # 🔔 High-concurrency queue tailored for mass voice broadcasts & alerts
     notifications: [limit: 50],
-    media_processing: 10
+    # 📸 Aligned queue for background banners, business graphics, and profile image optimization tasks
+    media: [limit: 10]
   ],
   plugins: [
     # 1. Essential: Cleans up Oban's own internal job history (keeping 24h of data)

@@ -71,6 +71,7 @@ defmodule Kollective.Businesses.Businesses do
 
       Business.creation_changeset(%Business{user_id: user.id}, base_attrs)
     end)
+    # Step 3: Polymorphic Geocoding Verification Pipeline
     |> Ecto.Multi.run(:enqueue_geocode, fn _repo, %{business: business} ->
       if (not has_coordinates? and address_text) && String.trim(address_text) != "" do
         %{"target_id" => business.id, "schema_type" => "Business", "address_text" => address_text}
@@ -80,6 +81,22 @@ defmodule Kollective.Businesses.Businesses do
         {:ok, :skipped}
       end
     end)
+
+    # 🚀 STEP 4: AUTOMATED MEDIA PROCESSING BACKGROUND TRANSACTION INTERCEPTOR
+    # Automatically triggers image optimization jobs if a profile image parameter is logged
+    |> Ecto.Multi.run(:schedule_media_workers, fn _repo, %{business: business} ->
+      raw_image_url = Map.get(attrs, "profile_image_url") || Map.get(attrs, :profile_image_url)
+
+      if raw_image_url && String.trim(to_string(raw_image_url)) != "" do
+        %{"business_id" => business.id}
+        |> Kollective.Workers.BusinessImageOptimizer.new()
+        |> Oban.insert!()
+      end
+
+      {:ok, :media_scheduled}
+    end)
+
+    # Execution Transaction Engine Block
     |> Repo.transaction()
     |> case do
       {:ok, %{business: business}} ->
@@ -833,11 +850,12 @@ defmodule Kollective.Businesses.Businesses do
 
           %PoliticalDistrict{geom: %_{}} ->
             query =
-              from d in PoliticalDistrict,
+              from(d in PoliticalDistrict,
                 where: d.id == ^district_id,
                 select:
                   {fragment("ST_Y(ST_Centroid(?))", d.geom),
                    fragment("ST_X(ST_Centroid(?))", d.geom)}
+              )
 
             case Repo.one(query) do
               {lat, lng} when is_number(lat) and is_number(lng) ->

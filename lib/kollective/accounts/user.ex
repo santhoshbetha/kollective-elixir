@@ -1,5 +1,6 @@
 defmodule Kollective.Accounts.User do
   use Kollective.Schemas.Schema
+  use Waffle.Ecto.Schema
   import Ecto.Changeset
 
   alias Kollective.Accounts.NotificationSetting
@@ -125,8 +126,8 @@ defmodule Kollective.Accounts.User do
     field :official_website, :string
 
     # --- VISUALS ---
-    field :avatar_url, :string, default: "/default-avatar.jpg"
-    field :cover_image_url, :string, default: "/default-banner-bg.jpg"
+    field :avatar_url, Kollective.Media.UserAvatar.Type, default: "/default-avatar.jpg"
+    field :cover_image_url, Kollective.Media.UserCover.Type, default: "/default-banner-bg.jpg"
 
     # Virtual ranking score used by user search subqueries/order clauses.
     field :search_rank, :float, virtual: true
@@ -696,6 +697,7 @@ defmodule Kollective.Accounts.User do
       :accepts_chat_messages,
       :representative_name
     ])
+    |> cast_attachments(attrs, [:avatar_url, :cover_image_url])
     |> Ecto.Changeset.validate_length(:display_name, max: 100)
     |> Ecto.Changeset.validate_length(:representative_name, max: 100)
     # Traditional "Twitter-style" bio limit
@@ -740,11 +742,19 @@ defmodule Kollective.Accounts.User do
 
   defp validate_url_prefix(changeset, field) do
     validate_change(changeset, field, fn _, value ->
-      if is_nil(value) or value == "" or
-           String.starts_with?(value, ["http://", "https://", "/", "data:"]) do
-        []
-      else
-        [{field, "must be a valid asset URL"}]
+      cond do
+        is_nil(value) or value == "" ->
+          []
+
+        is_binary(value) ->
+          if String.starts_with?(value, ["http://", "https://", "/", "data:"]) do
+            []
+          else
+            [{field, "must be a valid asset URL"}]
+          end
+
+        true ->
+          []
       end
     end)
   end

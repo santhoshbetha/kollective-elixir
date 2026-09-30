@@ -151,6 +151,41 @@ defmodule Kollective.Accounts.Accounts do
   Applies schema validations and outputs the updated user map tuple.
   """
   def update_user_profile(%User{} = user, attrs) do
+    Ecto.Multi.new()
+    # Step 1: Execute base field casting validations within the Multi workspace block
+    |> Ecto.Multi.update(:user, User.profile_changeset(user, attrs))
+
+    # Step 2: MEDIA INTERCEPTOR: Scans incoming updates to queue background optimization lanes
+    |> Ecto.Multi.run(:trigger_media_optimization, fn _repo, %{user: updated_user} ->
+      # Check if a new avatar image payload path was submitted
+      if Map.get(attrs, "avatar_url") || Map.get(attrs, :avatar_url) do
+        %{"user_id" => updated_user.id, "asset_type" => "avatar"}
+        |> Kollective.Workers.UserMediaOptimizer.new()
+        |> Oban.insert!()
+      end
+
+      # Check if a new cover background banner path was submitted
+      if Map.get(attrs, "cover_image_url") || Map.get(attrs, :cover_image_url) do
+        %{"user_id" => updated_user.id, "asset_type" => "cover"}
+        |> Kollective.Workers.UserMediaOptimizer.new()
+        |> Oban.insert!()
+      end
+
+      {:ok, :optimization_queued}
+    end)
+
+    # Step 3: Run atomic execution across the central pool
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{user: final_user}} ->
+        {:ok, final_user}
+
+      {:error, _failed_step, changeset, _changes} ->
+        {:error, changeset}
+    end
+  end
+
+  def update_user_profileX(%User{} = user, attrs) do
     user
     |> User.profile_changeset(attrs)
     |> Repo.update()
@@ -690,9 +725,10 @@ defmodule Kollective.Accounts.Accounts do
     is_following =
       if current_user_id do
         Repo.exists?(
-          from r in UserRelationship,
+          from(r in UserRelationship,
             where:
               r.source_id == ^current_user_id and r.target_id == ^target_id and r.type == "follow"
+          )
         )
       else
         false
@@ -831,8 +867,9 @@ defmodule Kollective.Accounts.Accounts do
   @doc "Returns a quick boolean if user_a follows user_b"
   def following?(user_a_id, user_b_id) do
     Repo.exists?(
-      from r in UserRelationship,
+      from(r in UserRelationship,
         where: r.source_id == ^user_a_id and r.target_id == ^user_b_id and r.type == "follow"
+      )
     )
   end
 

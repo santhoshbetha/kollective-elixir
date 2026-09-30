@@ -101,7 +101,11 @@ defmodule KollectiveWeb.RelationshipController do
         conn |> put_status(:unprocessable_entity) |> json(%{error: "You cannot follow yourself."})
 
       true ->
-        case Repo.get_by(UserRelationship, source_id: user.id, target_id: target_user.id, type: "follow") do
+        case Repo.get_by(UserRelationship,
+               source_id: user.id,
+               target_id: target_user.id,
+               type: "follow"
+             ) do
           nil ->
             case Users.toggle_relationship(user, target_user.id, "follow") do
               {:ok, _} ->
@@ -114,7 +118,9 @@ defmodule KollectiveWeb.RelationshipController do
                 })
 
               {:error, _} ->
-                conn |> put_status(:unprocessable_entity) |> json(%{error: "Could not follow user."})
+                conn
+                |> put_status(:unprocessable_entity)
+                |> json(%{error: "Could not follow user."})
             end
 
           _existing ->
@@ -140,7 +146,11 @@ defmodule KollectiveWeb.RelationshipController do
         conn |> put_status(:not_found) |> json(%{error: "Account not found."})
 
       true ->
-        case Repo.get_by(UserRelationship, source_id: user.id, target_id: target_user.id, type: "follow") do
+        case Repo.get_by(UserRelationship,
+               source_id: user.id,
+               target_id: target_user.id,
+               type: "follow"
+             ) do
           nil ->
             json(conn, %{
               id: target_user.id,
@@ -162,7 +172,9 @@ defmodule KollectiveWeb.RelationshipController do
                 })
 
               {:error, _} ->
-                conn |> put_status(:unprocessable_entity) |> json(%{error: "Could not unfollow user."})
+                conn
+                |> put_status(:unprocessable_entity)
+                |> json(%{error: "Could not unfollow user."})
             end
         end
     end

@@ -32,7 +32,7 @@ defmodule Kollective.Workers.EventReminderWorker do
           target_type: "Event",
           # Consolidate dynamic properties safely inside your single JSONB metadata column
           metadata: %{
-            event_title: event.name,
+            event_title: event.title,
             local_time: formatted_time,
             # Helps React parse custom timeline icons
             sub_type: "one_hour_reminder"
@@ -41,7 +41,7 @@ defmodule Kollective.Workers.EventReminderWorker do
         %{
           # Transient WebSocket payload properties read instantly by React Toast alerts
           post_id: nil,
-          preview: "⏰ Reminder: '#{event.name}' is starting in 1 hour! (Time: #{formatted_time})"
+          preview: "⏰ Reminder: '#{event.title}' is starting in 1 hour! (Time: #{formatted_time})"
         }
       )
     end)
