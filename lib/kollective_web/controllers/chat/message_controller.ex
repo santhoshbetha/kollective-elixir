@@ -1,55 +1,65 @@
 defmodule KollectiveWeb.MessageController do
   use KollectiveWeb, :controller
   import Ecto.Query
+
   alias Kollective.Repo
   alias Kollective.Chats.Chats
   alias Kollective.Chats.Participant
   alias KollectiveWeb.MessageJSON
 
+  @doc """
+  GET /api/v1/conversations/:conversation_id/messages
+  Fetches historical messages with look-ahead cursor support after validating participant permissions [1.4].
+  """
   def index(conn, %{"conversation_id" => conversation_id} = params) do
-    current_user_id = conn.assigns.current_user.id
+    # SAFE SESSION EXTRACTION: Handles both current_user mappings and fallback user shapes cleanly
+    current_user = conn.assigns[:current_user] || conn.assigns[:user]
 
-    if Chats.is_participant?(conversation_id, current_user_id) do
-      # Parse optional cursor query configurations cleanly from request strings
+    if Chats.is_participant?(conversation_id, current_user.id) do
       limit = Map.get(params, "limit", "20") |> String.to_integer()
       before_id = Map.get(params, "before_id")
 
       {messages, other_last_read} =
-        Chats.list_messages_cursor(conversation_id, current_user_id,
+        Chats.list_messages_cursor(conversation_id, current_user.id,
           limit: limit,
           before_id: before_id
         )
 
-      # Extract the oldest message ID on this page to serve as the 'next_cursor'
       next_cursor =
         case List.first(messages) do
           nil -> nil
           first_msg -> first_msg.id
         end
 
-      # Output data array alongside page configuration blocks
       render(conn, :index,
         messages: messages,
         other_participant_last_read: other_last_read,
         next_cursor: next_cursor
       )
     else
-      conn |> put_status(:forbidden) |> json(%{error: "Unauthorized access path."})
+      conn
+      |> put_status(:forbidden)
+      |> json(%{error: "Access denied: Unauthorized conversation participant node."})
     end
   end
 
-  def create(conn, %{"conversation_id" => conv_id, "message" => msg_params}) do
-    user_id = conn.assigns.current_user.id
+  @doc """
+  POST /api/v1/conversations/:conversation_id/messages
+  Processes incoming RSA-encrypted binary payloads, writes to DB, and handles real-time de-duplication [1.4].
+  """
+  def create(conn, %{"conversation_id" => conv_id, "message" => msg_params} = params) do
+    current_user = conn.assigns[:current_user] || conn.assigns[:user]
 
-    case Chats.create_message_with_attachment(user_id, conv_id, msg_params) do
-      # Matches the exact tuple map shape returned by your Ecto.Multi transaction
+    # 🚀 THE DE-DUPLICATION FIX: Intercept the client-side tracing nonce
+    client_nonce = Map.get(params, "nonce") || Map.get(msg_params, "nonce")
+
+    case Chats.create_message_with_attachment(current_user.id, conv_id, msg_params) do
       {:ok, %{message: message}} ->
-        # 1. Deliver content over the specific chat WebSocket line
-        broadcast_new_message(message)
+        # Pass the tracking nonce through to the WebSocket broadcast loop [1.4]
+        broadcast_new_message(message, client_nonce)
 
-        # 2. 📣 EXTRA REAL-TIME ENHANCEMENT:
-        # Push a silent unread badge signal to the recipient's notification line
-        trigger_unread_badge_bump(user_id, conv_id)
+        # Trigger a silent push notification to bump the recipient's unread counter [1.4]
+        trigger_unread_badge_bump(current_user.id, conv_id)
 
         conn
         |> put_status(:created)
@@ -62,16 +72,22 @@ defmodule KollectiveWeb.MessageController do
     end
   end
 
-  defp broadcast_new_message(message) do
-    topic = "conversation:#{message.conversation_id}"
-    payload = MessageJSON.broadcast_data(message)
+  # --- Private Real-Time Routing Helpers ---
 
-    # Atomic deliver out to the explicit conversation timeline
-    KollectiveWeb.Endpoint.broadcast!(topic, "new_message", payload)
+  defp broadcast_new_message(message, nonce) do
+    topic = "conversation:#{message.conversation_id}"
+
+    # Serialize the binary content safely
+    base_payload = MessageJSON.broadcast_data(message)
+
+    # Inject the client-side nonce back into the payload map [1.4]
+    final_payload = if nonce, do: Map.put(base_payload, :nonce, nonce), else: base_payload
+
+    # Broadcast out to the active frontend chat components instantly [1.4]
+    KollectiveWeb.Endpoint.broadcast!(topic, "new_message", final_payload)
   end
 
   defp trigger_unread_badge_bump(sender_id, conversation_id) do
-    # Find the OTHER participant's ID inside this chat room
     recipient_id =
       from(p in Participant,
         where: p.conversation_id == ^conversation_id and p.user_id != ^sender_id,
@@ -80,7 +96,6 @@ defmodule KollectiveWeb.MessageController do
       |> Repo.one()
 
     if recipient_id do
-      # Compute their fresh global count using your exact get_unread_count/2 function
       unread_count = Chats.get_unread_count(conversation_id, recipient_id)
 
       alert_payload = %{
@@ -89,7 +104,7 @@ defmodule KollectiveWeb.MessageController do
         unread_count: unread_count
       }
 
-      # Broadcast to their secure private background notification channel!
+      # Streams directly down your user notification WebSocket line [1.4]
       KollectiveWeb.Endpoint.broadcast(
         "user_notifications:#{recipient_id}",
         "new_alert",

@@ -4,7 +4,7 @@ defmodule KollectiveWeb.ConversationController do
   alias KollectiveWeb.ConversationJSON
 
   def index(conn, _params) do
-    current_user_id = conn.assigns.current_user.id
+    current_user = conn.assigns[:current_user] || conn.assigns[:user]
 
     # Fetch recent rooms with preloaded last message and other participant profiles
     query = Chats.list_my_conversations(current_user_id)

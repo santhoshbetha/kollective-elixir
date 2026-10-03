@@ -297,17 +297,56 @@ defmodule KollectiveWeb.Router do
     post("/posts/:id/like", PostController, :handle_like)
   end
 
+  # SECURE MODERATION DESK PANEL OVERRIDES
+  scope "/api/v1/admin", KollectiveWeb.Admin do
+    pipe_through([:api, :api_authenticated, :require_admin_authenticated])
+
+    # Restrictive overrides reserved strictly for staff members
+    get "/reports", ReportController, :index
+    get "/reports/:id", ReportController, :show
+    post "/reports/:id/resolve", ReportController, :resolve
+    post("/reports/:report_id/kill", ReportController, :kill_flagged_event)
+
+    get("/audit_logs", LogController, :index)
+  end
+
+  scope "/api/v1/admin", KollectiveWeb.Admin do
+    # Substitute with your exact auth pipe names
+    pipe_through [:api, :api_authenticated]
+
+    # 🔬 SCHOLAR INTEGRITY AUDIT DESK PATHS
+    get "/incidents", ScholarIncidentController, :index
+    post "/incidents/:id/resolve", ScholarIncidentController, :resolve
+  end
+
+  scope "/api/v1/admin/root", KollectiveWeb.Admin do
+    # Substitute with your exact auth pipes
+    pipe_through [:api, :api_authenticated]
+
+    # SYSTEM STAFF DESK CONTROL ENDPOINTS
+    get "/audit_logs", StaffController, :audit_logs
+    post "/users/promote_admin", StaffController, :promote_admin
+    post "/users/promote_moderator", StaffController, :promote_moderator
+  end
+
   # ─── SCOPE C: PROTECTED WRITE MUTATIONS & EXPENSIVE LOOKUPS ───
   # Moderation endpoints (post restoration)
-  scope "/api/v1", KollectiveWeb.Admin do
+  scope "/api/v1/admin", KollectiveWeb.Admin do
     pipe_through([:api, :api_authenticated, :api_rate_limited])
 
-    post("/admin/posts/:id/restore", ModerationController, :restore_post)
-    post("/admin/posts/:id/reject", ModerationController, :reject_post)
-    post("/admin/posts/:id/appeal", ModerationController, :appeal_post)
-    delete("/admin/posts/:id/kill", ModerationController, :kill_post)
+    # SYSTEM CONFIGURATION FEATURE FLAG PATHWAYS
+    scope "/config" do
+      get "/feature_flags", FeatureFlagController, :index
+      post "/feature_flags/toggle", FeatureFlagController, :toggle
+    end
 
-    post("/admin/posts/bulk_approve", ModerationController, :bulk_approve)
+    post("/posts/:id/restore", ModerationController, :restore_post)
+    post("/posts/:id/reject", ModerationController, :reject_post)
+    post("/posts/:id/appeal", ModerationController, :appeal_post)
+    delete("/posts/:id/kill", ModerationController, :kill_post)
+    post("/comments/:comment_id/override", ModerationController, :override_comment_moderation)
+
+    post("/posts/bulk_approve", ModerationController, :bulk_approve)
   end
 
   # ─── SCOPE B: PROTECTED WRITE MUTATIONS & EXPENSIVE LOOKUPS ───
@@ -533,17 +572,6 @@ defmodule KollectiveWeb.Router do
 
     post("/scholar-verify", ScholarController, :verify_orcid)
     post("/journalist-verify", JournalistController, :verify_portfolio)
-  end
-
-  # SECURE MODERATION DESK PANEL OVERRIDES
-  scope "/api/v1/admin", KollectiveWeb.Admin do
-    pipe_through([:api, :api_authenticated, :require_admin_authenticated])
-
-    # Restrictive overrides reserved strictly for staff members
-    post("/reports/:id/resolve", ReportController, :resolve)
-    post("/reports/:report_id/kill", ReportController, :kill_flagged_event)
-
-    get("/audit_logs", LogController, :index)
   end
 
   scope "/api/v1/admin", KollectiveWeb.Admin do

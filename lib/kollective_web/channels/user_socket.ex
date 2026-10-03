@@ -4,9 +4,12 @@ defmodule KollectiveWeb.UserSocket do
   alias Kollective.Accounts.OrganizationMembership
 
   ## Channels
-  channel "user:*", KollectiveWeb.UserChannel
   channel "user:public", KollectiveWeb.UserPublicChannel
+  channel "user:*", KollectiveWeb.UserChannel
   channel "user_notifications:*", KollectiveWeb.NotificationChannel
+
+  # Routes system alerts to your high-security governance channel
+  channel "admin_notifications:*", KollectiveWeb.AdminChannel
 
   channel "feed:*", KollectiveWeb.FeedChannel
   channel "voice_alert", KollectiveWeb.FeedChannel
@@ -35,9 +38,12 @@ defmodule KollectiveWeb.UserSocket do
   # To deny connection, return `:error`.
   @impl true
   def connect(params, socket, _connect_info) do
-    token = params["token"] || params[:token]
+    raw_token = params["token"] || params[:token]
 
-    with true <- is_binary(token),
+    token =
+      if is_binary(raw_token), do: String.replace(raw_token, ~r/^Bearer\s+/i, ""), else: raw_token
+
+    with true <- is_binary(token) and token != "",
          {:ok, user} <- fetch_authenticated_user(token),
          {:ok, membership} <- validate_org_membership(user, params) do
       socket =
@@ -63,26 +69,23 @@ defmodule KollectiveWeb.UserSocket do
     end
   end
 
-  # Socket id's are topics that allow you to identify all sockets for a given user:
-  #
-  #     def id(socket), do: "user_socket:#{socket.assigns.user_id}"
-  #
-  # Would allow you to broadcast a "disconnect" event and terminate
-  # all active sockets and channels for a given user:
-  #
-  #     KollectiveWeb.Endpoint.broadcast("users_socket:#{user.id}", "disconnect", %{})
-  #
-  # Returning `nil` makes this socket anonymous.
   @impl true
-  # This allows us to target a specific user by their ULID
-  def id(socket), do: "users_socket:#{socket.assigns.user_id}"
+  def id(socket) do
+    if user_id = socket.assigns[:user_id] do
+      "users_socket:#{user_id}"
+    else
+      nil
+    end
+  end
 
   defp fetch_authenticated_user(token) when is_binary(token) do
+    clean_token = String.replace(token, ~r/^Bearer\s+/i, "")
+
     result =
-      case Base.url_decode64(token, padding: false) do
+      case Base.url_decode64(clean_token, padding: false) do
         {:ok, raw_bytes} -> Accounts.get_user_by_session_token(raw_bytes)
         _ -> nil
-      end || Accounts.get_user_by_session_token(token)
+      end || Accounts.get_user_by_session_token(clean_token)
 
     case result do
       {%{suspended_at: nil} = user, _inserted_at} -> {:ok, user}

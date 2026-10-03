@@ -118,6 +118,7 @@ defmodule Kollective.Accounts.User do
 
     # Documentation or proof reference (e.g., link to official filing or external KYC ID)
     field :verification_id, :string
+    field :under_investigation, :boolean, default: false
 
     # Profile Pages with Verification for candidates
     # e.g., "State Representative" or "City Council"

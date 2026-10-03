@@ -10,14 +10,18 @@ defmodule Kollective.Repo.Migrations.CreateAuditLogs do
       add :metadata, :map, default: "{}", null: false
 
       add :actor_id, references(:users, type: :binary_id, on_delete: :nilify_all)
-
-      add :organization_id, references(:users, type: :binary_id, on_delete: :delete_all),
-        null: false
+      add :organization_id, references(:users, type: :binary_id, on_delete: :delete_all)
 
       timestamps(updated_at: false)
     end
 
-    create index(:audit_logs, [:organization_id, :inserted_at])
+    # 🚀 HIGH-PERFORMANCE PRODUCTION INDEXES:
+    # Speeds up private organization dashboard ledger queries
+    create index(:audit_logs, [:organization_id])
+
+    # Speeds up chronological global root admin ledger queries where organization_id is nil
+    create index(:audit_logs, [:inserted_at, :id])
+
     create index(:audit_logs, [:actor_id])
   end
 end

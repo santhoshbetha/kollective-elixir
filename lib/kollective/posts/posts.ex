@@ -2270,10 +2270,10 @@ defmodule Kollective.Posts.Posts do
         metadata =
           Map.merge(
             %{
-              content_snippet: String.slice(post.content || "", 0, 100),
-              is_admin_delete: actor_id != post.user_id
+              "content_snippet" => String.slice(post.content || "", 0, 100),
+              "is_admin_delete" => actor_id != post.user_id
             },
-            custom_metadata
+            stringify_keys(custom_metadata)
           )
 
         audit_params = %{
@@ -2292,7 +2292,12 @@ defmodule Kollective.Posts.Posts do
 
     Repo.transaction(multi)
     |> case do
-      {:ok, %{post: deleted_post}} ->
+      {:ok, %{post: deleted_post} = results} ->
+        if audit_log = results[:audit_log] do
+          audit_log = Repo.preload(audit_log, :actor)
+          broadcast_audit_event(audit_log)
+        end
+
         {:ok, deleted_post}
 
       {:error, :post, changeset, _} ->
@@ -2307,6 +2312,41 @@ defmodule Kollective.Posts.Posts do
     post = Repo.get!(Post, post_id)
     delete_post(post, opts)
   end
+
+  defp broadcast_audit_event(%AuditLog{organization_id: org_id} = log) when not is_nil(org_id) do
+    payload = format_audit_payload(log)
+
+    # 1. Broad-stream down private organization websocket lanes
+    KollectiveWeb.Endpoint.broadcast("org_admin_audit:#{org_id}", "new_audit_log", payload)
+
+    # 2. Re-duplicate to operations desk if verified as global app administrative action
+    if log.metadata["is_global_action"] == true do
+      KollectiveWeb.Endpoint.broadcast("admin_notifications:global", "new_global_log", payload)
+    end
+  end
+
+  defp broadcast_audit_event(%AuditLog{} = log) do
+    payload = format_audit_payload(log)
+    KollectiveWeb.Endpoint.broadcast("admin_notifications:global", "new_global_log", payload)
+  end
+
+  defp format_audit_payload(log) do
+    %{
+      id: log.id,
+      action: log.action,
+      target_type: log.target_type,
+      target_id: log.target_id,
+      inserted_at: log.inserted_at,
+      metadata: log.metadata,
+      operator_name: (log.actor && (log.actor.username || log.actor.name)) || "system"
+    }
+  end
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), v} end)
+  end
+
+  defp stringify_keys(val), do: val
 
   # Reblog:
 
@@ -2687,7 +2727,7 @@ defmodule Kollective.Posts.Posts do
   notifies the author, and commands timelines to hide it.
   """
   def reject_post(admin, post_id, reason) do
-    post = Repo.get!(Post, post_id)
+    post = Repo.get!(Post, post_id) |> Repo.preload([:author])
 
     Multi.new()
     # 1. Commute status strings and store metadata context fields
@@ -2750,8 +2790,9 @@ defmodule Kollective.Posts.Posts do
   def appeal_post(user, post_id, reason) do
     post = Repo.get!(Post, post_id) |> Repo.preload(:author)
 
-    # Security Guard: Only allow an appeal if the post is rejected and belongs to the user
-    if post.status in [:rejected, "rejected"] and post.user_id == user.id do
+    # Security Guard: Only allow an appeal if the post is rejected and belongs to the user or is initiated by an admin
+    if post.status in [:rejected, "rejected"] and
+         (post.user_id == user.id or user.is_admin or user.is_moderator) do
       Multi.new()
       # Update status to appealed
       |> Multi.update(
@@ -2806,6 +2847,11 @@ defmodule Kollective.Posts.Posts do
 
     can_restore? =
       cond do
+        is_map(actor) and
+            (actor.is_admin || actor.is_moderator ||
+               Map.get(actor, :badge_type) in ["admin", "root", "staff"]) ->
+          true
+
         post.user_id && post.user_id == actor_id ->
           true
 
@@ -2857,14 +2903,15 @@ defmodule Kollective.Posts.Posts do
   end
 
   @doc """
+  Restores a previously rejected or hidden post, logs the administrative action inside
+  the database transaction, updates counters, and broadcasts out to platform or organization desks.
   Reverses a rejection lock, bringing the post back to life.
-  Streams it back into users' active React timelines in real-time.
   """
   def restore_post(admin, post_id) do
     post = Repo.get!(Post, post_id) |> Repo.preload([:author, :organization])
     actor_id = if is_map(admin), do: admin.id, else: admin
 
-    with :ok <- authorize_restore(post, actor_id) do
+    with :ok <- authorize_restore(post, admin) do
       multi =
         Multi.new()
         # 1. Reset state strings and clear out old block metadata fields
@@ -2879,7 +2926,7 @@ defmodule Kollective.Posts.Posts do
             appealed_at: nil
           })
         )
-        # 2. File administrative restoration log
+        # 2. File instance-specific administrative restoration log (Keep your existing AdminLog mapping)
         |> Multi.insert(:admin_log, %AdminLog{
           action: "post_restored",
           target_id: post.id,
@@ -2896,8 +2943,8 @@ defmodule Kollective.Posts.Posts do
             actor_id: actor_id,
             organization_id: post.organization_id,
             metadata: %{
-              original_author_id: post.user_id,
-              is_admin_override: post.user_id != actor_id
+              "original_author_id" => post.user_id,
+              "is_admin_override" => post.user_id != actor_id
             }
           }
 
@@ -2908,9 +2955,13 @@ defmodule Kollective.Posts.Posts do
 
       Repo.transaction(multi)
       |> case do
-        {:ok, %{post: restored_post}} ->
+        {:ok, %{post: restored_post} = results} ->
+          if audit_log = results[:audit_log] do
+            audit_log = Repo.preload(audit_log, :actor)
+            broadcast_audit_event(audit_log)
+          end
+
           # Hydrate preloads to supply your exact uniform React payload format
-          # Employs our fast batch virtual fields hydration wrapper model
           hydrated_posts =
             Repo.preload(restored_post, [:author, reblog_of: :author, attachments: []])
 
@@ -3661,7 +3712,8 @@ defmodule Kollective.Posts.Posts do
   # or settings) if the votes_count is greater than zero.
 
   @doc """
-  Updates a post, automatically recording edited_at timestamp and incrementing edit_count.
+  Updates an existing post profile, calculates poll locks, stamps incremental edit counters,
+  logs the transaction state changes unconditionally, and dispatches real-time WebSocket logs.
   Precludes editing poll configurations if voting has already commenced.
   """
   def update_post(%Post{} = post, attrs) do
@@ -3693,6 +3745,7 @@ defmodule Kollective.Posts.Posts do
           |> Ecto.Changeset.put_change(:edited_at, now)
           |> Ecto.Changeset.put_change(:edit_count, new_count)
 
+        # Initialize core transactional pipeline
         multi =
           Multi.new()
           |> Multi.update(:post, post_changeset)
@@ -3706,8 +3759,8 @@ defmodule Kollective.Posts.Posts do
               actor_id: actor_id,
               organization_id: post.organization_id,
               metadata: %{
-                new_edit_count: new_count,
-                is_admin_edit: actor_id != post.user_id
+                "new_edit_count" => new_count,
+                "is_admin_edit" => actor_id != post.user_id
               }
             }
 
@@ -3717,7 +3770,12 @@ defmodule Kollective.Posts.Posts do
           end
 
         case Repo.transaction(multi) do
-          {:ok, %{post: updated_post}} ->
+          {:ok, %{post: updated_post} = results} ->
+            if audit_log = results[:audit_log] do
+              audit_log = Repo.preload(audit_log, :actor)
+              broadcast_audit_event(audit_log)
+            end
+
             {:ok, updated_post}
 
           {:error, :post, %Ecto.Changeset{} = changeset, _} ->

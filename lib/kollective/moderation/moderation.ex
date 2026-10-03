@@ -1054,9 +1054,8 @@ defmodule Kollective.Moderation.Moderation do
     force = Map.get(params, "force") || Map.get(params, :force) || false
 
     # 1. Use light aggregate lookups to read queue counts before pulling full record pools
-    post_count = Repo.one(from(p in Post, where: p.status == "pending", select: count(p.id)))
-    event_count = Repo.one(from(e in Event, where: e.status == "pending", select: count(e.id)))
-    total = post_count + event_count
+    post_count = Repo.one(from(p in Post, where: p.status == :pending, select: count(p.id)))
+    total = post_count
 
     cond do
       # RULE 1: Nothing to process? Stop here to save database memory overhead

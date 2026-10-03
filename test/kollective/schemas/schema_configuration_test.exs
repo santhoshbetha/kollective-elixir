@@ -12,8 +12,10 @@ defmodule Kollective.Schemas.SchemaConfigurationTest do
                    Code.ensure_loaded?(module) and
                    function_exported?(module, :__schema__, 1)
                end)
-               # Exclude abstract base schemas
-               |> Stream.reject(fn module -> module == Kollective.Schemas.Schema end)
+               # Exclude abstract base schemas and custom string key config schemas
+               |> Stream.reject(fn module ->
+                 module in [Kollective.Schemas.Schema, Kollective.Admins.FeatureFlag]
+               end)
                |> Enum.to_list()
 
   describe "universal ULID enforcement" do

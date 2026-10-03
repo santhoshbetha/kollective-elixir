@@ -81,6 +81,15 @@ defmodule Kollective.Accounts.Accounts do
     |> Repo.all()
   end
 
+  @doc """
+  Lists users matching a list of user IDs.
+  """
+  def list_users_by_ids(user_ids) when is_list(user_ids) do
+    User
+    |> where([u], u.id in ^user_ids)
+    |> Repo.all()
+  end
+
   ## User registration
 
   @doc """

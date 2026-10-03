@@ -16,12 +16,16 @@ defmodule Kollective.Workers.VoiceBroadcastWorker do
 
       post ->
         # 2. Query target audience by matching against overlapping dynamic district fields
+        # 1. Gather targeted audience data fields
         user_ids = fetch_targeted_user_ids(post, author_id)
+        timestamp = DateTime.utc_now() |> DateTime.truncate(:second)
+
+        # 2. Fetch the author details cleanly to decorate the audio stream payload
+        author = Kollective.Accounts.Accounts.get_user!(author_id)
 
         if length(user_ids) > 0 do
-          timestamp = DateTime.utc_now() |> DateTime.truncate(:second)
-
           # 3. Build state schemas for structural batch persistence
+          # Persist batch rows to DB
           notifications =
             Enum.map(user_ids, fn user_id ->
               %{
@@ -38,6 +42,7 @@ defmodule Kollective.Workers.VoiceBroadcastWorker do
           Repo.insert_all(Notification, notifications)
 
           # 4. 📣 REAL-TIME WEBSOCKET PUSH
+          # 4. Push private text notifications to individuals
           # Broadcast out to individual user notification streams
           socket_payload = %{
             id: System.unique_integer([:positive]),
@@ -55,6 +60,21 @@ defmodule Kollective.Workers.VoiceBroadcastWorker do
             )
           end)
         end
+
+        # 📣 5. REAL-TIME STREAMING AUDIO BROADCAST:
+        # Fire a single global message directly to the "voice_alert" topic.
+        # This will be processed by KollectiveWeb.FeedChannel and pushed to ALL active browsers.
+        audio_payload = %{
+          post_id: post.id,
+          voice_url: post.voice_url || Map.get(post.metadata || %{}, "voice_url"),
+          author_name: author.username,
+          author_avatar: author.avatar_url || "/default-avatar.jpg",
+          preview_text: String.slice(post.content || "", 0, 60),
+          created_at: timestamp
+        }
+
+        # This broadcasts straight over your supervised Endpoint into the channel room instantly
+        KollectiveWeb.Endpoint.broadcast("voice_alert", "incoming_voice_toast", audio_payload)
 
         :ok
     end

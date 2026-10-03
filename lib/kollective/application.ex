@@ -19,7 +19,11 @@ defmodule Kollective.Application do
       {Oban, Application.fetch_env!(:kollective, Oban)},
 
       # Start the Phoenix Presence supervisor tracking pool
+      # Presence supervisor must boot right after PubSub servers mount
       KollectiveWeb.Presence,
+
+      # Boots up your ultra-fast in-memory flags cache engine [1.4]
+      Kollective.Admin.FeatureFlags,
       {DNSCluster, query: Application.get_env(:kollective, :dns_cluster_query) || :ignore},
 
       # 🛡️ THE CACHEX FIREWALL BUCKET:

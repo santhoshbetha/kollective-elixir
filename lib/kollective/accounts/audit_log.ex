@@ -18,6 +18,6 @@ defmodule Kollective.Accounts.AuditLog do
   def changeset(audit_log, attrs) do
     audit_log
     |> cast(attrs, [:action, :target_type, :target_id, :metadata, :actor_id, :organization_id])
-    |> validate_required([:action, :target_type, :target_id, :organization_id])
+    |> validate_required([:action, :target_type, :target_id])
   end
 end

@@ -6,7 +6,7 @@ defmodule KollectiveWeb.Admin.ModerationController do
 
   # POST /api/admin/moderation/bulk_approve
   def bulk_approve(conn, %{"params" => approve_params}) do
-    admin = conn.assigns.current_admin
+    admin = conn.assigns[:current_admin] || conn.assigns[:current_user] || conn.assigns[:user]
 
     case Moderation.bulk_approve_pending(admin, approve_params) do
       {:ok, counts} ->
@@ -34,7 +34,7 @@ defmodule KollectiveWeb.Admin.ModerationController do
 
   # POST /api/v1/admin/posts/:id/reject (Soft Rejection Lock)
   def reject_post(conn, %{"id" => id, "reason" => reason}) do
-    admin = conn.assigns.current_admin
+    admin = conn.assigns[:current_admin] || conn.assigns[:current_user] || conn.assigns[:user]
 
     # Call the code cleanly from your central Posts data context
     case Posts.reject_post(admin, id, reason) do
@@ -52,7 +52,7 @@ defmodule KollectiveWeb.Admin.ModerationController do
 
   # POST /api/v1/admin/posts/:id/appeal
   def appeal_post(conn, %{"id" => id, "reason" => reason}) do
-    admin = conn.assigns.current_admin
+    admin = conn.assigns[:current_admin] || conn.assigns[:current_user] || conn.assigns[:user]
 
     # Call the code cleanly from your central Posts data context
     case Posts.appeal_post(admin, id, reason) do
@@ -70,7 +70,7 @@ defmodule KollectiveWeb.Admin.ModerationController do
 
   # POST /api/v1/admin/posts/:id/restore (Restore Content)
   def restore_post(conn, %{"id" => id}) do
-    admin = conn.assigns.current_admin
+    admin = conn.assigns[:current_admin] || conn.assigns[:current_user] || conn.assigns[:user]
 
     # Call the code cleanly from your central Posts data context
     case Posts.restore_post(admin, id) do
@@ -97,7 +97,7 @@ defmodule KollectiveWeb.Admin.ModerationController do
 
   # DELETE /api/v1/admin/posts/:id (Hard Kill Switch)
   def kill_post(conn, %{"id" => id}) do
-    admin = conn.assigns.current_admin
+    admin = conn.assigns[:current_admin] || conn.assigns[:current_user] || conn.assigns[:user]
 
     case Moderation.admin_delete_post(admin, id) do
       {:ok, _post} ->
@@ -120,7 +120,7 @@ defmodule KollectiveWeb.Admin.ModerationController do
         "reason" => reason
       }) do
     # Securely verified admin user block
-    admin = conn.assigns.current_admin
+    admin = conn.assigns[:current_admin] || conn.assigns[:current_user] || conn.assigns[:user]
 
     case Moderation.admin_override_image(admin, comment_id, %{
            "status" => status,

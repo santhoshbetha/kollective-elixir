@@ -18,20 +18,42 @@ defmodule KollectiveWeb.UserPublicChannel do
   # The Global Topic Connection
   # Unlike the private user_notifications:${userId} or room:${roomId} channels which isolate users,
   # every single logged-in user in your entire application joins this exact same channel. It acts as a global virtual lobby.
-  def join("user:public", _params, socket) do
+  def joinX("user:public", _params, socket) do
     # 1. Start tracking this user's online status
     send(self(), :after_join)
     {:ok, socket}
   end
 
-  def handle_info(:after_join, socket) do
+  def join("user:public", _payload, socket) do
+    if socket.assigns[:is_authenticated] do
+      # Track authenticated users uniquely by their database ID string
+      send(self(), :track_presence)
+      {:ok, socket}
+    else
+      # Guest visitors join as read-only listeners without incrementing total metrics counts
+      {:ok, socket}
+    end
+  end
+
+  def handle_info(:track_presence, socket) do
     # Tracking the User in Memory
     # The moment a user connects, Phoenix registers their user_id and metadata (username, online_at)
     # into the distributed memory cluster. This state is instantly synchronized across all your server nodes automatically.
+    user_id = to_string(socket.assigns.user_id)
+
+    username =
+      cond do
+        user = socket.assigns[:user] -> user.username
+        name = socket.assigns[:username] -> name
+        true -> "anonymous"
+      end
+
     {:ok, _} =
-      Presence.track(socket, socket.assigns.user_id, %{
+      Presence.track(socket, user_id, %{
+        device_id: socket.id,
+        joined_at: inspect(System.system_time(:second)),
         online_at: System.system_time(:second),
-        username: socket.assigns.username
+        username: username
       })
 
     # 2. Push the current list of everyone online to the new user
@@ -49,11 +71,12 @@ defmodule KollectiveWeb.UserPublicChannel do
   # Only when the user closes their browser tab or logs out—triggering the WebSocket disconnect—does the
   # terminate/2 lifecycle hook fire, committing a single, clean last_seen timestamp update to the database.
   def terminate(_reason, socket) do
-    user_id = socket.assigns.user_id
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    if user_id = socket.assigns[:user_id] do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    # Update the database only once upon total disconnection
-    Kollective.Accounts.Accounts.update_user_last_seen(user_id, now)
+      # Update the database only once upon total disconnection
+      Kollective.Accounts.Accounts.update_user_last_seen(user_id, now)
+    end
 
     :ok
   end

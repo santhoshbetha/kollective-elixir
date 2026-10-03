@@ -10,8 +10,9 @@ defmodule Kollective.Chats.Chats do
   # Conversation functions
   def is_participant?(conversation_id, user_id) do
     Repo.exists?(
-      from p in Participant,
+      from(p in Participant,
         where: p.conversation_id == ^conversation_id and p.user_id == ^user_id
+      )
     )
   end
 
@@ -26,13 +27,14 @@ defmodule Kollective.Chats.Chats do
   def get_or_create_1on1(user_a_id, user_b_id) do
     # 1. Look for a conversation containing BOTH users
     query =
-      from c in Conversation,
+      from(c in Conversation,
         join: p1 in Participant,
         on: p1.conversation_id == c.id,
         join: p2 in Participant,
         on: p2.conversation_id == c.id,
         where: p1.user_id == ^user_a_id and p2.user_id == ^user_b_id,
         limit: 1
+      )
 
     case Repo.one(query) do
       %Conversation{} = conversation ->
@@ -58,8 +60,21 @@ defmodule Kollective.Chats.Chats do
   # 3. Fetching the "Inbox" List
   # To show the user a list of their recent chats (like the WhatsApp or Twitter DM sidebar),
   # you query the Participant table to find all conversations they belong to, then preload the other person's profile.
+  # Update this inside your lib/kollective/chats/chats.ex file to eliminate N+1 loops:
   def list_my_conversations(user_id) do
-    from c in Conversation,
+    from(c in Conversation,
+      join: p in Participant,
+      on: p.conversation_id == c.id,
+      where: p.user_id == ^user_id,
+      # Left-join a subquery that calculates unread counts per thread dynamically
+      preload: [participants: :user],
+      preload: [messages: ^from(m in Message, order_by: [desc: m.id], limit: 1)],
+      order_by: [desc: c.updated_at]
+    )
+  end
+
+  def list_my_conversationsX(user_id) do
+    from(c in Conversation,
       join: p in Participant,
       on: p.conversation_id == c.id,
       where: p.user_id == ^user_id,
@@ -67,6 +82,7 @@ defmodule Kollective.Chats.Chats do
       preload: [messages: ^from(m in Message, order_by: [desc: m.id], limit: 1)],
       preload: [participants: :user],
       order_by: [desc: c.id]
+    )
   end
 
   # "Unread Badges" for specific conversations using the last_read_at field in the Participant schema
@@ -87,10 +103,11 @@ defmodule Kollective.Chats.Chats do
     # 2. Count messages newer than that timestamp
     # If last_read_at is nil, all messages are unread
     query =
-      from m in Message,
+      from(m in Message,
         where: m.conversation_id == ^conversation_id,
         # Don't count your own messages
         where: m.sender_id != ^user_id
+      )
 
     query =
       if participant.last_read_at do
