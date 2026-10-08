@@ -3,7 +3,7 @@ defmodule KollectiveWeb.CityControllerTest do
 
   import Kollective.Factory
 
-  describe "GET /api/cities/search" do
+  describe "GET /api/v1/cities/search" do
     test "searches cities by prefix and country", %{conn: conn} do
       city1 =
         insert(:city,
@@ -17,7 +17,7 @@ defmodule KollectiveWeb.CityControllerTest do
       _city2 = insert(:city, name: "Dallas", state: "TX", country: "US")
       _city3 = insert(:city, name: "Auckland", country: "NZ")
 
-      conn = get(conn, ~p"/api/cities/search", %{"q" => "Aus", "country" => "US"})
+      conn = get(conn, ~p"/api/v1/cities/search", %{"q" => "Aus", "country" => "US"})
 
       assert response = json_response(conn, 200)
       assert is_list(response["data"])
@@ -31,7 +31,7 @@ defmodule KollectiveWeb.CityControllerTest do
     end
 
     test "returns empty list when no matches found", %{conn: conn} do
-      conn = get(conn, ~p"/api/cities/search", %{"q" => "Nonexistent", "country" => "US"})
+      conn = get(conn, ~p"/api/v1/cities/search", %{"q" => "Nonexistent", "country" => "US"})
 
       assert response = json_response(conn, 200)
       assert response["data"] == []

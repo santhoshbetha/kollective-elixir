@@ -22,7 +22,7 @@ defmodule KollectiveWeb.VouchControllerTest do
       conn: conn,
       voucher: voucher
     } do
-      conn = post(conn, ~p"/api/vouch/generate-token")
+      conn = post(conn, ~p"/api/v1/vouch/generate-token")
 
       assert %{
                "status" => "success",
@@ -51,7 +51,7 @@ defmodule KollectiveWeb.VouchControllerTest do
       token = VouchCache.generate_token(vouchee.id)
 
       # 3. Post to verify-peer
-      conn = post(conn, ~p"/api/vouch/verify-peer", %{"secure_token" => token})
+      conn = post(conn, ~p"/api/v1/vouch/verify-peer", %{"secure_token" => token})
 
       assert json_response(conn, 200) == %{
                "status" => "success",
@@ -67,7 +67,8 @@ defmodule KollectiveWeb.VouchControllerTest do
     end
 
     test "fails with gone (410) if the token is expired or not found", %{conn: conn} do
-      conn = post(conn, ~p"/api/vouch/verify-peer", %{"secure_token" => "vouch_tmp_non_existent"})
+      conn =
+        post(conn, ~p"/api/v1/vouch/verify-peer", %{"secure_token" => "vouch_tmp_non_existent"})
 
       assert json_response(conn, 400) == %{
                "status" => "error",
@@ -85,13 +86,27 @@ defmodule KollectiveWeb.VouchControllerTest do
       vouchee = insert(:user, account_tier: 0, origin_state: "NY", district_l1_id: ny_district.id)
       token = VouchCache.generate_token(vouchee.id)
 
-      conn = post(conn, ~p"/api/vouch/verify-peer", %{"secure_token" => token})
+      conn = post(conn, ~p"/api/v1/vouch/verify-peer", %{"secure_token" => token})
 
       assert %{
                "status" => "error",
                "error" => "transaction_failed",
                "message" => "Cross-state validation mapping rejected."
              } = json_response(conn, 422)
+    end
+
+    test "AccountJSON serializes vouch_count calculated directly from user_vouches database table", %{
+      voucher: voucher,
+      district: district
+    } do
+      vouchee = insert(:user, account_tier: 0, origin_state: "CA", district_l1_id: district.id)
+      assert KollectiveWeb.AccountJSON.show(%{user: vouchee}).vouch_count == 0
+
+      insert(:vouch, voucher: voucher, vouchee: vouchee, origin_state: "CA", matched_tier: "l1", district_value: district.id)
+
+      rendered = KollectiveWeb.AccountJSON.show(%{user: vouchee})
+      assert rendered.vouch_count == 1
+      assert rendered.account_tier == 0
     end
   end
 end

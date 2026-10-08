@@ -7,7 +7,7 @@ defmodule KollectiveWeb.AuditLogController do
   @doc """
   Lists audit logs for the current organization context with pagination.
   """
-  # GET /api/v1/org-settings/audit_logs
+  # GET /api/v1/org-settings/audit-logs
   def index(conn, params) do
     org_id = conn.assigns[:current_org_id] || params["org_id"]
 

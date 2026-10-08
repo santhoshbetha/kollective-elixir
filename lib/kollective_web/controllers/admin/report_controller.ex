@@ -135,6 +135,7 @@ defmodule KollectiveWeb.Admin.ReportController do
 
   @doc """
   POST /api/v1/admin/reports/:report_id/kill_event
+  # Admin cancel event
   """
   def kill_flagged_event(conn, %{"report_id" => report_id}) do
     admin = conn.assigns.current_user || conn.assigns[:user]

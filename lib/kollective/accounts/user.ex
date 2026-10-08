@@ -145,6 +145,7 @@ defmodule Kollective.Accounts.User do
     field :account_tier, :integer, default: 0
     field :metadata, :map, default: %{}
     field :origin_state, :string
+    field :vouch_count, :integer, virtual: true
 
     # --- PREFERENCES ---
     field :settings, :map, default: %{}
@@ -157,6 +158,8 @@ defmodule Kollective.Accounts.User do
     # --- ASSOCIATIONS ---
     has_many :posts, Kollective.Posts.Post
     has_many :notifications, Kollective.Notifications.Notification, on_delete: :delete_all
+    has_many :received_vouches, Kollective.Civic.Vouch, foreign_key: :vouchee_id
+    has_many :given_vouches, Kollective.Civic.Vouch, foreign_key: :voucher_id
 
     # UserRelationship logic for Follows/Blocks/Mutes
     # Direct access to the relationship records
@@ -696,7 +699,8 @@ defmodule Kollective.Accounts.User do
       :cover_image_url,
       :show_age,
       :accepts_chat_messages,
-      :representative_name
+      :representative_name,
+      :official_website
     ])
     |> cast_attachments(attrs, [:avatar_url, :cover_image_url])
     |> Ecto.Changeset.validate_length(:display_name, max: 100)
@@ -727,6 +731,10 @@ defmodule Kollective.Accounts.User do
       Map.get(attrs, "representative_name") || Map.get(attrs, "representative name") ||
         Map.get(attrs, :representative_name) || Map.get(attrs, :"representative name")
 
+    website =
+      Map.get(attrs, "official_website") || Map.get(attrs, "website") ||
+        Map.get(attrs, :official_website) || Map.get(attrs, :website)
+
     attrs = if avatar != nil, do: Map.put_new(attrs, "avatar_url", avatar), else: attrs
     attrs = if cover != nil, do: Map.put_new(attrs, "cover_image_url", cover), else: attrs
     attrs = if name != nil, do: Map.put_new(attrs, "display_name", name), else: attrs
@@ -734,6 +742,11 @@ defmodule Kollective.Accounts.User do
     attrs =
       if representative != nil,
         do: Map.put_new(attrs, "representative_name", representative),
+        else: attrs
+
+    attrs =
+      if website != nil,
+        do: Map.put_new(attrs, "official_website", website),
         else: attrs
 
     attrs

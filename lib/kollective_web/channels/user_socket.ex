@@ -26,6 +26,7 @@ defmodule KollectiveWeb.UserSocket do
 
   # Route to manage secure direct message streams
   channel "conversation:*", KollectiveWeb.ConversationChannel
+  channel "chat_group:*", KollectiveWeb.ChatGroupChannel
 
   channel "org_admin_audit:*", KollectiveWeb.OrgAdminAuditChannel
 
@@ -81,13 +82,7 @@ defmodule KollectiveWeb.UserSocket do
   defp fetch_authenticated_user(token) when is_binary(token) do
     clean_token = String.replace(token, ~r/^Bearer\s+/i, "")
 
-    result =
-      case Base.url_decode64(clean_token, padding: false) do
-        {:ok, raw_bytes} -> Accounts.get_user_by_session_token(raw_bytes)
-        _ -> nil
-      end || Accounts.get_user_by_session_token(clean_token)
-
-    case result do
+    case Accounts.get_user_by_session_token(clean_token) do
       {%{suspended_at: nil} = user, _inserted_at} -> {:ok, user}
       {:ok, %{suspended_at: nil} = user} -> {:ok, user}
       %{suspended_at: nil} = user -> {:ok, user}

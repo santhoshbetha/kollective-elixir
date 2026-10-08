@@ -6,6 +6,7 @@ defmodule KollectiveWeb.ReportController do
   alias KollectiveWeb.ChangesetJSON
 
   # POST /api/v1/posts/:post_id/report
+  # Report post by user
   def create(conn, %{"post_id" => post_id, "report" => report_params}) do
     user = conn.assigns.current_user
 

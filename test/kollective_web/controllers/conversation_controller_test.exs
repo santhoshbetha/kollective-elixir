@@ -4,8 +4,8 @@ defmodule KollectiveWeb.ConversationControllerTest do
   import Kollective.Factory
 
   describe "unauthenticated conversation endpoints" do
-    test "GET /api/conversations returns 401", %{conn: conn} do
-      conn = get(conn, ~p"/api/conversations")
+    test "GET /api/v1/conversations returns 401", %{conn: conn} do
+      conn = get(conn, ~p"/api/v1/conversations")
 
       assert conn.status == 401
       assert json_response(conn, 401)["message"] =~ "must log in"
@@ -15,19 +15,19 @@ defmodule KollectiveWeb.ConversationControllerTest do
   describe "authenticated conversation endpoints" do
     setup :authenticate_user
 
-    test "GET /api/conversations returns empty array when no conversations exist", %{
+    test "GET /api/v1/conversations returns empty array when no conversations exist", %{
       conn: conn
     } do
       response =
         conn
-        |> get(~p"/api/conversations")
+        |> get(~p"/api/v1/conversations")
         |> json_response(200)
 
       assert response["status"] == "success" || !Map.has_key?(response, "status")
       assert response["data"] == []
     end
 
-    test "GET /api/conversations returns active conversations with last message and unread counts",
+    test "GET /api/v1/conversations returns active conversations with last message and unread counts",
          %{conn: conn, user: user} do
       # Create conversation and participant records
       other_user = insert(:user)
@@ -48,7 +48,7 @@ defmodule KollectiveWeb.ConversationControllerTest do
 
       response =
         conn
-        |> get(~p"/api/conversations")
+        |> get(~p"/api/v1/conversations")
         |> json_response(200)
 
       assert length(response["data"]) == 1

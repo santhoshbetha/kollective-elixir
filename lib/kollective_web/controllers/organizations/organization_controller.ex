@@ -226,4 +226,62 @@ defmodule KollectiveWeb.OrganizationController do
       })
     end
   end
+
+  # PUT /api/v1/org-settings/profile
+  def update_profile(conn, params) do
+    org_id = conn.assigns[:current_org_id] || params["org_id"]
+    org_role = conn.assigns[:org_role]
+
+    cond do
+      is_nil(org_id) ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{
+          status: "error",
+          error: "Organization context is required.",
+          message: "Organization context is required."
+        })
+
+      org_role not in [:owner, :admin] ->
+        conn
+        |> put_status(:forbidden)
+        |> json(%{
+          status: "error",
+          error: "Only organization administrators can update organization settings.",
+          message: "Only organization administrators can update organization settings."
+        })
+
+      true ->
+        case Accounts.get_user(org_id) do
+          nil ->
+            conn
+            |> put_status(:not_found)
+            |> json(%{
+              status: "error",
+              error: "Organization not found.",
+              message: "Organization not found."
+            })
+
+          org ->
+            case Accounts.update_user_profile(org, params) do
+              {:ok, updated_org} ->
+                conn
+                |> put_status(:ok)
+                |> json(OrganizationJSON.update_profile_success(updated_org))
+
+              {:error, changeset} ->
+                errors = Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
+
+                conn
+                |> put_status(:unprocessable_entity)
+                |> json(%{
+                  status: "error",
+                  error: "validation_error",
+                  message: "Failed to update organization profile.",
+                  errors: errors
+                })
+            end
+        end
+    end
+  end
 end

@@ -20,8 +20,9 @@ defmodule Kollective.Media.BusinessImage do
   end
 
   # Organize file structures systematically within your Cloudflare folder keys
-  def storage_dir(_version, {_file, scope}) do
-    "uploads/businesses/#{scope.id}"
+  # Safely pattern match the scope's id to avoid runtime crashes during creation changesets
+  def storage_dir(_version, {_file, %{id: id}}) when not is_nil(id) do
+    "uploads/businesses/#{id}"
   end
 
   def transform(:thumb, _) do
@@ -38,4 +39,12 @@ defmodule Kollective.Media.BusinessImage do
   end
 
   def s3_url_config(_version, _scope), do: [virtual_host: true, scheme: "https"]
+
+  # FIX: Automatically triggered by Waffle when evaluating missing/empty database fields
+  def default_url(version, _scope) do
+    case version do
+      :thumb -> "#{@cdn_host}/images/placeholders/business_thumb.png"
+      _ -> "#{@cdn_host}/images/placeholders/business_original.png"
+    end
+  end
 end

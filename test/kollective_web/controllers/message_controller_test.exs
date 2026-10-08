@@ -19,7 +19,7 @@ defmodule KollectiveWeb.MessageControllerTest do
     {:ok, conn: conn, user: user, other_user: other_user, conversation: conversation}
   end
 
-  describe "GET /api/conversations/:conversation_id/messages" do
+  describe "GET /api/v1/conversations/:conversation_id/messages" do
     test "lists messages for a valid conversation participant", %{
       conn: conn,
       user: user,
@@ -31,7 +31,7 @@ defmodule KollectiveWeb.MessageControllerTest do
 
       response =
         conn
-        |> get(~p"/api/conversations/#{conversation.id}/messages")
+        |> get(~p"/api/v1/conversations/#{conversation.id}/messages")
         |> json_response(200)
 
       assert is_list(response["data"])
@@ -52,7 +52,7 @@ defmodule KollectiveWeb.MessageControllerTest do
 
       response =
         conn
-        |> get(~p"/api/conversations/#{conversation.id}/messages", %{
+        |> get(~p"/api/v1/conversations/#{conversation.id}/messages", %{
           "limit" => "1",
           "before_id" => to_string(m2.id)
         })
@@ -70,14 +70,14 @@ defmodule KollectiveWeb.MessageControllerTest do
 
       response =
         non_member_conn
-        |> get(~p"/api/conversations/#{conversation.id}/messages")
+        |> get(~p"/api/v1/conversations/#{conversation.id}/messages")
         |> json_response(403)
 
       assert response["error"] =~ "Unauthorized access path"
     end
   end
 
-  describe "POST /api/conversations/:conversation_id/messages" do
+  describe "POST /api/v1/conversations/:conversation_id/messages" do
     test "creates a new message successfully and broadcasts it", %{
       conn: conn,
       conversation: conversation
@@ -94,7 +94,7 @@ defmodule KollectiveWeb.MessageControllerTest do
 
       response =
         conn
-        |> post(~p"/api/conversations/#{conversation.id}/messages", params)
+        |> post(~p"/api/v1/conversations/#{conversation.id}/messages", params)
         |> json_response(201)
 
       assert response["data"]["encrypted_content"] == "This is my encrypted text"
@@ -122,7 +122,7 @@ defmodule KollectiveWeb.MessageControllerTest do
 
       response =
         conn
-        |> post(~p"/api/conversations/#{conversation.id}/messages", params)
+        |> post(~p"/api/v1/conversations/#{conversation.id}/messages", params)
         |> json_response(422)
 
       assert response["errors"]["encrypted_content"]

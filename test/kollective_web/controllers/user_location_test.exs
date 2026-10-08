@@ -84,7 +84,7 @@ defmodule KollectiveWeb.UserLocationTest do
     {:ok, conn: authed_conn, user: user, city: city, expected_l3_id: l3_id}
   end
 
-  describe "PATCH /api/me/political-location (Offline Mock Testing)" do
+  describe "PATCH /api/v1/me/political-location (Offline Mock Testing)" do
     test "successfully resolves districts using mocked GeoService responses", %{
       conn: conn,
       user: user,
@@ -115,7 +115,7 @@ defmodule KollectiveWeb.UserLocationTest do
       # This request executes 100% offline, ignoring the Nominatim API network servers!
       response =
         conn
-        |> patch(~p"/api/me/political-location", payload)
+        |> patch(~p"/api/v1/me/political-location", payload)
         |> json_response(200)
 
       assert response["status"] == "success"

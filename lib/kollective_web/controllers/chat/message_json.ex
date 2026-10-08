@@ -53,7 +53,7 @@ defmodule KollectiveWeb.MessageJSON do
     %{
       id: to_string(message.id),
       conversation_id: to_string(message.conversation_id),
-      sender_id: to_string(message.sender_id),
+      sender_id: message.sender_id,
 
       # 🚀 MULTI-NAMING KEY ALIGNMENT:
       # Feeds both base text content and cryptographic binary parameters
@@ -84,7 +84,7 @@ defmodule KollectiveWeb.MessageJSON do
       id: to_string(Map.get(message, :id) || Map.get(message, "id")),
       conversation_id:
         to_string(Map.get(message, :conversation_id) || Map.get(message, "conversation_id")),
-      sender_id: to_string(sender_id),
+      sender_id: sender_id,
       text: content,
       content: content,
       encrypted_content: content,
@@ -104,22 +104,29 @@ defmodule KollectiveWeb.MessageJSON do
   Builds the exact data map signature expected by your frontend useConversationChannel hooks.
   """
   def broadcast_data(%Message{} = message) do
+    author_map =
+      case Ecto.assoc_loaded?(message.sender) do
+        true -> %{id: to_string(message.sender.id), username: message.sender.username}
+        false -> %{id: to_string(message.sender_id), username: "user_#{message.sender_id}"}
+      end
+
     %{
       id: to_string(message.id),
       conversation_id: to_string(message.conversation_id),
-      sender_id: to_string(message.sender_id),
-
-      # Maps content fields to text attributes cleanly
+      sender_id: message.sender_id,
       text: message.encrypted_content,
       content: message.encrypted_content,
+      encrypted_content: message.encrypted_content,
+      author: author_map,
 
-      # Mounts the nested author reference frame for instant layout evaluation
-      author: %{
-        id: to_string(message.sender_id),
-        username: "user_#{message.sender_id}"
-      },
+      # 🔒 FIX: Added all missing cryptographic parameters back into WebSocket push broadcasts
       file_url: message.file_url,
-      inserted_at: DateTime.utc_now() |> DateTime.to_iso8601()
+      file_name: message.file_name,
+      file_iv: message.file_iv,
+      encrypted_file_key: message.encrypted_file_key,
+
+      # Use the real database timestamp parsed as an ISO-8601 string for reliable delivery sorting
+      inserted_at: DateTime.to_iso8601(message.inserted_at)
     }
   end
 end

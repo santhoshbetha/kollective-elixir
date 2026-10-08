@@ -69,6 +69,7 @@ defmodule KollectiveWeb.Admin.ModerationController do
   end
 
   # POST /api/v1/admin/posts/:id/restore (Restore Content)
+  # POST /api/v1/posts/:id/restore
   def restore_post(conn, %{"id" => id}) do
     admin = conn.assigns[:current_admin] || conn.assigns[:current_user] || conn.assigns[:user]
 

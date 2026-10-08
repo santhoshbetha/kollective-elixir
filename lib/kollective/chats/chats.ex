@@ -172,6 +172,9 @@ defmodule Kollective.Chats.Chats do
   end
 
   def create_message_with_attachment(user_id, conv_id, attrs) do
+    # Truncate your time parameter string down to the second to align timestamps perfectly
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
     Ecto.Multi.new()
     # 1. Insert the core message (storing the RSA-encrypted AES key)
 
@@ -183,8 +186,8 @@ defmodule Kollective.Chats.Chats do
     # 2. Update the conversation 'updated_at' to bubble it to the top of the inbox
     |> Ecto.Multi.update_all(
       :touch_conversation,
-      from(c in Conversation, where: c.id == ^conv_id),
-      set: [updated_at: DateTime.utc_now()]
+      from(c in Conversation, where: c.id == type(^conv_id, Ecto.ULID)),
+      set: [updated_at: now]
     )
     |> Repo.transaction()
   end
@@ -228,5 +231,31 @@ defmodule Kollective.Chats.Chats do
       |> Enum.reverse()
 
     {messages, other_last_read}
+  end
+
+  @doc """
+  Fetches public keys for all recipients in a conversation, explicitly excluding the sender.
+
+  Returns a list of maps containing the recipient `user_id` and their associated `public_key`.
+  Optimized using `select:` to skip loading full Ecto struct overhead into memory.
+  """
+  def get_recipient_public_keys(conversation_id, sender_id) do
+    Participant
+    |> where([p], p.conversation_id == ^conversation_id and p.user_id != ^sender_id)
+    |> where([p], not is_nil(p.public_key))
+    |> select([p], %{user_id: p.user_id, public_key: p.public_key})
+    |> Repo.all()
+  end
+
+  @doc """
+  Fetches public keys for absolutely everyone in the conversation (including the sender).
+  Useful for verifying group key states or sync environments across a user's multi-device layouts.
+  """
+  def get_all_conversation_public_keys(conversation_id) do
+    Participant
+    |> where([p], p.conversation_id == ^conversation_id)
+    |> where([p], not is_nil(p.public_key))
+    |> select([p], %{user_id: p.user_id, public_key: p.public_key})
+    |> Repo.all()
   end
 end

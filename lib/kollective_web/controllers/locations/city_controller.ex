@@ -4,7 +4,7 @@ defmodule KollectiveWeb.CityController do
   alias Kollective.{Locations.City, Repo}
   alias KollectiveWeb.LocationJSON
 
-  # GET /api/cities/search?q=Aus&country=US
+  # GET /api/v1/cities/search?q=Aus&country=US
   def search(conn, %{"q" => query, "country" => country}) do
     # Prefix matching allows index use
     search_term = "#{query}%"

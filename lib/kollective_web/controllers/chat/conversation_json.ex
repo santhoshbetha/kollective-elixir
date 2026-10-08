@@ -56,7 +56,7 @@ defmodule KollectiveWeb.ConversationJSON do
     |> Enum.find(fn p -> to_string(p.user_id) != to_string(current_user_id) end)
     |> case do
       nil ->
-        %{username: "Deleted User", avatar: "/default-avatar.jpg", user_id: nil}
+        %{username: "Deleted User", avatar: nil, user_id: nil}
 
       participant ->
         user = Map.get(participant, :user)
@@ -76,13 +76,13 @@ defmodule KollectiveWeb.ConversationJSON do
             }
 
           _ ->
-            %{username: "Deleted User", avatar: "/default-avatar.jpg", user_id: nil}
+            %{username: "Deleted User", avatar: nil, user_id: nil}
         end
     end
   end
 
   defp other_user(_, _),
-    do: %{username: "Deleted User", avatar: "/default-avatar.jpg", user_id: nil}
+    do: %{username: "Deleted User", avatar: nil, user_id: nil}
 
   defp serialize_last_message(nil), do: nil
 

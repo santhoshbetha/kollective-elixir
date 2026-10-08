@@ -7,15 +7,22 @@ defmodule KollectiveWeb.ResetPasswordController do
   plug :get_user_by_reset_password_token when action in [:update]
 
   # 1. REQUEST PASSWORD RESET LINK (Sends Email)
-  def create(conn, %{"user" => %{"email" => email}}) do
-    # Point this link explicitly to your separate FRONTEND application layout
-    Accounts.reset_password_for_email(email, fn token ->
-      "https://kollective.social/reset_password?token=#{token}"
-    end)
+  # POST /api/users/reset_password
+  def create(conn, params) do
+    email =
+      get_in(params, ["user", "email"]) ||
+        params["email"] ||
+        ""
+
+    if email != "" do
+      Accounts.reset_password_for_email(email, fn token ->
+        frontend_url = System.get_env("FRONTEND_URL") || "http://localhost:5173"
+        "#{frontend_url}/reset_password?token=#{token}"
+      end)
+    end
 
     conn
     # Always return 200 OK to prevent malicious user enumeration attacks
-
     |> put_status(:ok)
     |> json(%{
       status: "success",
@@ -24,8 +31,16 @@ defmodule KollectiveWeb.ResetPasswordController do
   end
 
   # 2. SUBMIT NEW PASSWORD (Fires update query)
-  def update(conn, %{"user" => user_params}) do
+  # PUT /api/users/reset_password/:token
+  def update(conn, params) do
     user = conn.assigns.user
+
+    user_params =
+      get_in(params, ["user"]) ||
+        %{
+          "password" => params["password"],
+          "password_confirmation" => params["password_confirmation"] || params["password_confirm"]
+        }
 
     case Accounts.reset_user_password(user, user_params) do
       {:ok, _user} ->
@@ -44,13 +59,14 @@ defmodule KollectiveWeb.ResetPasswordController do
 
   # 3. HELPER PLUG: Token Verification Guard
   defp get_user_by_reset_password_token(conn, _opts) do
-    # Pull token parameter safely whether it passes via body JSON or query string maps
-    with %{"token" => token} <- conn.params,
-         user when not is_nil(user) <- Accounts.get_user_by_reset_password_token(token) do
-      conn
-      |> assign(:user, user)
-      |> assign(:token, token)
-    else
+    token = conn.params["token"] || get_in(conn.params, ["user", "token"])
+
+    case token && Accounts.get_user_by_reset_password_token(token) do
+      %Kollective.Accounts.User{} = user ->
+        conn
+        |> assign(:user, user)
+        |> assign(:token, token)
+
       _invalid_or_missing ->
         conn
         |> put_status(:unauthorized)
@@ -58,7 +74,6 @@ defmodule KollectiveWeb.ResetPasswordController do
           status: "error",
           message: "The reset password token is invalid or has expired."
         })
-        # CRUCIAL: Blocks execution thread from jumping down into update/2
         |> halt()
     end
   end

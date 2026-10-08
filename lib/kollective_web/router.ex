@@ -159,6 +159,12 @@ defmodule KollectiveWeb.Router do
     get("/users/settings", SettingsController, :edit)
     put("/users/settings", SettingsController, :update)
     get("/users/settings/confirm-email/:token", SettingsController, :confirm_email)
+
+    post("/settings/change_email", SettingsController, :change_email)
+    post("/settings/change_password", SettingsController, :change_password)
+    post("/settings/preferences", SettingsController, :update_preferences)
+    put("/settings/preferences", SettingsController, :update_preferences)
+    delete("/settings/delete_account", SettingsController, :delete_account)
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -214,6 +220,9 @@ defmodule KollectiveWeb.Router do
   scope "/api/v1/org-settings", KollectiveWeb do
     # Enforces authentication, valid org membership, AND admin/owner status ranks
     pipe_through([:api, :api_authenticated, :org_context, :require_org])
+
+    # Handled by OrganizationController
+    put("/profile", OrganizationController, :update_profile)
 
     # Handled by TeamController
     get("/members", TeamController, :index)
@@ -302,9 +311,9 @@ defmodule KollectiveWeb.Router do
     pipe_through([:api, :api_authenticated, :require_admin_authenticated])
 
     # Restrictive overrides reserved strictly for staff members
-    get "/reports", ReportController, :index
-    get "/reports/:id", ReportController, :show
-    post "/reports/:id/resolve", ReportController, :resolve
+    get("/reports", ReportController, :index)
+    get("/reports/:id", ReportController, :show)
+    post("/reports/:id/resolve", ReportController, :resolve)
     post("/reports/:report_id/kill", ReportController, :kill_flagged_event)
 
     get("/audit_logs", LogController, :index)
@@ -312,21 +321,21 @@ defmodule KollectiveWeb.Router do
 
   scope "/api/v1/admin", KollectiveWeb.Admin do
     # Substitute with your exact auth pipe names
-    pipe_through [:api, :api_authenticated]
+    pipe_through([:api, :api_authenticated])
 
     # 🔬 SCHOLAR INTEGRITY AUDIT DESK PATHS
-    get "/incidents", ScholarIncidentController, :index
-    post "/incidents/:id/resolve", ScholarIncidentController, :resolve
+    get("/incidents", ScholarIncidentController, :index)
+    post("/incidents/:id/resolve", ScholarIncidentController, :resolve)
   end
 
   scope "/api/v1/admin/root", KollectiveWeb.Admin do
     # Substitute with your exact auth pipes
-    pipe_through [:api, :api_authenticated]
+    pipe_through([:api, :api_authenticated])
 
     # SYSTEM STAFF DESK CONTROL ENDPOINTS
-    get "/audit_logs", StaffController, :audit_logs
-    post "/users/promote_admin", StaffController, :promote_admin
-    post "/users/promote_moderator", StaffController, :promote_moderator
+    get("/audit_logs", StaffController, :audit_logs)
+    post("/users/promote_admin", StaffController, :promote_admin)
+    post("/users/promote_moderator", StaffController, :promote_moderator)
   end
 
   # ─── SCOPE C: PROTECTED WRITE MUTATIONS & EXPENSIVE LOOKUPS ───
@@ -336,8 +345,9 @@ defmodule KollectiveWeb.Router do
 
     # SYSTEM CONFIGURATION FEATURE FLAG PATHWAYS
     scope "/config" do
-      get "/feature_flags", FeatureFlagController, :index
-      post "/feature_flags/toggle", FeatureFlagController, :toggle
+      get("/feature_flags", FeatureFlagController, :index)
+      post("/feature_flags", FeatureFlagController, :index)
+      post("/feature_flags/toggle", FeatureFlagController, :toggle)
     end
 
     post("/posts/:id/restore", ModerationController, :restore_post)
@@ -580,7 +590,12 @@ defmodule KollectiveWeb.Router do
 
     # RAM IP Blacklist Monitoring Panel Lookups
     get("/security/blacklist", SecurityController, :index)
+    post("/security/blacklist", SecurityController, :add_blacklist)
     delete("/security/blacklist/:ip", SecurityController, :pardon)
+
+    # Shadow-ban Filters
+    post("/security/shadowban", SecurityController, :add_shadowban)
+    delete("/security/shadowban/:identifier", SecurityController, :remove_shadowban)
 
     # Bulk Cooldown Wipes
     post("/security/lift-cooldowns", SecurityController, :lift_all)
@@ -621,7 +636,7 @@ defmodule KollectiveWeb.Router do
   end
 
   # 👥 Public Peer-to-Peer Verification Scope
-  scope "/api/vouch", KollectiveWeb do
+  scope "/api/v1/vouch", KollectiveWeb do
     # Requires standard JWT validation token headers
     pipe_through([:api, :api_authenticated])
 
@@ -653,18 +668,25 @@ defmodule KollectiveWeb.Router do
     post("/notifications/mark_as_read", NotificationController, :mark_as_read)
   end
 
-  scope "/api", KollectiveWeb do
+  scope "/api/v1", KollectiveWeb do
     # Ensure your auth plug runs here
     pipe_through([:api, :api_authenticated])
 
     # 📥 Inbox List: Fetch the user's active DM list / sidebar conversations
     get("/conversations", ConversationController, :index)
+    post("/conversations", ConversationController, :create)
 
     # 📁 Message History: Pull older historical texts for a specific conversation thread
     get("/conversations/:conversation_id/messages", MessageController, :index)
 
     # ✉️ Create Message: Your existing endpoint route
     post("/conversations/:conversation_id/messages", MessageController, :create)
+  end
+
+  # STORAGE CONTROLLER for Chat media attachments
+  scope "/api/v1/storage", KollectiveWeb do
+    pipe_through([:api, :api_authenticated])
+    post("/presign", StorageController, :presign)
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -710,7 +732,7 @@ defmodule KollectiveWeb.Router do
     post("/civic/update_precinct_node", CivicController, :update_precinct_node)
   end
 
-  scope "/api/cities", KollectiveWeb do
+  scope "/api/v1/cities", KollectiveWeb do
     pipe_through([:api])
 
     get("/search", CityController, :search)

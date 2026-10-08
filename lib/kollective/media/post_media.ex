@@ -4,7 +4,7 @@ defmodule Kollective.Media.PostMedia do
 
   # 1. Define supported versions
   # 'thumb' for the feed, 'original' for the full view, 'poster' for video poster frames
-  @versions [:original, :thumb, :poster]
+  @versions [:original, :thumb, :poster, :static]
 
   # 5MB in bytes
   @max_size 5 * 1024 * 1024
@@ -83,3 +83,8 @@ defmodule Kollective.Media.PostMedia do
     end
   end
 end
+
+# Waffle checks the @versions list at compile time to generate the underlying matching logic for
+# PostMedia.url/2. Without adding :static to that list, calling PostMedia.url({att.media, att}, :static)
+# would either fail to compile or throw a runtime error because the module wouldn't recognize :static
+# as a valid version to process or generate a path for.

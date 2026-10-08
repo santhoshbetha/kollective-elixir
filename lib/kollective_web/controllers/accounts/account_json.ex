@@ -6,7 +6,9 @@ defmodule KollectiveWeb.AccountJSON do
   import Ecto.Query
   alias Kollective.Repo
   alias Kollective.Accounts.Accounts
+  alias Kollective.Accounts.User
   alias Kollective.Accounts.UserRelationship
+  alias Kollective.Civic.Vouch
   alias Kollective.Notifications.Notifications
   # alias Kollective.Chats.Chats
 
@@ -16,7 +18,7 @@ defmodule KollectiveWeb.AccountJSON do
   def index(%{users: users} = opts) do
     reading_user = opts[:for]
 
-    # Pre-fetch dynamic relation markers in a single pass to prevent N+1 query thrashes
+    # Pre-fetch dynamic relation markers and vouch counts in a single pass to prevent N+1 query thrashes
     relationship_map =
       if reading_user && opts[:embed_relationships] != false do
         fetch_relationship_batch_map(reading_user.id, Enum.map(users, & &1.id))
@@ -24,12 +26,15 @@ defmodule KollectiveWeb.AccountJSON do
         %{}
       end
 
+    vouch_count_map = Vouch.batch_count_for_users(Enum.map(users, & &1.id))
+
     users
     |> Enum.map(fn user ->
       user_opts =
         Map.merge(opts, %{
           user: user,
-          relationship_context: Map.get(relationship_map, user.id, %{})
+          relationship_context: Map.get(relationship_map, user.id, %{}),
+          vouch_count_map: vouch_count_map
         })
 
       show(user_opts)
@@ -68,6 +73,10 @@ defmodule KollectiveWeb.AccountJSON do
 
     avatar = resolve_avatar(user)
     cover = resolve_cover(user)
+
+    vouch_count = resolve_vouch_count(user)
+    is_peer_vouched = (user.account_tier || 0) >= 1 or vouch_count >= 1
+    is_vouched = is_peer_vouched or (user.is_verified || false)
 
     %{
       # ─── 1. CORE PROFILE DETAILS ───
@@ -158,9 +167,9 @@ defmodule KollectiveWeb.AccountJSON do
         is_exempt: user.is_exempt || false,
         is_shadow_banned: user.is_shadow_banned || false,
         account_tier: user.account_tier || 0,
-        is_peer_vouched: (user.account_tier || 0) >= 1,
-        is_vouched: (user.account_tier || 0) >= 1 || (user.is_verified || false),
-        vouch_count: user.account_tier || 0,
+        is_peer_vouched: is_peer_vouched,
+        is_vouched: is_vouched,
+        vouch_count: vouch_count,
         role: to_string(user.role || :user)
       },
 
@@ -193,6 +202,10 @@ defmodule KollectiveWeb.AccountJSON do
     avatar = resolve_avatar(user)
     cover = resolve_cover(user)
 
+    vouch_count = resolve_vouch_count(user, opts)
+    is_peer_vouched = (user.account_tier || 0) >= 1 or vouch_count >= 1
+    is_vouched = is_peer_vouched or (user.is_verified || false)
+
     %{
       id: to_string(user.id),
       username: user.username,
@@ -214,9 +227,9 @@ defmodule KollectiveWeb.AccountJSON do
       # Meta state parameters
       is_verified: user.is_verified || false,
       account_tier: user.account_tier || 0,
-      is_peer_vouched: (user.account_tier || 0) >= 1,
-      is_vouched: (user.account_tier || 0) >= 1 || (user.is_verified || false),
-      vouch_count: user.account_tier || 0,
+      is_peer_vouched: is_peer_vouched,
+      is_vouched: is_vouched,
+      vouch_count: vouch_count,
       is_admin: user.is_admin || false,
       is_moderator: user.is_moderator || false,
       is_discoverable: user.is_discoverable || true,
@@ -233,6 +246,37 @@ defmodule KollectiveWeb.AccountJSON do
         if(user.show_age || (reading_user && reading_user.id == user.id), do: user.age, else: nil)
     }
     |> maybe_put_private_settings(user, reading_user)
+  end
+
+  defp resolve_vouch_count(user, opts \\ %{}) do
+    vouch_map =
+      cond do
+        is_map(opts) && Map.has_key?(opts, :vouch_count_map) -> opts.vouch_count_map
+        is_list(opts) && Keyword.has_key?(opts, :vouch_count_map) -> opts[:vouch_count_map]
+        true -> %{}
+      end
+
+    user_id = Map.get(user, :id)
+
+    cond do
+      user_id && Map.has_key?(vouch_map, user_id) ->
+        Map.get(vouch_map, user_id, 0)
+
+      user_id && Map.has_key?(vouch_map, to_string(user_id)) ->
+        Map.get(vouch_map, to_string(user_id), 0)
+
+      Map.has_key?(user, :vouch_count) and not is_nil(user.vouch_count) ->
+        user.vouch_count
+
+      Ecto.assoc_loaded?(Map.get(user, :received_vouches)) ->
+        length(user.received_vouches)
+
+      user_id ->
+        Vouch.count_for_user(user_id)
+
+      true ->
+        0
+    end
   end
 
   # ─── EXTRACTION RELATIONSHIP HELPER MATRICES (O(1) BATCH PRE-FETCH) ───

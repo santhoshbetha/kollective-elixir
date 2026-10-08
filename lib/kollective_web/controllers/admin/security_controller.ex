@@ -15,7 +15,104 @@ defmodule KollectiveWeb.Admin.SecurityController do
   """
   def index(conn, _params) do
     ips = Security.list_blacklisted_ips()
-    json(conn, %{status: "success", data: %{blacklisted_ips: ips}})
+    shadow_users = Security.list_shadowbanned_users()
+    lockdown = Security.lockdown_active?()
+
+    json(conn, %{
+      status: "success",
+      data: %{
+        blacklisted_ips: ips,
+        shadowbanned_users: shadow_users,
+        lockdown_active: lockdown
+      }
+    })
+  end
+
+  @doc """
+  POST /api/v1/admin/security/blacklist
+  Manually blacklists an IP address or CIDR range.
+  """
+  def add_blacklist(conn, %{"ip" => ip}) when is_binary(ip) do
+    admin = conn.assigns[:current_user] || conn.assigns[:user]
+    cleaned_ip = String.trim(ip)
+
+    if cleaned_ip != "" do
+      Security.blacklist_ip(cleaned_ip)
+      insert_security_audit_log(admin.id, "ip_blacklisted", %{ip: cleaned_ip})
+
+      AuditLogs.create_audit_log(%{
+        action: "FIREWALL_IP_BAN",
+        target_type: "System",
+        target_id: cleaned_ip,
+        actor_id: admin.id,
+        metadata: %{"ip" => cleaned_ip, "role" => "admin"}
+      })
+
+      json(conn, %{
+        status: "success",
+        message: "IP / CIDR #{cleaned_ip} has been added to the RAM firewall blacklist."
+      })
+    else
+      conn
+      |> put_status(:bad_request)
+      |> json(%{status: "error", error: "Invalid or empty IP address parameter."})
+    end
+  end
+
+  @doc """
+  POST /api/v1/admin/security/shadowban
+  Shadow-bans a user account or handle in RAM cache.
+  """
+  def add_shadowban(conn, %{"identifier" => identifier}) when is_binary(identifier) do
+    admin = conn.assigns[:current_user] || conn.assigns[:user]
+    cleaned_id = String.trim(identifier) |> String.replace_leading("@", "")
+
+    if cleaned_id != "" do
+      Security.shadowban_user(cleaned_id)
+      insert_security_audit_log(admin.id, "user_shadowbanned", %{identifier: cleaned_id})
+
+      AuditLogs.create_audit_log(%{
+        action: "USER_SHADOW_BAN",
+        target_type: "User",
+        target_id: cleaned_id,
+        actor_id: admin.id,
+        metadata: %{"identifier" => cleaned_id, "role" => "admin"}
+      })
+
+      json(conn, %{
+        status: "success",
+        message: "User @#{cleaned_id} is now shadow-banned in the memory firewall."
+      })
+    else
+      conn
+      |> put_status(:bad_request)
+      |> json(%{status: "error", error: "Invalid user handle or ID."})
+    end
+  end
+
+  @doc """
+  DELETE /api/v1/admin/security/shadowban/:identifier
+  Removes a user handle or ID from the shadow-ban list.
+  """
+  def remove_shadowban(conn, %{"identifier" => identifier}) do
+    admin = conn.assigns[:current_user] || conn.assigns[:user]
+    cleaned_id = String.trim(identifier) |> String.replace_leading("@", "")
+
+    Security.remove_shadowban(cleaned_id)
+    insert_security_audit_log(admin.id, "shadowban_removed", %{identifier: cleaned_id})
+
+    AuditLogs.create_audit_log(%{
+      action: "USER_SHADOW_UNBAN",
+      target_type: "User",
+      target_id: cleaned_id,
+      actor_id: admin.id,
+      metadata: %{"identifier" => cleaned_id, "role" => "admin"}
+    })
+
+    json(conn, %{
+      status: "success",
+      message: "Shadow-ban filter for @#{cleaned_id} has been removed."
+    })
   end
 
   @doc """

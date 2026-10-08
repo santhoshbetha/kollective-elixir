@@ -59,6 +59,26 @@ defmodule KollectiveWeb.OrganizationJSON do
   end
 
   @doc """
+  Renders update organization profile success response.
+  """
+  def update_profile_success(org, message \\ "Organization profile updated successfully.") do
+    %{
+      status: "success",
+      message: message,
+      data: %{
+        id: to_string(org.id),
+        name: org.display_name,
+        display_name: org.display_name,
+        bio: org.bio,
+        website: org.official_website,
+        official_website: org.official_website,
+        avatar_url: org.avatar_url,
+        cover_image_url: org.cover_image_url
+      }
+    }
+  end
+
+  @doc """
   Renders a single organization profile.
   """
   def show(%{organization: org}), do: %{data: data(org)}

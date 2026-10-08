@@ -20,7 +20,7 @@ defmodule KollectiveWeb.TeamController do
   @doc """
   Fetches outstanding, pending invitations sent out by this specific organization workspace.
   """
-  # GET /api/org-settings/pending-invites
+  # GET /api/v1/org-settings/pending-invites
   def pending_invites(conn, _params) do
     # Populated securely by your upstream org_context plug pipelines
     org_id = conn.assigns.current_org_id

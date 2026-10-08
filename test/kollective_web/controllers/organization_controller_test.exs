@@ -132,4 +132,55 @@ defmodule KollectiveWeb.OrganizationControllerTest do
                "contributor"
     end
   end
+
+  describe "PUT /api/v1/org-settings/profile - Update Org Profile" do
+    test "allows an admin or owner to update org profile information", %{
+      conn: conn,
+      admin: admin,
+      org: org
+    } do
+      payload = %{
+        "name" => "Updated Enterprise Inc",
+        "bio" => "New official organization bio",
+        "website" => "https://updated-enterprise.org"
+      }
+
+      conn =
+        conn
+        |> assign(:current_user, admin)
+        |> put_req_header("x-organization-id", to_string(org.id))
+        |> put(~p"/api/v1/org-settings/profile", payload)
+
+      response = json_response(conn, 200)
+      assert response["status"] == "success"
+      assert response["message"] == "Organization profile updated successfully."
+      assert response["data"]["display_name"] == "Updated Enterprise Inc"
+      assert response["data"]["bio"] == "New official organization bio"
+      assert response["data"]["website"] == "https://updated-enterprise.org"
+
+      updated_org = Repo.get(Kollective.Accounts.User, org.id)
+      assert updated_org.display_name == "Updated Enterprise Inc"
+      assert updated_org.bio == "New official organization bio"
+      assert updated_org.official_website == "https://updated-enterprise.org"
+    end
+
+    test "rejects update when user is only a contributor", %{
+      conn: conn,
+      contributor: contributor,
+      org: org
+    } do
+      payload = %{
+        "name" => "Unauthorized Change"
+      }
+
+      conn =
+        conn
+        |> assign(:current_user, contributor)
+        |> put_req_header("x-organization-id", to_string(org.id))
+        |> put(~p"/api/v1/org-settings/profile", payload)
+
+      response = json_response(conn, 403)
+      assert response["status"] == "error"
+    end
+  end
 end

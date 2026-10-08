@@ -13,8 +13,9 @@ defmodule Kollective.Chats.Participant do
     # We store the user's current Public Key here for easy lookup during encryption
     field :public_key, :string
 
-    belongs_to :user, Kollective.Accounts.User
-    belongs_to :conversation, Kollective.Chats.Conversation
+    # Align association primary key field translation behaviors to match ULID structures
+    belongs_to :user, Kollective.Accounts.User, type: Ecto.ULID
+    belongs_to :conversation, Kollective.Chats.Conversation, type: Ecto.ULID
 
     timestamps()
   end

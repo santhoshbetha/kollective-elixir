@@ -39,7 +39,7 @@ defmodule KollectiveWeb.MessageController do
     else
       conn
       |> put_status(:forbidden)
-      |> json(%{error: "Access denied: Unauthorized conversation participant node."})
+      |> json(%{error: "Unauthorized access path."})
     end
   end
 
@@ -50,13 +50,21 @@ defmodule KollectiveWeb.MessageController do
   def create(conn, %{"conversation_id" => conv_id, "message" => msg_params} = params) do
     current_user = conn.assigns[:current_user] || conn.assigns[:user]
 
+    IO.inspect(current_user, label: "current_user")
+    IO.inspect(conv_id, label: "conv_id")
+    IO.inspect(msg_params, label: "msg_params")
+
     # 🚀 THE DE-DUPLICATION FIX: Intercept the client-side tracing nonce
     client_nonce = Map.get(params, "nonce") || Map.get(msg_params, "nonce")
+
+    IO.inspect(client_nonce, label: "client_nonce")
 
     case Chats.create_message_with_attachment(current_user.id, conv_id, msg_params) do
       {:ok, %{message: message}} ->
         # Pass the tracking nonce through to the WebSocket broadcast loop [1.4]
         broadcast_new_message(message, client_nonce)
+
+        IO.inspect(message, label: "message")
 
         # Trigger a silent push notification to bump the recipient's unread counter [1.4]
         trigger_unread_badge_bump(current_user.id, conv_id)
@@ -88,6 +96,12 @@ defmodule KollectiveWeb.MessageController do
   end
 
   defp trigger_unread_badge_bump(sender_id, conversation_id) do
+    alias Kollective.Chats.Participant
+    alias Kollective.Repo
+    import Ecto.Query
+
+    sender = Repo.get(Kollective.Accounts.User, sender_id)
+
     recipient_id =
       from(p in Participant,
         where: p.conversation_id == ^conversation_id and p.user_id != ^sender_id,
@@ -95,19 +109,71 @@ defmodule KollectiveWeb.MessageController do
       )
       |> Repo.one()
 
-    if recipient_id do
-      unread_count = Chats.get_unread_count(conversation_id, recipient_id)
+    IO.inspect(recipient_id, label: "recipient_id")
+    IO.inspect(sender, label: "sender")
 
+    if recipient_id && sender do
+      # Calculate the recipient's fresh unread message balances count
+      unread_count = Kollective.Chats.Chats.get_unread_count(conversation_id, recipient_id)
+
+      # 🚨 UNIFIED REAL-TIME DATA SCHEMA CONTRACT:
+      # We pack all metrics into a flat map that mirrors your exact React payload expectations
       alert_payload = %{
-        type: "dm_badge_update",
-        conversation_id: conversation_id,
-        unread_count: unread_count
+        # Protects lists loops rendering errors on frontend
+        "id" => Ecto.UUID.generate(),
+        "type" => "dm_badge_update",
+        "conversation_id" => to_string(conversation_id),
+        "unread_count" => unread_count,
+        "sender_id" => to_string(sender_id),
+        "sender_username" => sender.username,
+        # Double protection safety tracking fallback
+        "operator_name" => sender.username,
+        "preview_text" => "Sent you an encrypted direct transmission message."
       }
 
-      # Streams directly down your user notification WebSocket line [1.4]
+      IO.inspect(alert_payload, label: "alert_payload")
+
+      # 🚀 THE BACKEND FIX:
+      # Broadcasts across your explicit user topic lane using the standard "new_notification" key.
+      # This bypasses channel structural restrictions and forces delivery across the pipeline.
+      KollectiveWeb.Endpoint.broadcast!(
+        "user_notifications:#{recipient_id}",
+        "new_notification",
+        alert_payload
+      )
+
+      IO.inspect(alert_payload, label: "alert_payload")
+    end
+  end
+
+  defp trigger_unread_badge_bumpX(sender_id, conversation_id) do
+    # 1. Fetch recipient and sender username references cleanly
+    sender = Kollective.Repo.get(Kollective.Accounts.User, sender_id)
+
+    recipient_id =
+      from(p in Participant,
+        where: p.conversation_id == ^conversation_id and p.user_id != ^sender_id,
+        select: p.user_id
+      )
+      |> Repo.one()
+
+    if recipient_id && sender do
+      unread_count = Chats.get_unread_count(conversation_id, recipient_id)
+
+      # 2. Enrich the alert payload with sender metadata parameters
+      alert_payload = %{
+        type: "dm_badge_update",
+        conversation_id: to_string(conversation_id),
+        unread_count: unread_count,
+        sender_id: to_string(sender_id),
+        sender_username: sender.username
+      }
+
+      # Broadcast down the recipient's secure notification lane instantly
       KollectiveWeb.Endpoint.broadcast(
         "user_notifications:#{recipient_id}",
-        "new_alert",
+        # Matches your exact frontend listener event name
+        "new_notification",
         alert_payload
       )
     end

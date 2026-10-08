@@ -15,7 +15,7 @@ defmodule KollectiveWeb.UserController do
   # Delegated registration endpoint for standard REST POST /api/users
   defdelegate create(conn, params), to: KollectiveWeb.RegistrationController
 
-  # GET /api/me
+  # GET /api/v1/me
   def me(conn, _params) do
     user = conn.assigns.current_user
 
@@ -172,7 +172,7 @@ defmodule KollectiveWeb.UserController do
     end
   end
 
-  # PATCH /api/me/political-location
+  # PATCH /api/v1/me/political-location
   def update_location(conn, %{"country" => "US", "street" => street} = params) do
     user = conn.assigns.current_user
     city = params["city_name"] || params["city"] || user.city_name
@@ -240,7 +240,7 @@ defmodule KollectiveWeb.UserController do
     end
   end
 
-  # /api/me/political-location/update-location
+  # /api/v1/me/political-location/update-location
   # (when all attributes are passed from FE)
   def update_location(conn, attrs) do
     user = conn.assigns.current_user

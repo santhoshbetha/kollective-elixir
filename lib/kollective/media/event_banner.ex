@@ -33,8 +33,9 @@ defmodule Kollective.Media.EventBanner do
 
   # 3️⃣ Storage Directory: Organizes assets clearly by your specific Event structural ID keys
   # Format destination pattern: events/<event_id>/<version>_<filename>
-  def storage_dir(_version, {_file, scope}) do
-    "uploads/events/#{scope.id}"
+  # Safely pattern match to handle missing scope or missing ID gracefully
+  def storage_dir(_version, {_file, %{id: id}}) when not is_nil(id) do
+    "uploads/events/#{id}"
   end
 
   # 4️⃣ Image Transformation (Requires ImageMagick)

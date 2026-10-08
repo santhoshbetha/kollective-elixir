@@ -124,13 +124,17 @@ defmodule Kollective.Accounts.UserToken do
     {:ok, query}
   end
 
-  def verify_session_token_query(token) do
-    # 🔄 FIX: Try to decode if it looks like a Base64 string, otherwise treat it as raw text/bytes
+  def verify_session_token_query(token) when is_binary(token) do
     decoded_token =
-      case Base.url_decode64(token, padding: false) do
-        {:ok, bytes} -> bytes
-        # Fallback if it's already a raw/unencoded test string
-        :error -> token
+      cond do
+        byte_size(token) == 32 ->
+          token
+
+        true ->
+          case Base.url_decode64(token, padding: false) do
+            {:ok, bytes} -> bytes
+            :error -> token
+          end
       end
 
     hashed_token = :crypto.hash(:sha256, decoded_token)

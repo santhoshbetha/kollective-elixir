@@ -14,7 +14,7 @@ defmodule KollectiveWeb.OrganizationTeamInvitationTest do
   end
 
   describe "InvitationController (Scope 1: Personal User Account Operations)" do
-    test "GET /api/invitations and /api/v1/invitations lists pending invites", %{
+    test "GET /api/v1/invitations lists pending invites", %{
       conn: conn,
       user: user,
       org: org
@@ -38,7 +38,7 @@ defmodule KollectiveWeb.OrganizationTeamInvitationTest do
       end
     end
 
-    test "POST /api/invitations/:id/accept accepts invitation", %{
+    test "POST /api/v1/invitations/:id/accept accepts invitation", %{
       conn: conn,
       user: user,
       org: org

@@ -311,4 +311,15 @@ defmodule Kollective.Factory do
       user: build(:user)
     }
   end
+
+  def vouch_factory do
+    %Kollective.Civic.Vouch{
+      id: ulid_sequence(),
+      voucher: build(:user),
+      vouchee: build(:user),
+      origin_state: "CA",
+      matched_tier: "l1",
+      district_value: ulid_sequence()
+    }
+  end
 end

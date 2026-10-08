@@ -31,6 +31,39 @@ defmodule Kollective.Security.Security do
     Cachex.del(@cache, "blacklist:#{ip}")
   end
 
+  @doc "Shadow-bans a user account or handle in RAM."
+  def shadowban_user(identifier) do
+    ttl_ms = :timer.hours(24 * 30)
+    Cachex.put(@cache, "shadowban:#{identifier}", true, ttl: ttl_ms)
+  end
+
+  @doc "Removes a shadow-ban filter for a user account or handle."
+  def remove_shadowban(identifier) do
+    Cachex.del(@cache, "shadowban:#{identifier}")
+  end
+
+  @doc "Checks if a user is shadow-banned in RAM cache."
+  def user_shadowbanned?(identifier) do
+    case Cachex.get(@cache, "shadowban:#{identifier}") do
+      {:ok, true} -> true
+      _ -> false
+    end
+  end
+
+  @doc "Streams shadow-banned user handles safely out of RAM cache."
+  def list_shadowbanned_users do
+    case Cachex.stream(@cache) do
+      {:ok, stream} ->
+        stream
+        |> Stream.map(fn record -> elem(record, 1) end)
+        |> Stream.filter(fn key -> is_binary(key) and String.starts_with?(key, "shadowban:") end)
+        |> Stream.map(fn key -> String.replace(key, "shadowban:", "") end)
+        |> Enum.to_list()
+
+      _ ->
+        []
+    end
+  end
   @doc """
   Streams blacklisted IPs safely out of memory without triggering RAM bloat.
   Uses optimized native Erlang query specifications.
@@ -38,7 +71,6 @@ defmodule Kollective.Security.Security do
   def list_blacklisted_ips do
     case Cachex.stream(@cache) do
       {:ok, stream} ->
-        # 🟢 FIXED: Removed the standalone 'stream' word that caused the variable warning
         stream
         |> Stream.map(fn record -> elem(record, 1) end)
         |> Stream.filter(fn key -> is_binary(key) and String.starts_with?(key, "blacklist:") end)
@@ -49,8 +81,6 @@ defmodule Kollective.Security.Security do
         []
     end
   end
-
-  # ─── SECTION 2: THE TWO-STRIKE ESCALATION COOLDOWN GATEWAY ───
 
   @doc """
   Increments an infraction strike count against an IP address.

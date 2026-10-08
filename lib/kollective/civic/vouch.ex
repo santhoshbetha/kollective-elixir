@@ -48,4 +48,48 @@ defmodule Kollective.Civic.Vouch do
       changeset
     end
   end
+
+  @doc """
+  Calculates the total count of valid peer vouches received by a given user from the user_vouches table.
+  """
+  def count_for_user(nil), do: 0
+  def count_for_user(%{id: id}), do: count_for_user(id)
+
+  def count_for_user(user_id) when is_binary(user_id) or is_integer(user_id) do
+    import Ecto.Query
+
+    Kollective.Repo.one(
+      from v in __MODULE__,
+        where: v.vouchee_id == ^user_id,
+        select: count(v.id)
+    ) || 0
+  end
+
+  def count_for_user(_), do: 0
+
+  @doc """
+  Calculates a map of %{user_id => vouch_count} for a list of user_ids from the user_vouches table.
+  """
+  def batch_count_for_users(user_ids) when is_list(user_ids) do
+    import Ecto.Query
+
+    valid_ids =
+      user_ids
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&to_string/1)
+
+    if valid_ids == [] do
+      %{}
+    else
+      from(v in __MODULE__,
+        where: field(v, :vouchee_id) in ^valid_ids,
+        group_by: v.vouchee_id,
+        select: {v.vouchee_id, count(v.id)}
+      )
+      |> Kollective.Repo.all()
+      |> Map.new(fn {id, cnt} -> {to_string(id), cnt} end)
+    end
+  end
+
+  def batch_count_for_users(_), do: %{}
 end
