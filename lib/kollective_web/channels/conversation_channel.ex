@@ -18,24 +18,6 @@ defmodule KollectiveWeb.ConversationChannel do
     end
   end
 
-  @impl true
-  def handle_in("read_receipt", _payload, socket) do
-    conversation_id = socket.assigns.conversation_id
-    user_id = socket.assigns.user_id
-
-    # 🟢 ALIGNED: Runs your high-speed atomic Repo.update_all/2 reset pass
-    {1, _} = Chats.mark_as_read(conversation_id, user_id)
-
-    # Broadcast read confirmation back out over the room WebSocket to your partner
-    broadcast!(socket, "message_read", %{
-      conversation_id: conversation_id,
-      reader_id: user_id,
-      read_at: DateTime.utc_now() |> DateTime.truncate(:second)
-    })
-
-    {:reply, :ok, socket}
-  end
-
   # @impl true
   def handle_inX("send_direct_message", payload, socket) do
     conversation_id = socket.assigns.conversation_id
@@ -64,6 +46,30 @@ defmodule KollectiveWeb.ConversationChannel do
     end
   end
 
+  # ==========================================
+  # 🟢 CLAUSE 1: Real-Time Read Receipts (Fixed Match Clause)
+  # ==========================================
+  @impl true
+  def handle_in("read_receipt", _payload, socket) do
+    conversation_id = socket.assigns.conversation_id
+    user_id = socket.assigns.user_id
+
+    # ✅ SAFE MATCH: Captures any number of rows (0, 1, or 50) without crashing the socket process!
+    {_count, _} = Chats.mark_as_read(conversation_id, user_id)
+
+    # Broadcast read confirmation back out over the room WebSocket to your partner
+    broadcast!(socket, "message_read", %{
+      conversation_id: conversation_id,
+      reader_id: user_id,
+      read_at: DateTime.utc_now() |> DateTime.truncate(:second)
+    })
+
+    {:reply, :ok, socket}
+  end
+
+  # ==========================================
+  # 📣 CLAUSE 2: Direct Message Core Ingress (Fully Aligned)
+  # ==========================================
   # THE CRITICAL REAL-TIME GAP FIX:
   # Captures incoming WebSocket messages, commits them to the database transaction,
   # and broadcasts them to BOTH the active window AND the recipient's background notification line!
@@ -79,7 +85,7 @@ defmodule KollectiveWeb.ConversationChannel do
       "text" => text_payload
     }
 
-    # FIX 2: Corrected the evaluation target module call string pathway signature
+    # Corrected the evaluation target module call string pathway signature
     case Chats.create_message_with_attachment(sender_id, conv_id, msg_params) do
       {:ok, %{message: message}} ->
         room_payload = KollectiveWeb.MessageJSON.broadcast_data(message)
@@ -94,6 +100,39 @@ defmodule KollectiveWeb.ConversationChannel do
 
       {:error, _failed_step, _changeset, _} ->
         {:reply, {:error, %{reason: "database_transaction_failed"}}, socket}
+    end
+  end
+
+  # ==========================================
+  # 🗑️ CLAUSE 3: Real-Time Message Deletion
+  # ==========================================
+  @impl true
+  def handle_in("delete_message", %{"message_id" => msg_id}, socket) do
+    user_id = socket.assigns.user_id
+    conversation_id = socket.assigns.conversation_id
+
+    case Chats.get_message(msg_id) do
+      nil ->
+        {:reply, {:error, %{reason: "message_not_found"}}, socket}
+
+      message ->
+        if to_string(message.sender_id) == to_string(user_id) do
+          case Chats.soft_delete_message(message) do
+            {:ok, updated_msg} ->
+              broadcast!(socket, "message_deleted", %{
+                "message_id" => to_string(updated_msg.id),
+                "conversation_id" => to_string(conversation_id),
+                "deleted_text" => "🚫 This message was deleted by the sender."
+              })
+
+              {:reply, {:ok, %{status: "success"}}, socket}
+
+            {:error, _changeset} ->
+              {:reply, {:error, %{reason: "database_mutation_failed"}}, socket}
+          end
+        else
+          {:reply, {:error, %{reason: "unauthorized_ownership_tier"}}, socket}
+        end
     end
   end
 

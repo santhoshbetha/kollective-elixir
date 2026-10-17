@@ -178,4 +178,19 @@ defmodule KollectiveWeb.MessageController do
       )
     end
   end
+
+  def trigger_desktop_app_badging_sync(recipient_id) do
+    # Calculate current total unread message counts across all conversations for this specific user
+    unread_matrix_count = Kollective.Chats.Chats.get_total_unread_count(recipient_id)
+
+    # Fire a fast notification down the recipient's private user channel lane
+    KollectiveWeb.Endpoint.broadcast(
+      "user_notifications:#{recipient_id}",
+      "badge_count_sync",
+      %{
+        "unread_count" => unread_matrix_count,
+        "trigger_event" => "inbound_message_receipt"
+      }
+    )
+  end
 end

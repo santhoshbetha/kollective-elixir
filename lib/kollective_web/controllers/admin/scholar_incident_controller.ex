@@ -6,14 +6,13 @@ defmodule KollectiveWeb.Admin.ScholarIncidentController do
   import Ecto.Query
 
   # 🛡️ PRIVILEGE PROTECTION PLUG: Restricts lookups exclusively to authorized operator staff accounts
-  plug :verify_moderator_clearance
+  plug(:verify_moderator_clearance)
 
-  @doc """
-  GET /api/v1/admin/incidents
-  Hydrates the Scholar Integrity Queue list panel inside the ModerationDashboard.
-  """
+  # GET /api/v1/admin/incidents
+  # Hydrates the Scholar Integrity Queue list panel inside the ModerationDashboard.
   alias Kollective.Moderation.ScholarIncident
   alias Kollective.Accounts.User
+  alias Kollective.Database.MnesiaResolutionEngine
 
   def index(conn, _params) do
     query =
@@ -57,59 +56,80 @@ defmodule KollectiveWeb.Admin.ScholarIncidentController do
 
   def resolve(conn, %{"id" => id, "action" => action_type}) do
     admin = conn.assigns[:current_user] || conn.assigns[:user]
-    timestamp = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    case Repo.get(ScholarIncident, id) do
-      %ScholarIncident{} = incident ->
-        user = Repo.get(User, incident.user_id)
+    if action_type in ["dismiss", "soft_delete", "hard_ban"] do
+      case MnesiaResolutionEngine.resolve_incident(id, action_type, admin.id) do
+        {:ok, status} ->
+          json(conn, %{status: "success", final_status: status})
 
-        {db_status, audit_action, alert_msg} =
-          case action_type do
-            "restore" ->
-              if user do
-                user |> Ecto.Changeset.change(%{under_investigation: false}) |> Repo.update()
-              end
+        {:error, :not_found} ->
+          conn
+          |> put_status(:not_found)
+          |> json(%{error: "Targeted incident record not found or expired."})
 
-              {"resolved_restored", "SCHOLAR_FLAG_DISMISS",
-               "Academic credentials cleared and restored."}
+        _ ->
+          conn
+          |> put_status(:internal_server_error)
+          |> json(%{error: "Failed to resolve incident through resolution engine."})
+      end
+    else
+      timestamp = DateTime.utc_now() |> DateTime.truncate(:second)
 
-            "ban" ->
-              if user do
-                user
-                |> Ecto.Changeset.change(%{badge_type: "suspended", under_investigation: false})
-                |> Repo.update()
-              end
+      case Repo.get(ScholarIncident, id) do
+        %ScholarIncident{} = incident ->
+          user = Repo.get(User, incident.user_id)
 
-              {"resolved_banned", "SCHOLAR_PROFILE_BAN",
-               "Prohibited academic profile permanently terminated."}
-          end
+          {db_status, audit_action, alert_msg} =
+            case action_type do
+              "restore" ->
+                if user do
+                  user |> Ecto.Changeset.change(%{under_investigation: false}) |> Repo.update()
+                end
 
-        incident
-        |> Ecto.Changeset.change(%{
-          status: db_status,
-          resolved_at: timestamp,
-          resolved_by_id: admin.id
-        })
-        |> Repo.update!()
+                {"resolved_restored", "SCHOLAR_FLAG_DISMISS",
+                 "Academic credentials cleared and restored."}
 
-        AuditLogs.create_audit_log(%{
-          action: audit_action,
-          target_type: "User",
-          target_id: "@#{incident.target_username}",
-          actor_id: admin.id,
-          metadata: %{
-            "incident_id" => to_string(id),
-            "orcid_id" => incident.orcid_id,
-            "role" => "moderator"
-          }
-        })
+              "ban" ->
+                if user do
+                  user
+                  |> Ecto.Changeset.change(%{badge_type: "suspended", under_investigation: false})
+                  |> Repo.update()
+                end
 
-        json(conn, %{status: "success", message: alert_msg})
+                {"resolved_banned", "SCHOLAR_PROFILE_BAN",
+                 "Prohibited academic profile permanently terminated."}
 
-      nil ->
-        conn
-        |> put_status(:not_found)
-        |> json(%{error: "Targeted scholar incident record not found."})
+              _ ->
+                {"resolved_dismissed", "SCHOLAR_FLAG_DISMISS", "Incident resolved."}
+            end
+
+          incident
+          |> Ecto.Changeset.change(%{
+            status: db_status,
+            resolved_at: timestamp,
+            resolved_by_id: admin.id
+          })
+          |> Repo.update!()
+
+          AuditLogs.create_audit_log(%{
+            action: audit_action,
+            target_type: "User",
+            target_id: "@#{incident.target_username}",
+            actor_id: admin.id,
+            metadata: %{
+              "incident_id" => to_string(id),
+              "orcid_id" => incident.orcid_id,
+              "role" => "moderator"
+            }
+          })
+
+          json(conn, %{status: "success", message: alert_msg})
+
+        nil ->
+          conn
+          |> put_status(:not_found)
+          |> json(%{error: "Targeted scholar incident record not found."})
+      end
     end
   end
 

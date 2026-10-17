@@ -14,7 +14,13 @@ defmodule Kollective.External.CivicService do
       levels: "administrativeArea2"
     ]
 
-    case Req.get(@base_url, params: params) do
+    plug_opts =
+      case Application.get_env(:kollective, :civic_service_plug) do
+        nil -> []
+        plug -> [plug: plug]
+      end
+
+    case Req.get(@base_url, [params: params, retry: false] ++ plug_opts) do
       {:ok, %{status: 200, body: body}} ->
         {:ok, parse_civic_data(body)}
 

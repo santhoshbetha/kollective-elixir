@@ -29,7 +29,7 @@ defmodule KollectiveWeb.DebateController do
   POST /api/v1/campaigns/debates/shifts/:id/claim
   """
   def claim_shift(conn, %{"id" => shift_id}) do
-    user_id = conn.assigns.current_user_id
+    user_id = conn.assigns[:current_user_id] || (conn.assigns[:current_user] && conn.assigns[:current_user].id)
 
     # Fetch the exact shift inside a database lock boundary to safeguard seat limits
     Repo.transaction(fn ->
@@ -53,9 +53,12 @@ defmodule KollectiveWeb.DebateController do
         true ->
           # Atomic write insertion straight down into the many-to-many join schema matrix
           # Inject mapping via raw insert_all or Ecto changesets
+          {:ok, shift_id_bin} = Ecto.ULID.dump(shift.id)
+          {:ok, user_id_bin} = Ecto.ULID.dump(user_id)
+
           conn_insert =
             Repo.insert_all("debate_shifts_volunteers", [
-              [debate_shift_id: shift.id, user_id: user_id]
+              [debate_shift_id: shift_id_bin, user_id: user_id_bin]
             ])
 
           case conn_insert do

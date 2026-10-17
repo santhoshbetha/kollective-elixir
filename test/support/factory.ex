@@ -11,19 +11,20 @@ defmodule Kollective.Factory do
 
   # --- FACTORIES ---
 
-  # test/support/factory.ex
   def user_factory do
+    unique_id = System.unique_integer([:positive])
+
     %Kollective.Accounts.User{
       id: ulid_sequence(),
-      username: sequence(:username, &"user_#{&1}"),
+      username: sequence(:username, &"user_#{&1}_#{unique_id}"),
 
       # Keep your true database columns:
-      email: sequence(:email, &"user-#{&1}@kollective.com"),
+      email: sequence(:email, &"user-#{&1}-#{unique_id}@kollective.com"),
       is_active: true,
       is_verified: false,
       is_admin: false,
       is_moderator: false,
-      identity_hash: "mock_user_identity_hash_signature",
+      identity_hash: "mock_user_identity_hash_#{unique_id}",
       experience_mode: "social_only"
     }
   end

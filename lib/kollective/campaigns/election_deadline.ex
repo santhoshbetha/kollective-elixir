@@ -3,6 +3,17 @@ defmodule Kollective.Campaigns.ElectionDeadline do
   use Kollective.Schemas.Schema
   import Ecto.Changeset
 
+  @derive {Jason.Encoder,
+           only: [
+             :id,
+             :office_level,
+             :district_code,
+             :sub_local_name,
+             :application_deadline,
+             :election_date,
+             :state,
+             :logged_by_id
+           ]}
   @derive {JSON.Encoder,
            only: [
              :id,

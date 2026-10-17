@@ -32,4 +32,19 @@ defmodule Kollective.Chats.Message do
     ])
     |> Ecto.Changeset.validate_required([:sender_id, :conversation_id])
   end
+
+  @doc """
+  Changeset for soft-deleting a message. Clears any attached file metadata
+  and replaces content with the tombstone/deletion message.
+  """
+  def soft_delete_changeset(message, deleted_text \\ "🚫 This message was deleted by the sender.") do
+    message
+    |> Ecto.Changeset.change(%{
+      encrypted_content: deleted_text,
+      file_url: nil,
+      encrypted_file_key: nil,
+      file_iv: nil,
+      file_name: nil
+    })
+  end
 end

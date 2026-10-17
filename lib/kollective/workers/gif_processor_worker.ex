@@ -1,7 +1,6 @@
 defmodule Kollective.Workers.GifProcessorWorker do
   use Oban.Worker, queue: :media, max_attempts: 2
 
-  import Ecto.Query
   alias Kollective.Repo
   alias Kollective.Posts.PostAttachment
   alias Kollective.Media.PostMedia

@@ -1,7 +1,7 @@
 defmodule Kollective.Workers.UserMediaOptimizer do
   use Oban.Worker, queue: :media, max_attempts: 3
 
-  import Ecto.Query
+  # import Ecto.Query
   alias Kollective.Repo
   # Adjust namespace to match your local account files directory
   alias Kollective.Accounts.User

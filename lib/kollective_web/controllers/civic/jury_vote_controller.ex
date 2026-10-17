@@ -12,7 +12,7 @@ defmodule KollectiveWeb.JuryVoteController do
   def cast_vote(conn, %{"application_id" => app_id_str, "vote" => vote_value}) do
     # 1. Retrieve the authenticated user's ID from your auth pipeline assigns
     current_user_id = conn.assigns.current_user.id
-    application_id = String.to_integer(app_id_str)
+    application_id = app_id_str
 
     # 2. Strict whitelist check to reject invalid vote strings early
     if vote_value in ["approve", "reject"] do

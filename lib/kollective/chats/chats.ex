@@ -119,6 +119,26 @@ defmodule Kollective.Chats.Chats do
     Repo.aggregate(query, :count, :id)
   end
 
+  @doc """
+  Calculates the total unread message count across all conversations for a given user.
+  Used for app badging and global notification indicators.
+  """
+  def get_total_unread_count(nil), do: 0
+
+  def get_total_unread_count(user_id) do
+    query =
+      from(p in Participant,
+        where: p.user_id == ^user_id,
+        join: m in Message,
+        on: m.conversation_id == p.conversation_id,
+        where: m.sender_id != ^user_id,
+        where: is_nil(p.last_read_at) or m.inserted_at > p.last_read_at,
+        select: count(m.id)
+      )
+
+    Repo.one(query) || 0
+  end
+
   #  implement the mark_as_read function in your Chat context, you perform a bulk update on the
   #  Participant record to set the last_read_at timestamp to the current time. This instantly "clears"
   #  the unread count for that user in that specific conversation.
@@ -257,5 +277,35 @@ defmodule Kollective.Chats.Chats do
     |> where([p], not is_nil(p.public_key))
     |> select([p], %{user_id: p.user_id, public_key: p.public_key})
     |> Repo.all()
+  end
+
+  @doc """
+  Gets a single message by ID. Returns nil if not found.
+  """
+  def get_message(id), do: Repo.get(Message, id)
+
+  @doc """
+  Gets a single message by ID. Raises Ecto.NoResultsError if not found.
+  """
+  def get_message!(id), do: Repo.get!(Message, id)
+
+  @doc """
+  Soft-deletes a message by updating its `encrypted_content` to the deletion notice text
+  and clearing any attached file metadata (file_url, keys, iv, file_name).
+  Supports both a `%Message{}` struct and a message binary ID.
+  """
+  def soft_delete_message(message_or_id, deleted_text \\ "🚫 This message was deleted by the sender.")
+
+  def soft_delete_message(%Message{} = message, deleted_text) do
+    message
+    |> Message.soft_delete_changeset(deleted_text)
+    |> Repo.update()
+  end
+
+  def soft_delete_message(id, deleted_text) when is_binary(id) do
+    case get_message(id) do
+      nil -> {:error, :not_found}
+      message -> soft_delete_message(message, deleted_text)
+    end
   end
 end

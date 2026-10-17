@@ -25,7 +25,8 @@ defmodule Mix.Tasks.Kollective.MakeRoot do
     # 1. Start application infrastructure so Repo is loaded
     Mix.Task.run("app.start")
 
-    {opts, positional, _} = OptionParser.parse(args, switches: [email: :string, username: :string])
+    {opts, positional, _} =
+      OptionParser.parse(args, switches: [email: :string, username: :string])
 
     identifier = opts[:email] || opts[:username] || List.first(positional)
 
@@ -50,7 +51,9 @@ defmodule Mix.Tasks.Kollective.MakeRoot do
 
     query =
       from u in User,
-        where: fragment("LOWER(?)", u.email) == ^cleaned_term or fragment("LOWER(?)", u.username) == ^cleaned_term,
+        where:
+          fragment("LOWER(?)", u.email) == ^cleaned_term or
+            fragment("LOWER(?)", u.username) == ^cleaned_term,
         limit: 1
 
     case Repo.one(query) do
@@ -80,7 +83,9 @@ defmodule Mix.Tasks.Kollective.MakeRoot do
             """)
 
           {:error, changeset} ->
-            Mix.shell().error("[ERROR] Failed to update user privileges: #{inspect(changeset.errors)}")
+            Mix.shell().error(
+              "[ERROR] Failed to update user privileges: #{inspect(changeset.errors)}"
+            )
         end
     end
   end

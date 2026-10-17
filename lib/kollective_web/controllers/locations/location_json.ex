@@ -55,6 +55,10 @@ defmodule KollectiveWeb.LocationJSON do
     %{data: districts}
   end
 
+  def districts(districts) when is_map(districts) do
+    %{data: districts}
+  end
+
   def district(d) do
     %{data: d}
   end

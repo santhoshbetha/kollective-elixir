@@ -51,6 +51,7 @@ config :kollective, Oban,
   plugins: false
 
 config :kollective, :http_client, Kollective.HTTPClientMock
+config :kollective, :civic_service_plug, {Req.Test, Kollective.External.CivicService}
 
 # Configure Hammer rate limiter for the test environment
 # Format for Hammer v6+
@@ -95,3 +96,6 @@ config :req, default_options: [plug: {Req.Test, Kollective.Services.GeocodioClie
 # Direct the application client to a Mock module instead of the real service
 # We do not need to manually write or implement ServiceMock, Mox library handles this dynamically in memory when tests run
 config :kollective, :geospatial_client, Kollective.Geospatial.ServiceMock
+
+# Disable libcluster topologies in tests to prevent UDP port conflicts (:eaddrinuse)
+config :libcluster, topologies: []

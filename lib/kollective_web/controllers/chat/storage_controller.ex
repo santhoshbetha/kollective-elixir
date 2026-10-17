@@ -25,7 +25,7 @@ defmodule KollectiveWeb.StorageController do
 
     case ExAws.S3.presigned_url(config, :put, bucket, bucket_object_key, opts) do
       {:ok, upload_url} ->
-        public_file_url = "https://kollective.app{bucket_object_key}"
+        public_file_url = "https://kollective.app/#{bucket_object_key}"
 
         json(conn, %{
           upload_url: upload_url,

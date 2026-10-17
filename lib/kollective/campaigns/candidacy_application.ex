@@ -2,6 +2,16 @@
 defmodule Kollective.Campaigns.CandidacyApplication do
   use Kollective.Schemas.Schema
 
+  @derive {Jason.Encoder,
+           only: [
+             :id,
+             :status,
+             :declared_profession,
+             :employment_proof_url,
+             :vouches_count,
+             :user_id,
+             :linkedin_url
+           ]}
   @derive {JSON.Encoder,
            only: [
              :id,

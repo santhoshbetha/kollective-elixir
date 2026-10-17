@@ -2,6 +2,17 @@
 defmodule Kollective.Campaigns.DebateEvent do
   use Kollective.Schemas.Schema
 
+  @derive {Jason.Encoder,
+           only: [
+             :id,
+             :title,
+             :date_time,
+             :venue_address,
+             :office_level,
+             :district_code,
+             :broadcast_node_url,
+             :shifts
+           ]}
   @derive {JSON.Encoder,
            only: [
              :id,

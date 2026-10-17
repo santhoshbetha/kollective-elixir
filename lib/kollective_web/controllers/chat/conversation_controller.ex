@@ -38,7 +38,9 @@ defmodule KollectiveWeb.ConversationController do
 
         username = Map.get(params, "username") || Map.get(params, "handle") ->
           clean_name = String.replace(to_string(username), ~r/^@/, "")
-          Repo.get_by(User, username: clean_name) || Repo.get_by(User, handle: "@" <> clean_name) || Repo.get_by(User, handle: clean_name)
+
+          Repo.get_by(User, username: clean_name) || Repo.get_by(User, handle: "@" <> clean_name) ||
+            Repo.get_by(User, handle: clean_name)
 
         true ->
           nil
@@ -54,6 +56,7 @@ defmodule KollectiveWeb.ConversationController do
         case Chats.get_or_create_1on1(current_user.id, target_id) do
           {:ok, conversation} ->
             conv_id = to_string(conversation.id)
+
             conn
             |> put_status(:ok)
             |> json(%{id: conv_id, conversation_id: conv_id, data: %{id: conv_id}})

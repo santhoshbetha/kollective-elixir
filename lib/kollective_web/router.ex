@@ -51,6 +51,10 @@ defmodule KollectiveWeb.Router do
     plug(KollectiveWeb.Plugs.RequireAdminAuthenticated)
   end
 
+  pipeline :verify_node_sovereignty_clearance do
+    plug(KollectiveWeb.Plugs.SovereignAuth)
+  end
+
   # Blocks logged-in users from accessing sign-up/login pages
   pipeline :api_unauthenticated do
     plug(:redirect_if_user_is_authenticated)
@@ -115,6 +119,15 @@ defmodule KollectiveWeb.Router do
     post("/confirm/:token", ConfirmationController, :confirm)
   end
 
+  # Self-serve Crypto Recovery Endpoints
+  # Available to all users, but require valid JWT authentication to prevent abuse
+  scope "/api/v1/auth", KollectiveWeb do
+    pipe_through([:api, :api_authenticated])
+
+    post("/backup_key", Admin.CryptoBackupController, :store_backup)
+    get("/recover_key", Admin.CryptoBackupController, :fetch_backup)
+  end
+
   scope "/api/v1", KollectiveWeb do
     pipe_through([:api, :api_authenticated])
 
@@ -150,6 +163,7 @@ defmodule KollectiveWeb.Router do
     # Explicit follow / unfollow account routes
     post("/accounts/:id/follow", RelationshipController, :follow_account)
     post("/accounts/:id/unfollow", RelationshipController, :unfollow_account)
+    post("/accounts/follow/toggle", UserRelationshipController, :toggle_follow)
   end
 
   ## Authentication routes
@@ -306,6 +320,79 @@ defmodule KollectiveWeb.Router do
     post("/posts/:id/like", PostController, :handle_like)
   end
 
+  scope "/api/v1/admin", KollectiveWeb.Admin do
+    pipe_through([:api, :api_authenticated, :verify_node_sovereignty_clearance])
+
+    get("/sovereign_operators", SovereignOperatorController, :index)
+    post("/sovereign_operators", SovereignOperatorController, :create)
+    delete("/sovereign_operators/:id", SovereignOperatorController, :delete)
+  end
+
+  scope "/api/v1/admin", KollectiveWeb.Admin do
+    pipe_through([:api, :api_authenticated, :verify_node_sovereignty_clearance])
+
+    post("/mesh/force_recovery", MeshRepairController, :trigger_recovery)
+  end
+
+  scope "/api/v1/storage", KollectiveWeb.Admin do
+    pipe_through([:api, :api_authenticated])
+
+    post("/presign", MultiRegionStorageController, :presign)
+  end
+
+  scope "/api/v1/moderation", KollectiveWeb.Admin do
+    pipe_through([:api, :api_authenticated])
+
+    post("/appeals", ModerationAppealController, :create)
+  end
+
+  scope "/api/v1/admin", KollectiveWeb.Admin do
+    pipe_through([:api, :api_authenticated, :verify_node_sovereignty_clearance])
+
+    get("/audit_logs", SovereignAuditLogController, :index)
+  end
+
+  scope "/api/v1/admin", KollectiveWeb.Admin do
+    pipe_through([:api, :api_authenticated, :verify_node_sovereignty_clearance])
+
+    get("/telemetry/oban", ObanTelemetryController, :index)
+  end
+
+  scope "/api/v1/admin", KollectiveWeb.Admin do
+    pipe_through([:api, :api_authenticated, :verify_node_sovereignty_clearance])
+
+    get("/mesh/topology", NodeTopologyController, :index)
+  end
+
+  scope "/api/v1/admin", KollectiveWeb.Admin do
+    pipe_through([:api, :api_authenticated])
+
+    post("/chat_groups", MeshGroupChatController, :create)
+  end
+
+  scope "/api/v1/admin", KollectiveWeb.Admin do
+    pipe_through([:api, :api_authenticated])
+
+    post("/chat_groups/:conversation_id/invite", MeshGroupInviteController, :create)
+    get("/chat_groups/:conversation_id/members", MeshGroupInviteController, :index)
+  end
+
+  scope "/api/v1/admin", KollectiveWeb.Admin do
+    pipe_through([:api, :api_authenticated, :verify_node_sovereignty_clearance])
+
+    post("/moderation_appeals/:id/adjudicate", MeshAdjudicationController, :adjudicate)
+  end
+
+  scope "/api/v1/admin", KollectiveWeb.Admin do
+    pipe_through([:api, :api_authenticated, :verify_node_sovereignty_clearance])
+
+    post "/incidents/lease_next", MeshIncidentController, :lease_next
+    post "/incidents/:id/claim", MeshIncidentController, :claim
+    post "/incidents/:id/release", MeshIncidentController, :release
+    post "/incidents/:id/extend", MeshIncidentController, :extend
+    post "/incidents/:id/resolve", MeshIncidentController, :resolve
+  end
+
   # SECURE MODERATION DESK PANEL OVERRIDES
   scope "/api/v1/admin", KollectiveWeb.Admin do
     pipe_through([:api, :api_authenticated, :require_admin_authenticated])
@@ -316,7 +403,7 @@ defmodule KollectiveWeb.Router do
     post("/reports/:id/resolve", ReportController, :resolve)
     post("/reports/:report_id/kill", ReportController, :kill_flagged_event)
 
-    get("/audit_logs", LogController, :index)
+    get("/governance_logs", LogController, :index)
   end
 
   scope "/api/v1/admin", KollectiveWeb.Admin do
@@ -325,8 +412,10 @@ defmodule KollectiveWeb.Router do
 
     # 🔬 SCHOLAR INTEGRITY AUDIT DESK PATHS
     get("/incidents", ScholarIncidentController, :index)
-    post("/incidents/:id/resolve", ScholarIncidentController, :resolve)
+    post("/incidents/users/:user_id/restore", ScholarController, :restore_scholar)
   end
+
+
 
   scope "/api/v1/admin/root", KollectiveWeb.Admin do
     # Substitute with your exact auth pipes
@@ -334,8 +423,8 @@ defmodule KollectiveWeb.Router do
 
     # SYSTEM STAFF DESK CONTROL ENDPOINTS
     get("/audit_logs", StaffController, :audit_logs)
-    post("/users/promote_admin", StaffController, :promote_admin)
-    post("/users/promote_moderator", StaffController, :promote_moderator)
+    post("/users/promote_to_admin", StaffController, :promote_to_admin)
+    post("/users/promote_to_moderator", StaffController, :promote_to_moderator)
   end
 
   # ─── SCOPE C: PROTECTED WRITE MUTATIONS & EXPENSIVE LOOKUPS ───
@@ -541,6 +630,9 @@ defmodule KollectiveWeb.Router do
     get("/businesses", BusinessController, :index)
     get("/business_proposals", BusinessController, :index)
 
+    # 🌐 MAP SEARCH NODE ROUTE REGISTRY (Must precede /businesses/:id)
+    get("/businesses/search", BusinessSearchController, :index)
+
     # Individual Detail View Mappings
     get("/businesses/:id", BusinessController, :show_business)
     get("/business_proposals/:id", BusinessController, :show_proposal)
@@ -551,9 +643,6 @@ defmodule KollectiveWeb.Router do
     put("/business_proposals/:id", BusinessController, :update_proposal)
     patch("/business_proposals/:id", BusinessController, :update_proposal)
     delete("/business_proposals/:id", BusinessController, :delete_proposal)
-
-    # 🌐 MAP SEARCH NODE ROUTE REGISTRY
-    get("/businesses/search", BusinessSearchController, :index)
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -684,7 +773,7 @@ defmodule KollectiveWeb.Router do
   end
 
   # STORAGE CONTROLLER for Chat media attachments
-  scope "/api/v1/storage", KollectiveWeb do
+  scope "/api/v1/chat", KollectiveWeb do
     pipe_through([:api, :api_authenticated])
     post("/presign", StorageController, :presign)
   end
@@ -692,6 +781,7 @@ defmodule KollectiveWeb.Router do
   scope "/api/v1", KollectiveWeb do
     pipe_through([:api, :api_authenticated])
 
+    post("/campaigns/apply", CandidacyAuthController, :create_application)
     post("/campaigns/apply/vouch", CandidacyAuthController, :cast_vouch)
     post("/campaigns/apply/approve", CandidacyAuthController, :approve_application)
     # POST /api/v1/campaigns/pitches
@@ -761,6 +851,20 @@ defmodule KollectiveWeb.Router do
 
     post("/classifieds", ClassifiedController, :create)
     delete("/classifieds/:id", ClassifiedController, :delete)
+  end
+
+  scope "/api/admin", KollectiveWeb do
+    pipe_through([:api, :api_authenticated, :require_admin_authenticated])
+
+    get("/users/search", AdminUserController, :search)
+    put("/users/:id/override-districts", AdminUserController, :override_districts)
+  end
+
+  scope "/api/v1/admin", KollectiveWeb do
+    pipe_through([:api, :api_authenticated, :require_admin_authenticated])
+
+    get("/users/search", AdminUserController, :search)
+    put("/users/:id/override-districts", AdminUserController, :override_districts)
   end
 
   scope "/api", KollectiveWeb do

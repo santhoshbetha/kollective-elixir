@@ -7,12 +7,14 @@ defmodule Kollective.Application do
 
   @impl true
   def start(_type, _args) do
+    topologies = Application.get_env(:libcluster, :topologies) || []
+
     children = [
       KollectiveWeb.Telemetry,
       Kollective.Repo,
 
       # Cachex handles the token cache from the vouch system, which is used for secure token-based authentication.
-      {Cachex, name: :vouch_secure_tokens},
+      Supervisor.child_spec({Cachex, :vouch_secure_tokens}, id: :cachex_vouch_secure_tokens),
       {Phoenix.PubSub, name: Kollective.PubSub},
 
       # Oban automatically picks up your Buffer module configurations when it boots!
@@ -37,6 +39,27 @@ defmodule Kollective.Application do
           {Cachex, :start_link, [:kollective_cache, [janitor: [interval: :timer.minutes(5)]]]},
         type: :worker
       },
+
+      # 1️⃣ libcluster handles the underlying Erlang network connectivity nodes discovery
+      {Cluster.Supervisor, [topologies, [name: Kollective.ClusterSupervisor]]},
+
+      # 2️⃣ 🚀 MNESIA MATRIX SYNC COORDINATOR: Locks schemas and table replication rules instantly
+      {Kollective.Database.MnesiaClusterCoordinator, []},
+
+      # 3. 🚀 AUTOMATED REHYDRATION RE-SEED LAYER ENGINE:
+      # Instantly heals blank or disconnected nodes upon re-joining libcluster heartbeats
+      Kollective.Database.MnesiaRehydrationEngine,
+
+      # 🚀 IN-MEMORY RUNTIME CACHE (e.g. rate-limiting token buckets)
+      Supervisor.child_spec({Cachex, :kollective_runtime_cache}, id: :cachex_runtime_cache),
+
+      # Hydrator runs next to sync data across the newly formed mesh
+      Kollective.MnesiaHydrator,
+
+      # 4. 🚀 HYDRATOR RUNS HERE
+      # It executes when the node boots up, checks the cluster state, and syncs from Postgres if needed.
+      Kollective.Chats.MnesiaHydrator,
+      Kollective.Database.MnesiaLeaseReaper,
 
       # Start a worker by calling: Kollective.Worker.start_link(arg)
       # {Kollective.Worker, arg},

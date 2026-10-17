@@ -148,6 +148,16 @@ defmodule Kollective.Accounts.Users do
   def update_note_count(_user_id, 0), do: {0, nil}
 
   # --- Follow / Unfollow ---
+  def follow_user(source_id, target_id) when is_binary(source_id) or is_binary(target_id) do
+    source = if is_binary(source_id), do: Repo.get(User, source_id), else: source_id
+    target = if is_binary(target_id), do: Repo.get(User, target_id), else: target_id
+
+    case {source, target} do
+      {%User{} = s, %User{} = t} -> follow_user(s, t)
+      _ -> {:error, "User not found"}
+    end
+  end
+
   # First, modify your follow_user function to check if the target user is locked
   # (using the is_locked boolean we added to the User schema earlier).
   def follow_user(%User{} = source, %User{} = target) do
@@ -452,21 +462,20 @@ defmodule Kollective.Accounts.Users do
 
   # --- Private Helpers ---
 
-  defp create_relationship(source_id, target_id, type, expires_at \\ nil) do
+  defp create_relationship(source_id, target_id, type) do
     %UserRelationship{}
     |> UserRelationship.changeset(%{
       source_id: source_id,
       target_id: target_id,
-      type: type,
-      expires_at: expires_at
+      type: type
     })
     |> Repo.insert(
       # 1. We use conflict_target to find the existing row
       conflict_target: [:source_id, :target_id, :type],
 
-      # 2. If it exists, update the 'expires_at' and 'updated_at'
+      # 2. If it exists, update the 'updated_at'
       # but keep the original 'id' (ULID) and 'inserted_at'
-      on_conflict: {:replace, [:expires_at, :updated_at]},
+      on_conflict: {:replace, [:updated_at]},
 
       # 3. Return the updated record
       returning: true

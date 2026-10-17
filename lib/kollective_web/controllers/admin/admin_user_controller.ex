@@ -14,21 +14,23 @@ defmodule KollectiveWeb.AdminUserController do
       |> Repo.all()
       |> Repo.preload([:district_l1, :district_l2, :district_l3, :city])
 
-    render(conn, :index, users: users)
+    conn
+    |> put_view(json: KollectiveWeb.AdminUserJSON)
+    |> render(:index, users: users)
   end
 
   # PUT /api/admin/users/:id/override-districts
   def override_districts(conn, %{"id" => id, "override" => params}) do
     user = Repo.get!(User, id)
 
-    # Use the existing changeset directly—since admins supply all 3 fields,
-    # our complete political stack validation guard passes perfectly!
+    city_id = params["city_id"] || params["origin_city_id"]
+
     changeset =
-      User.registration_changeset(user, %{
-        district_l1_id: params["district_l1_id"],
-        district_l2_id: params["district_l2_id"],
-        district_l3_id: params["district_l3_id"],
-        origin_city_id: params["origin_city_id"]
+      User.political_location_changeset(user, %{
+        "district_l1_id" => params["district_l1_id"],
+        "district_l2_id" => params["district_l2_id"],
+        "district_l3_id" => params["district_l3_id"],
+        "city_id" => city_id
       })
 
     case Repo.update(changeset) do

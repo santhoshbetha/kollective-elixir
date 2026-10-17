@@ -9,6 +9,15 @@ defmodule KollectiveWeb.UserRelationshipController do
     source_id = conn.assigns.current_user.id
 
     case Users.follow_user(source_id, target_id) do
+      {:ok, {:ok, :followed}} ->
+        json(conn, %{status: "following"})
+
+      {:ok, {:ok, :unfollowed}} ->
+        json(conn, %{status: "not_following"})
+
+      {:ok, :requested} ->
+        json(conn, %{status: "requested"})
+
       {:ok, %UserRelationship{}} ->
         json(conn, %{status: "following"})
 
@@ -16,7 +25,7 @@ defmodule KollectiveWeb.UserRelationshipController do
         json(conn, %{status: "not_following"})
 
       {:error, message} ->
-        conn |> put_status(422) |> json(%{error: message})
+        conn |> put_status(422) |> json(%{error: to_string(message)})
     end
   end
 end

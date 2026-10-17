@@ -14,7 +14,11 @@ defmodule Kollective.Schemas.SchemaConfigurationTest do
                end)
                # Exclude abstract base schemas and custom string key config schemas
                |> Stream.reject(fn module ->
-                 module in [Kollective.Schemas.Schema, Kollective.Admins.FeatureFlag]
+                 module in [
+                   Kollective.Schemas.Schema,
+                   Kollective.Admins.FeatureFlag,
+                   Kollective.Moderation.SovereignOperator
+                 ]
                end)
                |> Enum.to_list()
 

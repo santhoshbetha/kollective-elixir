@@ -31,6 +31,21 @@ config :kollective,
 
 config :kollective, :http_client, Kollective.HTTPClient.Impl
 
+config :libcluster,
+  topologies: [
+    kollective_mesh: [
+      # Gossip protocol automatically broadcasts heartbeat beacons across your local network [1.4]
+      strategy: Cluster.Strategy.Gossip,
+      config: [
+        port: 45892,
+        if_addr: {0, 0, 0, 0},
+        multicast_addr: {230, 1, 1, 251},
+        # Secrets matching token prevents un-verified foreign rogue nodes from joining your cluster
+        secret: "kollective_secure_mesh_handshake_salt_2026"
+      ]
+    ]
+  ]
+
 # to ensure binary_id is used by default in all your schemas
 config :kollective, Kollective.Repo,
   migration_primary_key: [name: :id, type: :binary_id, autogenerate: false],
@@ -70,7 +85,8 @@ config :kollective, Oban,
        # {"0 0 * * *", Kollective.Workers.JournalistCronOrchestrator},
 
        # Runs every night at midnight to delete expired, unconsumed rows
-       {"0 0 * * *", Kollective.Workers.DailyPrunerWorker}
+       {"0 0 * * *", Kollective.Workers.DailyPrunerWorker},
+       {"0 0 * * *", Kollective.Workers.StorageGarbageCollector}
 
        # Runs your out-of-band counter cache repair every Sunday at midnight smoothly
        # {"0 0 * * 0", Kollective.Workers.RepairCountsWorker}

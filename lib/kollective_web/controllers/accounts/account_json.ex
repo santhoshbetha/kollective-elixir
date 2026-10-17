@@ -63,10 +63,10 @@ defmodule KollectiveWeb.AccountJSON do
   successful login or credential verification, modeled after Mastodon's
   CredentialAccount format and enriched with Kollective platform metadata.
   """
-  def profile_data(%Kollective.Accounts.User{} = user), do: login_profile(user)
+  def profile_data(%User{} = user), do: login_profile(user)
   def profile_data(user) when is_map(user), do: login_profile(user)
 
-  def login_profile(%Kollective.Accounts.User{} = user) do
+  def login_profile(%User{} = user) do
     unread_notifications = Notifications.count_unread_notifications(user.id)
     fields = extract_verification_fields(user)
     is_sensitive = default_sensitive?(user)

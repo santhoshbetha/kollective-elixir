@@ -5,64 +5,78 @@ defmodule Kollective.Accounts.User do
 
   alias Kollective.Accounts.NotificationSetting
 
+  @derive {Jason.Encoder,
+           only: [
+             :id,
+             :username,
+             :email,
+             :first_name,
+             :last_name,
+             :display_name,
+             :avatar_url,
+             :is_candidate,
+             :is_verified_candidate,
+             :state
+           ]}
   schema "users" do
-    field :email, :string
-    field :password, :string, virtual: true, redact: true
-    field :hashed_password, :string, redact: true
-    field :confirmed_at, :utc_datetime
-    field :authenticated_at, :utc_datetime, virtual: true
+    field(:email, :string)
+    field(:password, :string, virtual: true, redact: true)
+    field(:hashed_password, :string, redact: true)
+    field(:confirmed_at, :utc_datetime)
+    field(:authenticated_at, :utc_datetime, virtual: true)
 
     # --- IDENTITY ---
-    field :username, :string
-    field :display_name, :string
+    field(:username, :string)
+    field(:display_name, :string)
     # For pseudonyms or pen names or to hide caste/religion guessing in India
-    field :alias_name, :string
+    field(:alias_name, :string)
     # For organizations: human contact / representative name
-    field :representative_name, :string
+    field(:representative_name, :string)
 
     # ISO 639-1 code #preferred language
-    field :locale, :string, default: "en"
-    field :first_name, :string
-    field :last_name, :string
-    field :bio, :string, default: ""
+    field(:locale, :string, default: "en")
+    field(:first_name, :string)
+    field(:last_name, :string)
+    field(:bio, :string, default: "")
     # Useful for search indexing
-    field :raw_bio, :string, default: ""
+    field(:raw_bio, :string, default: "")
 
     # The user's phone number or email, put through a one-way cryptographic hashing function with a secure,
-    field :identity_hash, :string, default: ""
+    field(:identity_hash, :string, default: "")
     # server-side salt (SHA-256(phone + server_secret)).
 
     # --- AUTHENTICATION (Phx.Gen.Auth style) ---
-    field :is_confirmed, :boolean, default: false
-    field :is_active, :boolean, default: true
+    field(:is_confirmed, :boolean, default: false)
+    field(:is_active, :boolean, default: true)
 
     # User Types: :citizen, :scholar, :journalist, :activist, :organization
     # activist --> Union leaders, strike organizers, whistleblowers.
     # scholar --> Academic researchers, professors, and subject matter experts.
     # journalist --> Reporters, editors, and media professionals, Independent reporters and field correspondents.
     # organization --> Non-profits, NGOs, advocacy groups, and civic organizations.
-    field :type, Ecto.Enum,
+    field(:type, Ecto.Enum,
       values: [:citizen, :scholar, :journalist, :activist, :organization],
       default: :citizen
+    )
 
-    field :badge_type, :string, default: "ClassicBlue"
+    field(:badge_type, :string, default: "ClassicBlue")
 
     # For Scholars/Journalists: Specialized bio or verification notes
-    field :professional_credentials, :string
+    field(:professional_credentials, :string)
 
     # Optional: Mark if this user is an active candidate
-    field :is_candidate, :boolean, default: false
+    field(:is_candidate, :boolean, default: false)
 
     # --- LOCATION & DISCOVERY ---
     # User-facing location string (stores fuzzy coordinates as WKT for safety)
-    field :location, :string
-    field :fuzzy_latitude, :float, virtual: true
-    field :fuzzy_longitude, :float, virtual: true
-    field :language, :string, default: "en"
-    field :is_discoverable, :boolean, default: true
-    field :is_invisible, :boolean, default: false
-    field :is_suggested, :boolean, default: false
-    field :last_active_at, :utc_datetime
+    field(:location, :string)
+    field(:fuzzy_latitude, :float, virtual: true)
+    field(:fuzzy_longitude, :float, virtual: true)
+    field(:language, :string, default: "en")
+    field(:is_discoverable, :boolean, default: true)
+    field(:is_invisible, :boolean, default: false)
+    field(:is_suggested, :boolean, default: false)
+    field(:last_active_at, :utc_datetime)
 
     # --- GEOGRAPHIC LOCATION ---
     # --- POLITICAL/ELECTORAL DISTRICTS ---
@@ -72,221 +86,236 @@ defmodule Kollective.Accounts.User do
     # federal_district => L1 = Federal/National (MP, Congressman)
     # field :district_l1, :string
     # National
-    belongs_to :district_l1, Kollective.Locations.PoliticalDistrict
+    belongs_to(:district_l1, Kollective.Locations.PoliticalDistrict)
 
     # e.g., "SD-24"  (State Senate)
     # state_senate_district => L2 = State Upper House (State Senate)
     # field :district_l2, :string
     # State Upper
-    belongs_to :district_l2, Kollective.Locations.PoliticalDistrict
+    belongs_to(:district_l2, Kollective.Locations.PoliticalDistrict)
 
     # e.g., "SD-11" (State Assembly)
     # state_district => L3 = State Lower House (State Rep, MLA)
     # field :district_l3, :string
     # State Lower
-    belongs_to :district_l3, Kollective.Locations.PoliticalDistrict
+    belongs_to(:district_l3, Kollective.Locations.PoliticalDistrict)
 
     # Smallest local unit (optional)
-    field :precinct, :string
+    field(:precinct, :string)
 
-    field :street_address, :string
-    field :county, :string
-    field :school_district_code, :string
-    field :city_council_district_code, :string
+    field(:street_address, :string)
+    field(:county, :string)
+    field(:school_district_code, :string)
+    field(:city_council_district_code, :string)
 
-    field :precinct_number, :string
-    field :town_name, :string
-    field :is_inside_city, :boolean, default: false
-    field :applicable_office_ids, {:array, :string}, default: []
+    field(:precinct_number, :string)
+    field(:town_name, :string)
+    field(:is_inside_city, :boolean, default: false)
+    field(:applicable_office_ids, {:array, :string}, default: [])
 
     # Internal City ID
     # field :city_id, :integer
-    belongs_to :city, Kollective.Locations.City, foreign_key: :city_id
+    belongs_to(:city, Kollective.Locations.City, foreign_key: :city_id)
     # Display name
-    field :city_name, :string
+    field(:city_name, :string)
 
     # e.g., "California" or "CA"
-    field :state, :string
-    field :state_updated_at, :utc_datetime
-    field :country, :string, default: "US"
+    field(:state, :string)
+    field(:state_updated_at, :utc_datetime)
+    field(:country, :string, default: "US")
 
     # Candidate Verification
-    field :is_verified_candidate, :boolean, default: false
+    field(:is_verified_candidate, :boolean, default: false)
     # Identifies the level of office the candidate is verified for
-    field :candidate_role, Ecto.Enum,
+    field(:candidate_role, Ecto.Enum,
       values: [:state_rep, :state_senate, :congress, :governor, :president]
+    )
 
     # Documentation or proof reference (e.g., link to official filing or external KYC ID)
-    field :verification_id, :string
-    field :under_investigation, :boolean, default: false
+    field(:verification_id, :string)
+    field(:under_investigation, :boolean, default: false)
 
     # Profile Pages with Verification for candidates
     # e.g., "State Representative" or "City Council"
-    field :verified_title, :string
+    field(:verified_title, :string)
     # Link to their web site or official profile for verification
-    field :official_website, :string
+    field(:official_website, :string)
 
     # --- VISUALS ---
-    field :avatar_url, Kollective.Media.UserAvatar.Type, default: "/default-avatar.jpg"
-    field :cover_image_url, Kollective.Media.UserCover.Type, default: "/default-banner-bg.jpg"
+    field(:avatar_url, Kollective.Media.UserAvatar.Type, default: "/default-avatar.jpg")
+    field(:cover_image_url, Kollective.Media.UserCover.Type, default: "/default-banner-bg.jpg")
 
     # Virtual ranking score used by user search subqueries/order clauses.
-    field :search_rank, :float, virtual: true
+    field(:search_rank, :float, virtual: true)
 
     # --- SOCIAL COUNTERS (Cached for performance) ---
-    field :note_count, :integer, default: 0
-    field :follower_count, :integer, default: 0
-    field :following_count, :integer, default: 0
+    field(:note_count, :integer, default: 0)
+    field(:follower_count, :integer, default: 0)
+    field(:following_count, :integer, default: 0)
 
     # --- PERMISSIONS & ROLES ---
-    field :is_admin, :boolean, default: false
-    field :role, Ecto.Enum, values: [:user, :moderator, :admin], default: :user
-    field :is_moderator, :boolean, default: false
-    field :account_tier, :integer, default: 0
-    field :metadata, :map, default: %{}
-    field :origin_state, :string
-    field :vouch_count, :integer, virtual: true
+    field(:is_admin, :boolean, default: false)
+    field(:role, Ecto.Enum, values: [:user, :moderator, :admin], default: :user)
+    field(:is_moderator, :boolean, default: false)
+    field(:account_tier, :integer, default: 0)
+    field(:metadata, :map, default: %{})
+    field(:origin_state, :string)
+    field(:vouch_count, :integer, virtual: true)
 
     # --- PREFERENCES ---
-    field :settings, :map, default: %{}
-    field :email_notifications, :map, default: %{"digest" => false}
-    field :date_of_birth, :date, virtual: true
-    field :age, :integer
-    field :show_age, :boolean, default: false
-    field :birth_year, :integer
+    field(:settings, :map, default: %{})
+    field(:email_notifications, :map, default: %{"digest" => false})
+    field(:date_of_birth, :date, virtual: true)
+    field(:age, :integer)
+    field(:show_age, :boolean, default: false)
+    field(:birth_year, :integer)
 
     # --- ASSOCIATIONS ---
-    has_many :posts, Kollective.Posts.Post
-    has_many :notifications, Kollective.Notifications.Notification, on_delete: :delete_all
-    has_many :received_vouches, Kollective.Civic.Vouch, foreign_key: :vouchee_id
-    has_many :given_vouches, Kollective.Civic.Vouch, foreign_key: :voucher_id
+    has_many(:posts, Kollective.Posts.Post)
+    has_many(:notifications, Kollective.Notifications.Notification, on_delete: :delete_all)
+    has_many(:received_vouches, Kollective.Civic.Vouch, foreign_key: :vouchee_id)
+    has_many(:given_vouches, Kollective.Civic.Vouch, foreign_key: :voucher_id)
 
     # UserRelationship logic for Follows/Blocks/Mutes
     # Direct access to the relationship records
     # Base connections
     # 1. Base associations (The "Raw" Data)
     # Useful if you need to count ALL interactions (follows + blocks + mutes)
-    has_many :outgoing_relationships, Kollective.Accounts.UserRelationship,
+    has_many(:outgoing_relationships, Kollective.Accounts.UserRelationship,
       foreign_key: :source_id
+    )
 
-    has_many :incoming_relationships, Kollective.Accounts.UserRelationship,
+    has_many(:incoming_relationships, Kollective.Accounts.UserRelationship,
       foreign_key: :target_id
+    )
 
     # 2. Following Logic (Outbound "follow" type)
-    has_many :following_relationships, Kollective.Accounts.UserRelationship,
+    has_many(:following_relationships, Kollective.Accounts.UserRelationship,
       foreign_key: :source_id,
       where: [type: "follow"]
+    )
 
-    has_many :following, through: [:following_relationships, :target]
+    has_many(:following, through: [:following_relationships, :target])
 
     # 3. Follower Logic (Inbound "follow" type)
-    has_many :follower_relationships, Kollective.Accounts.UserRelationship,
+    has_many(:follower_relationships, Kollective.Accounts.UserRelationship,
       foreign_key: :target_id,
       where: [type: "follow"]
+    )
 
-    has_many :followers, through: [:follower_relationships, :source]
+    has_many(:followers, through: [:follower_relationships, :source])
 
     # 4. Blocking Logic (Outbound "block" type)
     # Block is an outbound action
-    has_many :block_relationships, Kollective.Accounts.UserRelationship,
+    has_many(:block_relationships, Kollective.Accounts.UserRelationship,
       foreign_key: :source_id,
       where: [type: "block"]
+    )
 
-    has_many :blocked_users, through: [:block_relationships, :target]
+    has_many(:blocked_users, through: [:block_relationships, :target])
 
     # 5. Muting Logic (Outbound "mute" type)
     # Mute is an outbound action
-    has_many :mute_relationships, Kollective.Accounts.UserRelationship,
+    has_many(:mute_relationships, Kollective.Accounts.UserRelationship,
       foreign_key: :source_id,
       where: [type: "mute"]
+    )
 
-    has_many :muted_users, through: [:mute_relationships, :target]
+    has_many(:muted_users, through: [:mute_relationships, :target])
 
     # Reblog Mutes (Hide boosts from this person)
-    has_many :reblog_mute_rels, Kollective.Accounts.UserRelationship,
+    has_many(:reblog_mute_rels, Kollective.Accounts.UserRelationship,
       foreign_key: :source_id,
       where: [type: "reblog_mute"]
+    )
 
-    has_many :reblog_muted_users, through: [:reblog_mute_rels, :target]
+    has_many(:reblog_muted_users, through: [:reblog_mute_rels, :target])
 
     # Notification Mutes (Don't notify me when they interact)
-    has_many :notification_mute_rels, Kollective.Accounts.UserRelationship,
+    has_many(:notification_mute_rels, Kollective.Accounts.UserRelationship,
       foreign_key: :source_id,
       where: [type: "notification_mute"]
+    )
 
-    has_many :notification_muted_users, through: [:notification_mute_rels, :target]
+    has_many(:notification_muted_users, through: [:notification_mute_rels, :target])
 
     # Endorsements (Featured users on your profile)
-    has_many :endorsement_rels, Kollective.Accounts.UserRelationship,
+    has_many(:endorsement_rels, Kollective.Accounts.UserRelationship,
       foreign_key: :source_id,
       where: [type: "endorsement"]
+    )
 
-    has_many :endorsed_users, through: [:endorsement_rels, :target]
+    has_many(:endorsed_users, through: [:endorsement_rels, :target])
 
     # Inverse Subscriptions (Requested follows / Private accounts)
-    has_many :inv_sub_rels, Kollective.Accounts.UserRelationship,
+    has_many(:inv_sub_rels, Kollective.Accounts.UserRelationship,
       foreign_key: :source_id,
       where: [type: "inverse_subscription"]
+    )
 
-    has_many :subscriber_users, through: [:inv_sub_rels, :target]
+    has_many(:subscriber_users, through: [:inv_sub_rels, :target])
 
     # shadow-ban for aggressive spammers
-    field :is_shadow_banned, :boolean, default: false
+    field(:is_shadow_banned, :boolean, default: false)
 
     # Users with true will bypass all keyword/weight checks
-    field :is_exempt, :boolean, default: false
+    field(:is_exempt, :boolean, default: false)
 
-    field :is_verified, :boolean, default: false
+    field(:is_verified, :boolean, default: false)
 
     # Mode controllers -> "social_only" or "civic_active"
-    field :experience_mode, :string, default: "social_only"
+    field(:experience_mode, :string, default: "social_only")
 
-    has_many :candidate_videos, Kollective.Videos.CandidateVideo
+    has_many(:candidate_videos, Kollective.Videos.CandidateVideo)
 
     # Base trust. 1.0 = 100%, 0.5 = 50% weight, etc.
     # Reputation System for reporters
-    field :report_trust_score, :float, default: 1.0
-    field :successful_reports_count, :integer, default: 0
-    field :false_reports_count, :integer, default: 0
+    field(:report_trust_score, :float, default: 1.0)
+    field(:successful_reports_count, :integer, default: 0)
+    field(:false_reports_count, :integer, default: 0)
 
-    field :muted_keywords, {:array, :string}, default: []
+    field(:muted_keywords, {:array, :string}, default: [])
 
     # Hard Account Suspension
-    field :suspended_at, :utc_datetime
-    field :suspension_reason, :string
+    field(:suspended_at, :utc_datetime)
+    field(:suspension_reason, :string)
 
-    field :show_role, :boolean, default: true
-    field :is_locked, :boolean, default: false
+    field(:show_role, :boolean, default: true)
+    field(:is_locked, :boolean, default: false)
     # ["public", "unlisted", "local", "private", "direct", "list"]
-    field :default_scope, :string, default: "public"
+    field(:default_scope, :string, default: "public")
 
     # Privacy
-    field :hide_followers_count, :boolean, default: false
-    field :hide_follows_count, :boolean, default: false
-    field :hide_followers, :boolean, default: false
-    field :hide_follows, :boolean, default: false
-    field :hide_favorites, :boolean, default: true
+    field(:hide_followers_count, :boolean, default: false)
+    field(:hide_follows_count, :boolean, default: false)
+    field(:hide_followers, :boolean, default: false)
+    field(:hide_follows, :boolean, default: false)
+    field(:hide_favorites, :boolean, default: true)
 
     # Settings & Maps
-    field :emoji, :map, default: %{}
-    field :background, :map, default: %{}
-    field :no_rich_text, :boolean, default: false
-    field :accepts_chat_messages, :boolean
-    field :accepts_email_list, :boolean, default: false
-    field :password_reset_pending, :boolean, default: false
+    field(:emoji, :map, default: %{})
+    field(:background, :map, default: %{})
+    field(:no_rich_text, :boolean, default: false)
+    field(:accepts_chat_messages, :boolean)
+    field(:accepts_email_list, :boolean, default: false)
+    field(:password_reset_pending, :boolean, default: false)
 
     # Dates
-    field :last_digest_emailed_at, :naive_datetime
-    field :last_post_at, :naive_datetime
+    field(:last_digest_emailed_at, :naive_datetime)
+    field(:last_post_at, :naive_datetime)
 
-    field :last_read_at, :utc_datetime
+    field(:last_read_at, :utc_datetime)
 
-    field :last_seen_at, :utc_datetime
+    field(:last_seen_at, :utc_datetime)
 
-    embeds_one :notification_settings, NotificationSetting, on_replace: :update
+    embeds_one(:notification_settings, NotificationSetting, on_replace: :update)
 
     # "Auto-play GIFs" setting in your user preferences
-    field :auto_play_gifs, :boolean, default: false
+    field(:auto_play_gifs, :boolean, default: false)
+
+    # --- CRYPTO BACKUP ---
+    field(:encrypted_private_key_backup, :string)
+    field(:backup_salt, :string)
 
     timestamps()
   end
@@ -301,7 +330,8 @@ defmodule Kollective.Accounts.User do
       :experience_mode,
       :account_tier,
       :metadata,
-      :origin_state
+      :origin_state,
+      :badge_type
     ])
     |> validate_required([:username, :identity_hash, :experience_mode])
     |> validate_inclusion(:experience_mode, ["social_only", "civic_active"])
@@ -344,6 +374,7 @@ defmodule Kollective.Accounts.User do
       :date_of_birth,
       :country,
       :type,
+      # :public_key, TODO - open later
       :representative_name
     ])
     |> default_display_name()
@@ -870,6 +901,12 @@ defmodule Kollective.Accounts.User do
     else
       changeset
     end
+  end
+
+  def backup_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:encrypted_private_key_backup, :backup_salt])
+    |> validate_required([:encrypted_private_key_backup, :backup_salt])
   end
 end
 

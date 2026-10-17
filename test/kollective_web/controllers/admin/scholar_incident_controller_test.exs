@@ -104,7 +104,93 @@ defmodule KollectiveWeb.Admin.ScholarIncidentControllerTest do
                "error" => "Targeted scholar incident record not found."
              }
     end
+
+    test "resolves incident with dismiss action", %{conn: conn, moderator: moderator} do
+      incident_id = Ecto.ULID.generate()
+      now = System.system_time(:second)
+
+      # Insert an incident schema into Postgres
+      {:ok, _user} = Repo.insert(%Kollective.Accounts.User{email: "target@kollective.org", username: "target_user"})
+      {:ok, incident} =
+        %Kollective.Moderation.Incident{}
+        |> Kollective.Moderation.Incident.changeset(%{
+          id: incident_id,
+          status: "pending",
+          country_code: "US",
+          origin_node_atom: "node_test@127.0.0.1",
+          description: "Flagged test incident",
+          reporter_id: moderator.id
+        })
+        |> Repo.insert()
+
+      :mnesia.transaction(fn ->
+        :mnesia.write({
+          :scholar_incidents,
+          to_string(incident.id),
+          "pending",
+          "US",
+          "target_user",
+          "Flagged test incident",
+          now,
+          nil,
+          nil
+        })
+      end)
+
+      conn =
+        post(conn, ~p"/api/v1/admin/incidents/#{incident.id}/resolve", %{
+          "action" => "dismiss"
+        })
+
+      assert json_response(conn, 200) == %{
+               "status" => "success",
+               "final_status" => "resolved_restored"
+             }
+    end
   end
+
+  describe "lease_next/2" do
+    test "successfully leases next incident from queue", %{conn: conn} do
+      if :scholar_incidents in :mnesia.system_info(:tables) do
+        :mnesia.clear_table(:scholar_incidents)
+      end
+
+      incident_id = Ecto.ULID.generate()
+      now = System.system_time(:second)
+
+      :mnesia.transaction(fn ->
+        :mnesia.write({
+          :scholar_incidents,
+          incident_id,
+          "pending",
+          "US",
+          "target_username",
+          "Violated community guidelines",
+          now,
+          nil,
+          nil
+        })
+      end)
+
+      conn = post(conn, ~p"/api/v1/admin/incidents/lease_next")
+
+      assert %{"data" => ticket} = json_response(conn, 200)
+      assert ticket["id"] == incident_id
+      assert ticket["status"] == "pending"
+      assert ticket["target_username"] == "target_username"
+    end
+
+    test "returns empty_queue when no incidents are available", %{conn: conn} do
+      if :scholar_incidents in :mnesia.system_info(:tables) do
+        :mnesia.clear_table(:scholar_incidents)
+      end
+
+      conn = post(conn, ~p"/api/v1/admin/incidents/lease_next")
+
+      assert %{"data" => nil, "status" => "empty_queue"} = json_response(conn, 200)
+    end
+  end
+
 
   describe "security clearance boundary" do
     test "denies access to non-moderator user", %{conn: conn} do

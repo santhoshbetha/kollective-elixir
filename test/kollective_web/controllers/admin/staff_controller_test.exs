@@ -41,12 +41,12 @@ defmodule KollectiveWeb.Admin.StaffControllerTest do
     end
   end
 
-  describe "promote_moderator/2" do
+  describe "promote_to_moderator/2" do
     test "promotes an existing user to moderator role", %{conn: conn} do
       target_user = insert(:user, is_moderator: false)
 
       conn =
-        post(conn, ~p"/api/v1/admin/root/users/promote_moderator", %{
+        post(conn, ~p"/api/v1/admin/root/users/promote_to_moderator", %{
           "username" => target_user.username
         })
 
@@ -62,7 +62,7 @@ defmodule KollectiveWeb.Admin.StaffControllerTest do
 
     test "returns 404 if targeted username is not found", %{conn: conn} do
       conn =
-        post(conn, ~p"/api/v1/admin/root/users/promote_moderator", %{
+        post(conn, ~p"/api/v1/admin/root/users/promote_to_moderator", %{
           "username" => "non_existent_user_9999"
         })
 
@@ -72,12 +72,12 @@ defmodule KollectiveWeb.Admin.StaffControllerTest do
     end
   end
 
-  describe "promote_admin/2" do
+  describe "promote_to_admin/2" do
     test "elevates an existing user to administrator role", %{conn: conn} do
       target_user = insert(:user, is_admin: false)
 
       conn =
-        post(conn, ~p"/api/v1/admin/root/users/promote_admin", %{
+        post(conn, ~p"/api/v1/admin/root/users/promote_to_admin", %{
           "username" => target_user.username
         })
 
@@ -93,7 +93,7 @@ defmodule KollectiveWeb.Admin.StaffControllerTest do
 
     test "returns 404 if targeted username is not found", %{conn: conn} do
       conn =
-        post(conn, ~p"/api/v1/admin/root/users/promote_admin", %{
+        post(conn, ~p"/api/v1/admin/root/users/promote_to_admin", %{
           "username" => "non_existent_user_8888"
         })
 

@@ -32,10 +32,10 @@ defmodule KollectiveWeb.Admin.StaffController do
   end
 
   @doc """
-  POST /api/v1/admin/root/users/promote_moderator
+  POST /api/v1/admin/root/users/promote_to_moderator
   Promotes an active user account to the Moderator staff tier.
   """
-  def promote_moderator(conn, %{"username" => username}) do
+  def promote_to_moderator(conn, %{"username" => username}) do
     admin = conn.assigns.current_user || conn.assigns[:user]
 
     case Accounts.update_staff_role(username, :moderator, admin.id) do
@@ -43,7 +43,7 @@ defmodule KollectiveWeb.Admin.StaffController do
         # 🚀 REAL-TIME AUDIT INTEGRATION:
         # Logs the promotion to the database and streams it over WebSockets instantly [INDEX].
         AuditLogs.create_audit_log(%{
-          action: "PROMOTE_MODERATOR",
+          action: "PROMOTE_TO_MODERATOR",
           target_type: "User",
           target_id: "@#{user.username}",
           actor_id: admin.id,
@@ -72,17 +72,17 @@ defmodule KollectiveWeb.Admin.StaffController do
   end
 
   @doc """
-  POST /api/v1/admin/root/users/promote_admin
+  POST /api/v1/admin/root/users/promote_to_admin
   Promotes an active user account to the absolute Root Admin staff tier.
   """
-  def promote_admin(conn, %{"username" => username}) do
+  def promote_to_admin(conn, %{"username" => username}) do
     admin = conn.assigns.current_user || conn.assigns[:user]
 
     case Accounts.update_staff_role(username, :admin, admin.id) do
       {:ok, user} ->
         # 🚀 REAL-TIME AUDIT INTEGRATION:
         AuditLogs.create_audit_log(%{
-          action: "PROMOTE_ADMIN",
+          action: "PROMOTE_TO_ADMIN",
           target_type: "User",
           target_id: "@#{user.username}",
           actor_id: admin.id,

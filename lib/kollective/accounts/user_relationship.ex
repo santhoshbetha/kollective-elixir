@@ -4,6 +4,7 @@ defmodule Kollective.Accounts.UserRelationship do
 
   @types [
     "follow",
+    "follow_request",
     "block",
     "mute",
     "reblog_mute",

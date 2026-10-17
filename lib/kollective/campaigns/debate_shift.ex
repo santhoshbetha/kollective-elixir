@@ -2,6 +2,7 @@
 defmodule Kollective.Campaigns.DebateShift do
   use Kollective.Schemas.Schema
 
+  @derive {Jason.Encoder, only: [:id, :role_name, :max_volunteers, :debate_event_id, :volunteers]}
   @derive {JSON.Encoder, only: [:id, :role_name, :max_volunteers, :debate_event_id, :volunteers]}
   schema "debate_shifts" do
     field :role_name, :string

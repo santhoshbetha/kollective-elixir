@@ -23,7 +23,8 @@ defmodule Kollective.Chats.Participant do
   def changeset(participant, attrs) do
     participant
     |> cast(attrs, [:user_id, :conversation_id, :last_read_at, :last_delivered_at, :public_key])
-    |> validate_required([:user_id, :conversation_id])
+    |> validate_required([:user_id])
+    |> foreign_key_constraint(:conversation_id)
     # Prevent a user from being added to the same DM twice
     |> unique_constraint([:user_id, :conversation_id])
   end

@@ -81,7 +81,10 @@ defmodule KollectiveWeb.RegistrationController do
       "birthday",
       "date_of_birth",
       "country",
-      "type"
+      "type",
+      # CRYPTOGRAPHIC INGRESS GAP MATCHING:
+      # Whitelists your browser-side RSA-OAEP public key PEM parameters string block
+      "public_key"
     ]
 
     type =

@@ -1,6 +1,27 @@
 defmodule Kollective.Videos.CandidateVideo do
   use Kollective.Schemas.Schema
 
+  @derive {Jason.Encoder,
+           only: [
+             :id,
+             :title,
+             :video_url,
+             :thumbnail_url,
+             :description,
+             :status,
+             :office_level,
+             :district_code,
+             :sub_local_name,
+             :scope,
+             :target_district,
+             :target_state,
+             :target_country,
+             :votes_count,
+             :likes_count,
+             :user_id,
+             :inserted_at,
+             :updated_at
+           ]}
   schema "candidate_videos" do
     field :title, :string
     field :video_url, :string

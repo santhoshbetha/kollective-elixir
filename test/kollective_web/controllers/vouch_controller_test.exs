@@ -95,14 +95,21 @@ defmodule KollectiveWeb.VouchControllerTest do
              } = json_response(conn, 422)
     end
 
-    test "AccountJSON serializes vouch_count calculated directly from user_vouches database table", %{
-      voucher: voucher,
-      district: district
-    } do
+    test "AccountJSON serializes vouch_count calculated directly from user_vouches database table",
+         %{
+           voucher: voucher,
+           district: district
+         } do
       vouchee = insert(:user, account_tier: 0, origin_state: "CA", district_l1_id: district.id)
       assert KollectiveWeb.AccountJSON.show(%{user: vouchee}).vouch_count == 0
 
-      insert(:vouch, voucher: voucher, vouchee: vouchee, origin_state: "CA", matched_tier: "l1", district_value: district.id)
+      insert(:vouch,
+        voucher: voucher,
+        vouchee: vouchee,
+        origin_state: "CA",
+        matched_tier: "l1",
+        district_value: district.id
+      )
 
       rendered = KollectiveWeb.AccountJSON.show(%{user: vouchee})
       assert rendered.vouch_count == 1

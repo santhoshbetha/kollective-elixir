@@ -491,13 +491,13 @@ defmodule Kollective.Events.Events do
           target_id: event.id,
           target_type: "Event",
           metadata: %{
-            event_title: event.name,
+            event_title: event_name(event),
             new_time: formatted_time
           }
         },
         %{
           post_id: nil,
-          preview: "📅 Time changed for '#{event.name}'. New schedule: #{formatted_time}."
+          preview: "📅 Time changed for '#{event_name(event)}'. New schedule: #{formatted_time}."
         }
       )
     end)
@@ -703,12 +703,12 @@ defmodule Kollective.Events.Events do
                     event_id: event.id,
                     target_id: event.id,
                     target_type: "Event",
-                    metadata: %{event_title: event.name, sub_type: "request_approved"}
+                    metadata: %{event_title: event_name(event), sub_type: "request_approved"}
                   },
                   %{
                     post_id: nil,
                     preview:
-                      "🎟️ Congratulations! Your request to join '#{event.name}' has been approved."
+                      "🎟️ Congratulations! Your request to join '#{event_name(event)}' has been approved."
                   }
                 )
 
@@ -884,12 +884,12 @@ defmodule Kollective.Events.Events do
                     event_id: event.id,
                     target_id: event.id,
                     target_type: "Event",
-                    metadata: %{event_title: event.name, sub_type: "waitlist_promoted"}
+                    metadata: %{event_title: event_name(event), sub_type: "waitlist_promoted"}
                   },
                   %{
                     post_id: nil,
                     preview:
-                      "🎉 Good news! You've been moved off the waitlist and are now attending '#{event.name}'."
+                      "🎉 Good news! You've been moved off the waitlist and are now attending '#{event_name(event)}'."
                   }
                 )
 
@@ -1180,13 +1180,13 @@ defmodule Kollective.Events.Events do
         target_type: "Event",
         # Package the invite properties inside our flexible JSONB metadata column
         metadata: %{
-          event_title: event.name,
+          event_title: event_name(event),
           sub_type: "event_invite"
         }
       },
       %{
         post_id: nil,
-        preview: "✉️ @#{inviter.username} invited you to attend the event: '#{event.name}'."
+        preview: "✉️ @#{inviter.username} invited you to attend the event: '#{event_name(event)}'."
       }
     )
   end
@@ -1389,7 +1389,7 @@ defmodule Kollective.Events.Events do
         action: "event_cancelled",
         target_id: event.id,
         user_id: admin.id,
-        metadata: %{event_title: event.name}
+        metadata: %{event_title: event_name(event)}
       })
       |> Repo.transaction()
       |> case do
@@ -1432,7 +1432,7 @@ defmodule Kollective.Events.Events do
           user_id: user_id,
           actor_id: actor_id,
           type: type,
-          metadata: %{event_title: event.name, event_id: event.id, sub_type: "cancellation"},
+          metadata: %{event_title: event_name(event), event_id: event.id, sub_type: "cancellation"},
           read: false,
           inserted_at: now,
           updated_at: now
@@ -1453,7 +1453,7 @@ defmodule Kollective.Events.Events do
          %{
            type: type,
            actor_name: "System",
-           preview: "❌ Event Cancelled: '#{event.name}' has been called off."
+           preview: "❌ Event Cancelled: '#{event_name(event)}' has been called off."
          }}
       )
     end)
@@ -2397,5 +2397,9 @@ defmodule Kollective.Events.Events do
     # Chronological sorting path maps perfectly to your card feeds
     |> order_by([e], desc: e.start_time)
     |> Repo.all()
+  end
+
+  defp event_name(event) do
+    Map.get(event, :title) || Map.get(event, :name) || ""
   end
 end

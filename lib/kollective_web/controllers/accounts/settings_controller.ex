@@ -14,7 +14,9 @@ defmodule KollectiveWeb.SettingsController do
   def change_email(conn, params) do
     user = conn.assigns[:current_user] || conn.assigns[:user]
     email = params["email"] || get_in(params, ["user", "email"])
-    password = params["password"] || params["current_password"] || get_in(params, ["user", "password"])
+
+    password =
+      params["password"] || params["current_password"] || get_in(params, ["user", "password"])
 
     cond do
       is_nil(user) ->
@@ -80,8 +82,14 @@ defmodule KollectiveWeb.SettingsController do
   """
   def change_password(conn, params) do
     user = conn.assigns[:current_user] || conn.assigns[:user]
-    current_password = params["current_password"] || params["password"] || get_in(params, ["user", "current_password"])
-    new_password = params["new_password"] || params["password_confirmation"] || get_in(params, ["user", "new_password"])
+
+    current_password =
+      params["current_password"] || params["password"] ||
+        get_in(params, ["user", "current_password"])
+
+    new_password =
+      params["new_password"] || params["password_confirmation"] ||
+        get_in(params, ["user", "new_password"])
 
     cond do
       is_nil(user) ->
@@ -105,7 +113,11 @@ defmodule KollectiveWeb.SettingsController do
         |> json(%{error: "New password must be at least 8 characters long."})
 
       true ->
-        changeset = User.password_changeset(user, %{"password" => new_password, "password_confirmation" => new_password})
+        changeset =
+          User.password_changeset(user, %{
+            "password" => new_password,
+            "password_confirmation" => new_password
+          })
 
         case Repo.update(changeset) do
           {:ok, updated_user} ->
@@ -293,7 +305,9 @@ defmodule KollectiveWeb.SettingsController do
         locale = params["locale"] || params["language"]
 
         current_settings = user.settings || %{}
-        updated_settings = if theme, do: Map.put(current_settings, "theme", theme), else: current_settings
+
+        updated_settings =
+          if theme, do: Map.put(current_settings, "theme", theme), else: current_settings
 
         changes = %{settings: updated_settings}
         changes = if locale, do: Map.put(changes, :locale, locale), else: changes

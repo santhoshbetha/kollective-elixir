@@ -89,12 +89,12 @@ defmodule KollectiveWeb.EventParticipantController do
     organizer = conn.assigns.current_user
 
     case Events.approve_request(organizer, participant_id) do
-      {:ok, :approved} ->
+      res when res in [{:ok, :approved}, {:ok, {:ok, :approved}}] ->
         conn
         |> put_status(:ok)
         |> json(%{status: "success", message: "Attendee request successfully approved."})
 
-      {:ok, :already_approved} ->
+      res when res in [{:ok, :already_approved}, {:ok, {:ok, :already_approved}}] ->
         conn
         |> put_status(:ok)
         |> json(%{status: "success", message: "This request was already approved."})
@@ -111,7 +111,7 @@ defmodule KollectiveWeb.EventParticipantController do
     organizer = conn.assigns.current_user
 
     case Events.reject_request(organizer, participant_id) do
-      {:ok, :rejected} ->
+      res when res in [{:ok, :rejected}, {:ok, {:ok, :rejected}}] ->
         conn
         |> put_status(:ok)
         |> json(%{status: "success", message: "Attendee request successfully rejected."})
@@ -219,6 +219,9 @@ defmodule KollectiveWeb.EventParticipantController do
       data: EventJSON.participant_users(users)
     })
   end
+
+  # GET /api/v1/events/:event_id/requests
+  def list_requests(conn, params), do: participation_requests(conn, params)
 
   # ─── ACTION 2: LIST PENDING JOIN APPROVAL REQUESTS ───
   # GET /api/v1/kollective/events/:event_id/requests

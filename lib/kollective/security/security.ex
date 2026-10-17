@@ -64,6 +64,7 @@ defmodule Kollective.Security.Security do
         []
     end
   end
+
   @doc """
   Streams blacklisted IPs safely out of memory without triggering RAM bloat.
   Uses optimized native Erlang query specifications.
