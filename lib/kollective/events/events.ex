@@ -1432,7 +1432,11 @@ defmodule Kollective.Events.Events do
           user_id: user_id,
           actor_id: actor_id,
           type: type,
-          metadata: %{event_title: event_name(event), event_id: event.id, sub_type: "cancellation"},
+          metadata: %{
+            event_title: event_name(event),
+            event_id: event.id,
+            sub_type: "cancellation"
+          },
           read: false,
           inserted_at: now,
           updated_at: now

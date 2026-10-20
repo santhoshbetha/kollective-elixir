@@ -53,13 +53,21 @@ defmodule KollectiveWeb.Admin.MeshAdjudicationControllerTest do
 
       # Write to Mnesia
       :mnesia.transaction(fn ->
-        :mnesia.write({:distributed_appeals, to_string(appeal.id), to_string(incident.id), to_string(user.id), appeal.reason, "pending", "US", "now"})
-        :mnesia.write({:scholar_incidents, to_string(incident.id), "pending", "US", "user", "desc", 1234, nil, nil})
+        :mnesia.write(
+          {:distributed_appeals, to_string(appeal.id), to_string(incident.id), to_string(user.id),
+           appeal.reason, "pending", "US", "now"}
+        )
+
+        :mnesia.write(
+          {:scholar_incidents, to_string(incident.id), "pending", "US", "user", "desc", 1234, nil,
+           nil}
+        )
       end)
 
-      conn = post(conn, ~p"/api/v1/admin/moderation_appeals/#{appeal.id}/adjudicate", %{
-        "resolution" => "approve"
-      })
+      conn =
+        post(conn, ~p"/api/v1/admin/moderation_appeals/#{appeal.id}/adjudicate", %{
+          "resolution" => "approve"
+        })
 
       assert json_response(conn, 200)["status"] == "success"
 
@@ -72,8 +80,15 @@ defmodule KollectiveWeb.Admin.MeshAdjudicationControllerTest do
       assert updated_incident.status == "resolved_restored"
 
       # Verify Mnesia purged records
-      assert {:atomic, []} = :mnesia.transaction(fn -> :mnesia.read(:distributed_appeals, to_string(appeal.id)) end)
-      assert {:atomic, []} = :mnesia.transaction(fn -> :mnesia.read(:scholar_incidents, to_string(incident.id)) end)
+      assert {:atomic, []} =
+               :mnesia.transaction(fn ->
+                 :mnesia.read(:distributed_appeals, to_string(appeal.id))
+               end)
+
+      assert {:atomic, []} =
+               :mnesia.transaction(fn ->
+                 :mnesia.read(:scholar_incidents, to_string(incident.id))
+               end)
     end
 
     test "rejects appeal without restoring incident", %{conn: conn, user: user} do
@@ -106,9 +121,10 @@ defmodule KollectiveWeb.Admin.MeshAdjudicationControllerTest do
         })
         |> Repo.insert()
 
-      conn = post(conn, ~p"/api/v1/admin/moderation_appeals/#{appeal.id}/adjudicate", %{
-        "resolution" => "reject"
-      })
+      conn =
+        post(conn, ~p"/api/v1/admin/moderation_appeals/#{appeal.id}/adjudicate", %{
+          "resolution" => "reject"
+        })
 
       assert json_response(conn, 200)["status"] == "success"
 
@@ -123,9 +139,10 @@ defmodule KollectiveWeb.Admin.MeshAdjudicationControllerTest do
     test "returns error when appeal not found", %{conn: conn} do
       fake_id = Ecto.ULID.generate()
 
-      conn = post(conn, ~p"/api/v1/admin/moderation_appeals/#{fake_id}/adjudicate", %{
-        "resolution" => "approve"
-      })
+      conn =
+        post(conn, ~p"/api/v1/admin/moderation_appeals/#{fake_id}/adjudicate", %{
+          "resolution" => "approve"
+        })
 
       assert json_response(conn, 422)["error"] == "Transaction rolled back."
     end

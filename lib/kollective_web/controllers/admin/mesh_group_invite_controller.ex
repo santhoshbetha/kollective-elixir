@@ -9,13 +9,13 @@ defmodule KollectiveWeb.Admin.MeshGroupInviteController do
 
   @doc """
   POST /api/v1/admin/chat_groups/:conversation_id/invite
-  Adds a new user to an active group conversation across relational database lines [INDEX].
+  Adds a new user to an active group conversation across relational database lines.
   """
   def create(conn, %{"conversation_id" => conv_id, "username" => invitee_username}) do
     clean_username = String.trim(invitee_username) |> String.downcase()
 
     # 1️⃣ RESOLVE THE TARGET USER PROFILE FIELD ATTRIBUTES
-    # We locate the invitee by their unique username and extract their current public key string [INDEX]
+    # We locate the invitee by their unique username and extract their current public key string
     target_user =
       from(u in User, where: u.username == ^clean_username)
       |> Repo.one()
@@ -27,9 +27,9 @@ defmodule KollectiveWeb.Admin.MeshGroupInviteController do
         |> json(%{error: "Citizen account mapping profile not found on the network map."})
 
       user ->
-        # 2️⃣ ARRANGE PARTICIPANT PARAMETERS CONTRACT [INDEX]
-        # We pass the user's public key string directly onto the participant record row [INDEX]
-        # for zero-latency lookups during browser-side media file encryption passes [INDEX].
+        # 2️⃣ ARRANGE PARTICIPANT PARAMETERS CONTRACT
+        # We pass the user's public key string directly onto the participant record row
+        # for zero-latency lookups during browser-side media file encryption passes.
         participant_attrs = %{
           "user_id" => user.id,
           "conversation_id" => conv_id,
@@ -72,7 +72,7 @@ defmodule KollectiveWeb.Admin.MeshGroupInviteController do
             })
 
           {:error, %Ecto.Changeset{} = changeset} ->
-            # Catch duplicate insertion collisions elegantly using your unique constraint rule [INDEX]
+            # Catch duplicate insertion collisions elegantly using your unique constraint rule
             if changeset.errors[:user_id] &&
                  elem(changeset.errors[:user_id], 0) =~ "has already been taken" do
               conn

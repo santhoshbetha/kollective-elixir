@@ -14,7 +14,10 @@ defmodule KollectiveWeb.CandidacyAuthController do
   When vouches hit the magic number (3), it triggers automatic phase promotion.
   """
   def cast_vouch(conn, %{"application_id" => app_id}) do
-    voucher_id = conn.assigns[:current_user_id] || (conn.assigns[:current_user] && conn.assigns[:current_user].id)
+    voucher_id =
+      conn.assigns[:current_user_id] ||
+        (conn.assigns[:current_user] && conn.assigns[:current_user].id)
+
     voucher = Repo.get!(User, voucher_id)
 
     Repo.transaction(fn ->
@@ -73,7 +76,10 @@ defmodule KollectiveWeb.CandidacyAuthController do
   """
   def approve_application(conn, %{"id" => app_id}) do
     # Ensure current user is an authorized platform Vanguard operator
-    admin_id = conn.assigns[:current_user_id] || (conn.assigns[:current_user] && conn.assigns[:current_user].id)
+    admin_id =
+      conn.assigns[:current_user_id] ||
+        (conn.assigns[:current_user] && conn.assigns[:current_user].id)
+
     admin = Repo.get!(User, admin_id)
 
     if admin.is_admin || admin.role in [:admin, :moderator] || to_string(admin.role) == "Vanguard" do
@@ -117,7 +123,10 @@ defmodule KollectiveWeb.CandidacyAuthController do
   Enforces a strict constraint block: Limit one active application per citizen account profile.
   """
   def create_application(conn, %{"candidate_application" => app_params, "proof" => proof_plug}) do
-    user_id = conn.assigns[:current_user_id] || (conn.assigns[:current_user] && conn.assigns[:current_user].id)
+    user_id =
+      conn.assigns[:current_user_id] ||
+        (conn.assigns[:current_user] && conn.assigns[:current_user].id)
+
     office_level = Map.get(app_params, "office_level")
 
     alias Kollective.Repo

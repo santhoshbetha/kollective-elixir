@@ -4,11 +4,14 @@ defmodule Kollective.Database.MnesiaQueueEngine do
 
   @doc """
   Pulls next available incident ticket using a decentralized, distributed transaction lease.
+  Enforces an active-lease check: if the moderator already has an active, unexpired lease,
+  returns that ticket to ensure even distribution and prevent ticket hoarding.
   """
-  def lease_next_incident(moderator_id, country_code, is_global?) do
+  def lease_next_incident(moderator_id, country_code, is_global?, opts \\ []) do
     now = DateTime.utc_now() |> DateTime.to_unix()
     # 5-minute processing lease lock threshold
     lease_expiry = now + 300
+    force_new? = Keyword.get(opts, :force_new, false)
 
     # Ensure Mnesia tables are ready or attempt hydration if cold
     maybe_rehydrate_from_postgres()
@@ -17,16 +20,43 @@ defmodule Kollective.Database.MnesiaQueueEngine do
     # Mnesia coordinates memory locks across all nodes concurrently, ensuring zero duplication.
     transaction_result =
       :mnesia.transaction(fn ->
-        case :mnesia.all_keys(:scholar_incidents) do
-          [] ->
-            :no_tickets_available
+        active_lease =
+          if force_new? do
+            :none
+          else
+            find_active_lease_for_moderator(moderator_id, now)
+          end
 
-          all_keys ->
-            find_and_lease_ticket(all_keys, moderator_id, country_code, is_global?, now, lease_expiry)
+        case active_lease do
+          {:ok, active_record} ->
+            {:already_leased, serialize_mnesia_record(active_record)}
+
+          :none ->
+            case :mnesia.all_keys(:scholar_incidents) do
+              [] ->
+                :no_tickets_available
+
+              all_keys ->
+                find_and_lease_ticket(
+                  all_keys,
+                  moderator_id,
+                  country_code,
+                  is_global?,
+                  now,
+                  lease_expiry
+                )
+            end
         end
       end)
 
     case transaction_result do
+      {:atomic, {:already_leased, active_ticket}} ->
+        Logger.info(
+          "ℹ️ [MnesiaQueueEngine] Moderator #{moderator_id} already has active lease on incident #{active_ticket.id}. Returning existing ticket."
+        )
+
+        {:ok, active_ticket}
+
       {:atomic, {:ok, leased_ticket}} ->
         # Synchronize lease to Postgres if record exists there (Dual-Write)
         sync_lease_to_postgres(leased_ticket.id, moderator_id, lease_expiry)
@@ -45,6 +75,50 @@ defmodule Kollective.Database.MnesiaQueueEngine do
         )
 
         {:error, :transaction_failed}
+    end
+  end
+
+  @doc """
+  Returns `{:ok, ticket}` if a moderator currently holds an active, unexpired lease on any incident,
+  or `:none` otherwise.
+  """
+  def get_active_lease(moderator_id) do
+    now = DateTime.utc_now() |> DateTime.to_unix()
+
+    case :mnesia.transaction(fn -> find_active_lease_for_moderator(moderator_id, now) end) do
+      {:atomic, {:ok, record}} -> {:ok, serialize_mnesia_record(record)}
+      _ -> :none
+    end
+  end
+
+  @doc """
+  Checks if a moderator currently holds an active, unexpired lease on any incident.
+  """
+  def has_active_lease?(moderator_id) do
+    match?({:ok, _}, get_active_lease(moderator_id))
+  end
+
+  defp find_active_lease_for_moderator(moderator_id, now) do
+    mod_str = to_string(moderator_id)
+
+    matches =
+      :mnesia.match_object({:scholar_incidents, :_, "pending", :_, :_, :_, :_, mod_str, :_})
+
+    matches =
+      if Enum.empty?(matches) and is_integer(moderator_id) do
+        :mnesia.match_object(
+          {:scholar_incidents, :_, "pending", :_, :_, :_, :_, moderator_id, :_}
+        )
+      else
+        matches
+      end
+
+    case Enum.find(matches, fn record ->
+           leased_until = elem(record, 8)
+           not lease_expired?(leased_until, now)
+         end) do
+      nil -> :none
+      record -> {:ok, record}
     end
   end
 
@@ -124,9 +198,12 @@ defmodule Kollective.Database.MnesiaQueueEngine do
   defp lease_expired?(nil, _now), do: true
   defp lease_expired?(leased_until, now) when is_integer(leased_until), do: leased_until < now
   defp lease_expired?(%DateTime{} = dt, _now), do: DateTime.compare(dt, DateTime.utc_now()) == :lt
+
   defp lease_expired?(leased_until_str, now) when is_binary(leased_until_str) do
     case Integer.parse(leased_until_str) do
-      {ts, ""} -> ts < now
+      {ts, ""} ->
+        ts < now
+
       _ ->
         case DateTime.from_iso8601(leased_until_str) do
           {:ok, dt, _} -> DateTime.compare(dt, DateTime.utc_now()) == :lt
@@ -134,24 +211,35 @@ defmodule Kollective.Database.MnesiaQueueEngine do
         end
     end
   end
+
   defp lease_expired?(_, _), do: true
 
   defp geo_cleared?(true, _ticket_cc, _country_code), do: true
   defp geo_cleared?(_is_global?, nil, _country_code), do: true
-  defp geo_cleared?(_is_global?, ticket_cc, _country_code) when ticket_cc in ["GLOBAL", "global", ""], do: true
-  defp geo_cleared?(_is_global?, ticket_cc, country_code) when is_binary(ticket_cc) and is_binary(country_code) do
+
+  defp geo_cleared?(_is_global?, ticket_cc, _country_code)
+       when ticket_cc in ["GLOBAL", "global", ""],
+       do: true
+
+  defp geo_cleared?(_is_global?, ticket_cc, country_code)
+       when is_binary(ticket_cc) and is_binary(country_code) do
     String.upcase(ticket_cc) == String.upcase(country_code)
   end
+
   defp geo_cleared?(_is_global?, _ticket_cc, _country_code), do: false
 
   defp parse_inserted_at_to_unix(ts, _now) when is_integer(ts), do: ts
   defp parse_inserted_at_to_unix(%DateTime{} = dt, _now), do: DateTime.to_unix(dt)
+
   defp parse_inserted_at_to_unix(%NaiveDateTime{} = ndt, _now) do
     DateTime.from_naive!(ndt, "Etc/UTC") |> DateTime.to_unix()
   end
+
   defp parse_inserted_at_to_unix(str, now) when is_binary(str) do
     case Integer.parse(str) do
-      {val, ""} -> val
+      {val, ""} ->
+        val
+
       _ ->
         case DateTime.from_iso8601(str) do
           {:ok, dt, _} -> DateTime.to_unix(dt)
@@ -159,6 +247,7 @@ defmodule Kollective.Database.MnesiaQueueEngine do
         end
     end
   end
+
   defp parse_inserted_at_to_unix(_other, now), do: now
 
   defp serialize_mnesia_record(record_tuple) do
@@ -191,6 +280,8 @@ defmodule Kollective.Database.MnesiaQueueEngine do
       target_username: to_string(Enum.at(list, 4) || "unknown"),
       description: Enum.at(list, 5) || "",
       inserted_at: formatted_inserted_at,
+      leased_by_id: Enum.at(list, 7),
+      leased_until: Enum.at(list, 8),
       origin_node_atom: to_string(Node.self())
     }
   end
@@ -286,4 +377,3 @@ defmodule Kollective.Database.MnesiaQueueEngine do
     end
   end
 end
-

@@ -316,6 +316,7 @@ defmodule Kollective.Accounts.User do
     # --- CRYPTO BACKUP ---
     field(:encrypted_private_key_backup, :string)
     field(:backup_salt, :string)
+    field(:public_key, :string)
 
     timestamps()
   end
@@ -374,7 +375,7 @@ defmodule Kollective.Accounts.User do
       :date_of_birth,
       :country,
       :type,
-      # :public_key, TODO - open later
+      :public_key,
       :representative_name
     ])
     |> default_display_name()

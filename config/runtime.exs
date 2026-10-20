@@ -168,3 +168,99 @@ else
          redis_url: System.get_env("REDIS_URL") || "redis://localhost:6379"
        ]}
 end
+
+# ## Dynamic Multi-Node Libcluster Topologies
+# Configures the clustering strategy dynamically from environment variables:
+# - "epmd" / "nodes" / "static": for multi-region VPS, fixed IPs, or WireGuard/Tailscale VPN mesh
+# - "dns": for Docker Compose, Kubernetes, Fly.io, or AWS ECS headless services
+# - "kubernetes": for native Kubernetes API pod discovery
+# - "gossip": for local LAN / bare-metal hardware clusters (default in dev)
+# - "none" / "disabled": disable clustering
+if config_env() != :test do
+  cluster_strategy =
+    System.get_env("CLUSTER_STRATEGY") || if config_env() == :prod, do: "dns", else: "gossip"
+
+  topologies =
+    case String.downcase(cluster_strategy) do
+      "dns" ->
+        dns_query =
+          System.get_env("CLUSTER_DNS_QUERY") || System.get_env("DNS_CLUSTER_QUERY") ||
+            "kollective.internal"
+
+        node_basename = System.get_env("CLUSTER_NODE_BASENAME") || "kollective"
+        poll_interval = String.to_integer(System.get_env("CLUSTER_POLL_INTERVAL") || "5000")
+
+        [
+          kollective_mesh: [
+            strategy: Cluster.Strategy.DNSPoll,
+            config: [
+              polling_interval: poll_interval,
+              query: dns_query,
+              node_basename: node_basename
+            ]
+          ]
+        ]
+
+      strategy when strategy in ["epmd", "nodes", "static"] ->
+        raw_hosts = System.get_env("CLUSTER_NODES") || ""
+
+        hosts =
+          raw_hosts
+          |> String.split(",")
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+          |> Enum.map(&String.to_atom/1)
+
+        [
+          kollective_mesh: [
+            strategy: Cluster.Strategy.Epmd,
+            config: [hosts: hosts]
+          ]
+        ]
+
+      "kubernetes" ->
+        [
+          kollective_mesh: [
+            strategy: Cluster.Strategy.Kubernetes,
+            config: [
+              mode: :dns,
+              kubernetes_node_basename: System.get_env("CLUSTER_NODE_BASENAME") || "kollective",
+              kubernetes_selector: System.get_env("CLUSTER_K8S_SELECTOR") || "app=kollective"
+            ]
+          ]
+        ]
+
+      strategy when strategy in ["none", "disabled"] ->
+        []
+
+      _gossip ->
+        port = String.to_integer(System.get_env("CLUSTER_PORT") || "45892")
+        secret = System.get_env("CLUSTER_SECRET") || "kollective_secure_mesh_handshake_salt_2026"
+
+        multicast_addr =
+          case System.get_env("CLUSTER_MULTICAST_ADDR") do
+            nil ->
+              {230, 1, 1, 251}
+
+            addr_str ->
+              case :inet.parse_address(String.to_charlist(addr_str)) do
+                {:ok, ip} -> ip
+                _ -> {230, 1, 1, 251}
+              end
+          end
+
+        [
+          kollective_mesh: [
+            strategy: Cluster.Strategy.Gossip,
+            config: [
+              port: port,
+              if_addr: {0, 0, 0, 0},
+              multicast_addr: multicast_addr,
+              secret: secret
+            ]
+          ]
+        ]
+    end
+
+  config :libcluster, topologies: topologies
+end

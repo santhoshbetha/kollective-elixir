@@ -41,7 +41,7 @@ defmodule KollectiveWeb.Admin.StaffController do
     case Accounts.update_staff_role(username, :moderator, admin.id) do
       {:ok, user} ->
         # 🚀 REAL-TIME AUDIT INTEGRATION:
-        # Logs the promotion to the database and streams it over WebSockets instantly [INDEX].
+        # Logs the promotion to the database and streams it over WebSockets instantly.
         AuditLogs.create_audit_log(%{
           action: "PROMOTE_TO_MODERATOR",
           target_type: "User",

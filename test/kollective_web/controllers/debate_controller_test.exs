@@ -8,11 +8,18 @@ defmodule KollectiveWeb.DebateControllerTest do
   setup %{conn: conn} do
     u = fn attrs ->
       id = System.unique_integer([:positive])
-      insert(:user, Map.merge(%{
-        email: "debate_#{id}@test.com",
-        username: "debater_#{id}",
-        identity_hash: "hash_#{id}"
-      }, Map.new(attrs)))
+
+      insert(
+        :user,
+        Map.merge(
+          %{
+            email: "debate_#{id}@test.com",
+            username: "debater_#{id}",
+            identity_hash: "hash_#{id}"
+          },
+          Map.new(attrs)
+        )
+      )
     end
 
     user1 = u.([])

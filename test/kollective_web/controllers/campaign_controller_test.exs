@@ -32,7 +32,13 @@ defmodule KollectiveWeb.CampaignControllerTest do
         }
         |> Repo.insert!()
 
-      conn = get(conn, ~p"/api/v1/campaigns/pitches", %{"level" => "municipal", "code" => "austin_tx", "stage" => "public"})
+      conn =
+        get(conn, ~p"/api/v1/campaigns/pitches", %{
+          "level" => "municipal",
+          "code" => "austin_tx",
+          "stage" => "public"
+        })
+
       assert json = json_response(conn, 200)
       assert is_list(json)
       ids = Enum.map(json, & &1["id"])

@@ -9,7 +9,7 @@ defmodule Kollective.Moderation.RateLimiterPlug do
     cache_key = "throttle:msg:#{user_id}"
     now_unix = DateTime.utc_now() |> DateTime.to_unix()
 
-    # We read/write directly from local high-speed Cachex memory tables [INDEX]
+    # We read/write directly from local high-speed Cachex memory tables
     # Ensure {:cachex, "~> 3.6"} is active inside your mix.exs dependencies
     case Cachex.get(:kollective_runtime_cache, cache_key) do
       {:ok, nil} ->

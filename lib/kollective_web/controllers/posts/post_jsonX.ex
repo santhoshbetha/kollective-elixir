@@ -56,7 +56,7 @@ defmodule KollectiveWeb.PostXJSON do
 
   defp render_item(item) do
     post = (is_map(item) && Map.get(item, :post)) || item
-    # Dynamically interpolate your base canonical domain path with the row's ULID key [INDEX]
+    # Dynamically interpolate your base canonical domain path with the row's ULID key
     base_domain = KollectiveWeb.Endpoint.url()
     computed_permalink = "#{base_domain}/posts/#{to_string(post.id)}"
 

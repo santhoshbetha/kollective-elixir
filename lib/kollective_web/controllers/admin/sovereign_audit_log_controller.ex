@@ -6,13 +6,17 @@ defmodule KollectiveWeb.Admin.SovereignAuditLogController do
 
   @doc """
   GET /api/v1/admin/audit_logs
-  Pulls the recent cryptographic operational trail logged by sovereign administrators [INDEX].
+  Pulls the recent cryptographic operational trail logged by sovereign administrators.
   """
   def index(conn, params) do
     limit =
       case params["limit"] do
-        nil -> 30
-        l when is_integer(l) -> l
+        nil ->
+          30
+
+        l when is_integer(l) ->
+          l
+
         l when is_binary(l) ->
           case Integer.parse(l) do
             {int, _} -> int
@@ -30,7 +34,8 @@ defmodule KollectiveWeb.Admin.SovereignAuditLogController do
           actor_username: coalesce(u.username, "system"),
           action: log.action,
           target_identifier: coalesce(log.target_id, ""),
-          node_name: fragment("COALESCE(?->>'node_name', ?)", log.metadata, ^Atom.to_string(Node.self())),
+          node_name:
+            fragment("COALESCE(?->>'node_name', ?)", log.metadata, ^Atom.to_string(Node.self())),
           inserted_at: log.inserted_at
         },
         order_by: [desc: log.inserted_at]

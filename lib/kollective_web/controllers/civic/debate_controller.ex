@@ -29,7 +29,9 @@ defmodule KollectiveWeb.DebateController do
   POST /api/v1/campaigns/debates/shifts/:id/claim
   """
   def claim_shift(conn, %{"id" => shift_id}) do
-    user_id = conn.assigns[:current_user_id] || (conn.assigns[:current_user] && conn.assigns[:current_user].id)
+    user_id =
+      conn.assigns[:current_user_id] ||
+        (conn.assigns[:current_user] && conn.assigns[:current_user].id)
 
     # Fetch the exact shift inside a database lock boundary to safeguard seat limits
     Repo.transaction(fn ->

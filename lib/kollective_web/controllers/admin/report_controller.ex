@@ -7,7 +7,7 @@ defmodule KollectiveWeb.Admin.ReportController do
 
   @doc """
   GET /api/v1/admin/reports?status=open&limit=30
-  Fetches compliance tickets with look-ahead cursor support in one database pass [INDEX].
+  Fetches compliance tickets with look-ahead cursor support in one database pass.
   """
   def index(conn, params) do
     status = Map.get(params, "status", "open")
@@ -28,7 +28,7 @@ defmodule KollectiveWeb.Admin.ReportController do
             comment: r.comment || "",
             inserted_at: Calendar.strftime(r.inserted_at, "%Y-%m-%dT%H:%M:%SZ"),
 
-            # Safeguards against broken field lookups if relations are empty [INDEX]
+            # Safeguards against broken field lookups if relations are empty
             reporter: if(r.reporter, do: r.reporter.username, else: "anonymous"),
             target_account: if(r.target_user, do: r.target_user.username, else: "unknown"),
             target_id: to_string(r.target_id),
@@ -76,14 +76,14 @@ defmodule KollectiveWeb.Admin.ReportController do
   @doc """
   POST /api/v1/admin/reports/:id/resolve
   🚀 PARAMETER REMAPPER INTERCEPTOR: Translates incoming frontend string actions
-  into explicit moderation engine states, executing the underlying transactions safely [INDEX].
+  into explicit moderation engine states, executing the underlying transactions safely.
   """
   def resolve(conn, %{"id" => id, "action" => frontend_action} = params) do
     admin = conn.assigns.current_user || conn.assigns[:user]
     report = Moderation.get_report!(id)
     notes = Map.get(params, "notes", "Processed via Operations Desk UI Dashboard.")
 
-    # Convert frontend actions to your backend context options [INDEX]
+    # Convert frontend actions to your backend context options
     {status, delete_content, audit_action} =
       case frontend_action do
         "soft_delete" ->
@@ -105,11 +105,11 @@ defmodule KollectiveWeb.Admin.ReportController do
 
     case Moderation.resolve_report(report, status, delete_content) do
       {:ok, _changes} ->
-        # 1. Backwards compatibility: file your legacy system log entry [INDEX]
+        # 1. Backwards compatibility: file your legacy system log entry
         insert_compliance_log(admin.id, "report_resolved_#{status}", report.id)
 
         # 2. 🚀 NEW CENTRALIZED GOVERNANCE SYSTEM LEDGER LOG:
-        # Pushes updates directly to your real-time root dashboard screens [INDEX]!
+        # Pushes updates directly to your real-time root dashboard screens!
         AuditLogs.create_audit_log(%{
           action: audit_action,
           target_type: report.target_type || "Report",

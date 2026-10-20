@@ -12,7 +12,7 @@ defmodule KollectiveWeb.Presence do
   @doc """
   Metadata Fetch Enhancer Interceptor.
   Automatically intercepts raw socket IDs tracked in memory and preloads
-  rich user records (usernames, avatars) in a single database pass [INDEX].
+  rich user records (usernames, avatars) in a single database pass.
   """
   def fetch(_topic, presences) do
     # 1. Extract all active user IDs from the map keys

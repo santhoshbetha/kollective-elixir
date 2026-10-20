@@ -62,7 +62,10 @@ defmodule KollectiveWeb.Admin.LogControllerTest do
     end
 
     test "filters logs by action", %{conn: conn, log1: log1, log2: log2} do
-      conn = get(conn, ~p"/api/v1/admin/governance_logs", %{"filters" => %{"action" => "event_cancelled"}})
+      conn =
+        get(conn, ~p"/api/v1/admin/governance_logs", %{
+          "filters" => %{"action" => "event_cancelled"}
+        })
 
       assert %{"status" => "success", "data" => data} = json_response(conn, 200)
       assert is_list(data)

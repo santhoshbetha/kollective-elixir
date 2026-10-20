@@ -6,6 +6,8 @@ defmodule KollectiveWeb.Admin.SovereignOperatorController do
   alias Kollective.Repo
   alias Kollective.Moderation.SovereignOperator
 
+  plug(:require_sovereign_admin when action in [:create, :delete, :provision_config])
+
   @doc """
   GET /api/v1/admin/sovereign_operators
   Reads from distributed Mnesia clusters memory, falling back cleanly to Ecto SQL if the mesh is partitioned.
@@ -53,7 +55,12 @@ defmodule KollectiveWeb.Admin.SovereignOperatorController do
   """
   def create(conn, %{"operator" => %{"username" => username, "role" => role}}) do
     current_user = conn.assigns[:current_user] || conn.assigns[:user]
-    granted_by = if current_user && Map.get(current_user, :username), do: current_user.username, else: "system"
+
+    granted_by =
+      if current_user && Map.get(current_user, :username),
+        do: current_user.username,
+        else: "system"
+
     clean_username = String.trim(username) |> String.downcase()
     now_iso = DateTime.utc_now() |> DateTime.to_iso8601()
 
@@ -128,6 +135,113 @@ defmodule KollectiveWeb.Admin.SovereignOperatorController do
           status: "success",
           message: "Clearance signatures fully purged out of all active hardware registers."
         })
+    end
+  end
+
+  @doc """
+  GET /api/v1/admin/sovereign_operators/:id/provision_config
+  Generates a ready-to-run cluster environment profile and .env template for
+  authorizing and booting up a new physical server node in the decentralized mesh.
+  """
+  def provision_config(conn, %{"id" => username}) do
+    clean_username = String.trim(username) |> String.downcase()
+
+    is_operator? =
+      case :mnesia.dirty_read(:node_sovereign_operators, clean_username) do
+        [record] ->
+          {:ok, Enum.at(Tuple.to_list(record), 2)}
+
+        _ ->
+          case Repo.get(SovereignOperator, clean_username) do
+            %SovereignOperator{role: role} -> {:ok, role}
+            nil -> {:error, :not_found}
+          end
+      end
+
+    case is_operator? do
+      {:ok, role} ->
+        cluster_secret =
+          System.get_env("CLUSTER_SECRET") || "kollective_secure_mesh_handshake_salt_2026"
+
+        cluster_strategy = System.get_env("CLUSTER_STRATEGY") || "epmd"
+        local_node_str = Atom.to_string(Node.self())
+        suggested_node_name = "kollective_#{clean_username}@<SERVER_IP>"
+
+        env_template = """
+        # =========================================================================
+        # 🛡️ KOLLECTIVE SOVEREIGN OPERATOR MESH NODE CONFIGURATION
+        # Operator: @#{clean_username} (Role: #{role})
+        # Generated on: #{DateTime.utc_now() |> DateTime.to_iso8601()}
+        # =========================================================================
+
+        # 1. Sovereign Node Operator Whitelist (Grants full clearance to operator on this machine)
+        NODE_SOVEREIGN_OWNER_USERNAMES=#{clean_username}
+
+        # 2. Cluster Distributed Erlang Mesh
+        CLUSTER_STRATEGY=#{cluster_strategy}
+        CLUSTER_SECRET=#{cluster_secret}
+        CLUSTER_NODES=#{local_node_str}
+
+        # 3. Server Networking
+        PORT=4000
+        PHX_SERVER=true
+        RELEASE_NODE=#{suggested_node_name}
+        """
+
+        json(conn, %{
+          data: %{
+            username: clean_username,
+            role: role,
+            cluster_secret: cluster_secret,
+            cluster_strategy: cluster_strategy,
+            primary_peer_node: local_node_str,
+            suggested_node_name: suggested_node_name,
+            env_template: String.trim(env_template),
+            launch_command:
+              "elixir --name #{suggested_node_name} --cookie #{cluster_secret} -S mix phx.server"
+          }
+        })
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{
+          error:
+            "Operator @#{clean_username} is not registered in the sovereign registry. Authorize operator first."
+        })
+    end
+  end
+
+  defp require_sovereign_admin(conn, _opts) do
+    user = conn.assigns[:current_user] || conn.assigns[:user]
+    node_owners = System.get_env("NODE_SOVEREIGN_OWNER_USERNAMES") || ""
+    allowed_owners = String.split(node_owners, ",", trim: true)
+
+    is_node_owner? = user && user.username in allowed_owners
+
+    is_mnesia_admin? =
+      if user do
+        try do
+          case :mnesia.dirty_read(:node_sovereign_operators, user.username) do
+            [record] -> Enum.at(Tuple.to_list(record), 2) in ["admin", "root"]
+            _ -> false
+          end
+        rescue
+          _ -> false
+        end
+      else
+        false
+      end
+
+    if user &&
+         (user.is_admin || Map.get(user, :badge_type) in ["admin", "root"] || is_node_owner? ||
+            is_mnesia_admin?) do
+      conn
+    else
+      conn
+      |> put_status(:forbidden)
+      |> json(%{error: "Sovereign Admin clearance required for operator registry mutations."})
+      |> halt()
     end
   end
 end

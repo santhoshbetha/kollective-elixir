@@ -24,7 +24,10 @@ defmodule KollectiveWeb.Admin.MeshGroupChatControllerTest do
   end
 
   describe "MeshGroupChatController create" do
-    test "creates chat group in Postgres and registers in Mnesia mesh table", %{conn: conn, user: user} do
+    test "creates chat group in Postgres and registers in Mnesia mesh table", %{
+      conn: conn,
+      user: user
+    } do
       invitee_a = insert(:user)
       invitee_b = insert(:user)
 
@@ -58,7 +61,10 @@ defmodule KollectiveWeb.Admin.MeshGroupChatControllerTest do
               "Coordination group for mesh operators", "cause", _inserted_at} = record
     end
 
-    test "creates chat group with direct parameters without nested group wrapper", %{conn: conn, user: user} do
+    test "creates chat group with direct parameters without nested group wrapper", %{
+      conn: conn,
+      user: user
+    } do
       payload = %{
         "title" => "Direct Topic",
         "description" => "Direct description"

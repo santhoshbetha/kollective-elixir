@@ -4,14 +4,14 @@ defmodule KollectiveWeb.Admin.NodeTopologyController do
 
   @doc """
   GET /api/v1/admin/mesh/topology
-  Compiles real-time server cluster metrics directly out of the Erlang runtime engine [INDEX].
+  Compiles real-time server cluster metrics directly out of the Erlang runtime engine.
   """
   def index(conn, _params) do
-    # 1️⃣ Fetch current local server information [INDEX]
+    # 1️⃣ Fetch current local server information
     local_node_name = Atom.to_string(Node.self())
 
-    # 2️⃣ Scan all active interconnected cluster peer nodes [INDEX]
-    # Returns an array of active Erlang node atoms [INDEX]
+    # 2️⃣ Scan all active interconnected cluster peer nodes
+    # Returns an array of active Erlang node atoms
     remote_nodes = Node.list()
 
     # Map the remote node profiles array into clean JSON serialization blocks

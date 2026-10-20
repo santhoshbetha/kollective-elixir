@@ -216,6 +216,7 @@ defmodule KollectiveWeb.Router do
     post("/invitations/:id/decline", InvitationController, :decline)
 
     get("/profiles", ProfileController, :index_profiles)
+    get("/chat_groups/:conversation_id/members", Admin.MeshGroupInviteController, :index)
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -225,6 +226,10 @@ defmodule KollectiveWeb.Router do
     get("/invitations", InvitationController, :index)
     post("/invitations/:id/accept", InvitationController, :accept)
     post("/invitations/:id/decline", InvitationController, :decline)
+
+    # Mesh Group Chat Members & Public Keys Roster Matrix
+    get("/chat_groups/:conversation_id/members", Admin.MeshGroupInviteController, :index)
+    post("/chat_groups/:conversation_id/invite", Admin.MeshGroupInviteController, :create)
   end
 
   # =========================================================================
@@ -325,6 +330,13 @@ defmodule KollectiveWeb.Router do
 
     get("/sovereign_operators", SovereignOperatorController, :index)
     post("/sovereign_operators", SovereignOperatorController, :create)
+
+    get(
+      "/sovereign_operators/:id/provision_config",
+      SovereignOperatorController,
+      :provision_config
+    )
+
     delete("/sovereign_operators/:id", SovereignOperatorController, :delete)
   end
 
@@ -414,8 +426,6 @@ defmodule KollectiveWeb.Router do
     get("/incidents", ScholarIncidentController, :index)
     post("/incidents/users/:user_id/restore", ScholarController, :restore_scholar)
   end
-
-
 
   scope "/api/v1/admin/root", KollectiveWeb.Admin do
     # Substitute with your exact auth pipes
@@ -767,9 +777,6 @@ defmodule KollectiveWeb.Router do
 
     # 📁 Message History: Pull older historical texts for a specific conversation thread
     get("/conversations/:conversation_id/messages", MessageController, :index)
-
-    # ✉️ Create Message: Your existing endpoint route
-    post("/conversations/:conversation_id/messages", MessageController, :create)
   end
 
   # STORAGE CONTROLLER for Chat media attachments

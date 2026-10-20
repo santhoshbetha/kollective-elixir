@@ -20,14 +20,18 @@ defmodule Kollective.Repo.Migrations.CreateApplicationJuries do
       add :id, :binary_id, primary_key: true
       add :vote, :string, default: "unvoted", null: false
       add :voted_at, :naive_datetime
-      add :application_id, references(:red_badge_applications, type: :binary_id, on_delete: :delete_all), null: false
+
+      add :application_id,
+          references(:red_badge_applications, type: :binary_id, on_delete: :delete_all),
+          null: false
+
       add :juror_id, references(:users, type: :binary_id, on_delete: :delete_all), null: false
 
       timestamps()
     end
 
     create unique_index(:application_juries, [:application_id, :juror_id],
-      name: :application_juries_application_id_juror_id_index
-    )
+             name: :application_juries_application_id_juror_id_index
+           )
   end
 end

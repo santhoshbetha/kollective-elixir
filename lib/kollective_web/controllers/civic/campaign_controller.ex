@@ -16,7 +16,10 @@ defmodule KollectiveWeb.CampaignController do
   """
   def declare_pitch(conn, %{"candidate" => pitch_params, "video" => video_plug}) do
     # 1. Extract the current user session context token signatures
-    user_id = conn.assigns[:current_user_id] || (conn.assigns[:current_user] && conn.assigns[:current_user].id)
+    user_id =
+      conn.assigns[:current_user_id] ||
+        (conn.assigns[:current_user] && conn.assigns[:current_user].id)
+
     user = Repo.get!(User, user_id)
 
     # 2. Strict Ingress Guard: Verify this profile is authorized to register as a candidate

@@ -3,27 +3,31 @@ defmodule KollectiveWeb.AdminChannel do
   alias Kollective.Accounts.AuditLogs
   alias KollectiveWeb.Presence
 
+  intercept(["new_global_log"])
+
   @doc """
   High-security entry gate for app-wide administrators and platform moderators.
-  Handles decentralized multi-node geofencing routing via Erlang Process Groups [INDEX].
+  Handles decentralized multi-node geofencing routing via Erlang Process Groups.
   """
   def join("admin_notifications:global", _payload, socket) do
-    # GUEST PROTECTION SHIELD: Enforce strict role permissions checks [INDEX]
+    # GUEST PROTECTION SHIELD: Enforce strict role permissions checks
     user = socket.assigns[:user] || socket.assigns[:current_user]
 
     if socket.assigns[:is_authenticated] && user &&
          user.badge_type in ["admin", "root", "moderator", "staff"] do
-      # 🚀 1. GEOGRAPHIC PROCESS REGISTRATION MATRIX [INDEX]
+      # 🚀 1. GEOGRAPHIC PROCESS REGISTRATION MATRIX
       # Dynamically maps this live socket process into the correct distributed cluster lane
       cond do
         user.badge_type in ["admin", "root"] or
             Map.get(user.metadata || %{}, "global_mod") == true ->
-          # Global staff monitor and catch alerts across all international boundaries [INDEX]
+          # Global staff monitor and catch alerts across all international boundaries
           :ok = :pg.join(Kollective.PubSub, :mods_global, self())
 
-        user.country_code ->
-          # Regional moderators link cleanly to localized country pools (e.g. :mods_zone_IN) [INDEX]
-          region_topic = String.to_atom("mods_zone_#{String.upcase(user.country_code)}")
+        is_binary(user.country_code) and
+            Regex.match?(~r/^[A-Za-z]{2,3}$/, String.trim(user.country_code)) ->
+          # Regional moderators link cleanly to localized country pools (e.g. :mods_zone_IN)
+          clean_cc = user.country_code |> String.trim() |> String.upcase()
+          region_topic = String.to_atom("mods_zone_#{clean_cc}")
           :ok = :pg.join(Kollective.PubSub, region_topic, self())
 
         true ->
@@ -35,8 +39,8 @@ defmodule KollectiveWeb.AdminChannel do
       # This handles tracking multi-node connections seamlessly.
       send(self(), :after_join_presence_sync)
 
-      # ⚡ 2. HISTORICAL SIDEBAR HYDRATION [INDEX]
-      # Send down the immediate history timeline array to hydrate dashboards instantly [INDEX]
+      # ⚡ 2. HISTORICAL SIDEBAR HYDRATION
+      # Send down the immediate history timeline array to hydrate dashboards instantly
       initial_history = AuditLogs.list_global_audit_logs(%{limit: 30})
 
       {:ok, %{history: initial_history}, socket}
@@ -66,7 +70,7 @@ defmodule KollectiveWeb.AdminChannel do
     {:noreply, socket}
   end
 
-  # Stream the global system action alerts across the websocket frame instantly [INDEX]
+  # Stream the global system action alerts across the websocket frame instantly
   def handle_out("new_global_log", payload, socket) do
     push(socket, "new_global_log", payload)
     {:noreply, socket}

@@ -49,7 +49,9 @@ defmodule Kollective.Database.MnesiaQueueEngineTest do
       assert is_binary(ticket.inserted_at)
 
       # Verify the record in Mnesia is now leased
-      {:atomic, [record]} = :mnesia.transaction(fn -> :mnesia.read(:scholar_incidents, incident_id) end)
+      {:atomic, [record]} =
+        :mnesia.transaction(fn -> :mnesia.read(:scholar_incidents, incident_id) end)
+
       list = Tuple.to_list(record)
       assert Enum.at(list, 7) == to_string(moderator.id)
       assert is_integer(Enum.at(list, 8))
@@ -60,6 +62,7 @@ defmodule Kollective.Database.MnesiaQueueEngineTest do
       now = System.system_time(:second)
       older_id = Ecto.ULID.generate()
       newer_id = Ecto.ULID.generate()
+      other_mod_id = Ecto.ULID.generate()
 
       :mnesia.transaction(fn ->
         :mnesia.write({
@@ -87,13 +90,70 @@ defmodule Kollective.Database.MnesiaQueueEngineTest do
         })
       end)
 
-      # Should lease the older incident first
+      # Moderator 1 should lease the older incident first
       assert {:ok, ticket1} = MnesiaQueueEngine.lease_next_incident(moderator.id, "US", false)
       assert ticket1.id == older_id
 
-      # Next lease should get the newer incident
-      assert {:ok, ticket2} = MnesiaQueueEngine.lease_next_incident(moderator.id, "US", false)
+      # Moderator 2 should get the newer incident
+      assert {:ok, ticket2} = MnesiaQueueEngine.lease_next_incident(other_mod_id, "US", false)
       assert ticket2.id == newer_id
+    end
+
+    test "enforces active-lease check returning current ticket to prevent hoarding", %{
+      moderator: moderator
+    } do
+      now = System.system_time(:second)
+      id1 = Ecto.ULID.generate()
+      id2 = Ecto.ULID.generate()
+
+      :mnesia.transaction(fn ->
+        :mnesia.write({
+          :scholar_incidents,
+          id1,
+          "pending",
+          "US",
+          "user_1",
+          "Infraction 1",
+          now - 100,
+          nil,
+          nil
+        })
+
+        :mnesia.write({
+          :scholar_incidents,
+          id2,
+          "pending",
+          "US",
+          "user_2",
+          "Infraction 2",
+          now - 50,
+          nil,
+          nil
+        })
+      end)
+
+      # First call leases ticket 1
+      assert {:ok, ticket1} = MnesiaQueueEngine.lease_next_incident(moderator.id, "US", false)
+      assert ticket1.id == id1
+
+      # Second call by SAME moderator returns their existing active ticket 1 (cannot hoard ticket 2)
+      assert {:ok, ticket_active} =
+               MnesiaQueueEngine.lease_next_incident(moderator.id, "US", false)
+
+      assert ticket_active.id == id1
+
+      # has_active_lease?/1 returns boolean and get_active_lease/1 returns the active record
+      assert MnesiaQueueEngine.has_active_lease?(moderator.id) == true
+      assert {:ok, active_record} = MnesiaQueueEngine.get_active_lease(moderator.id)
+      assert active_record.id == id1
+      assert active_record.leased_by_id == to_string(moderator.id)
+      assert is_integer(active_record.leased_until)
+
+      # Another moderator can lease ticket 2
+      other_mod = Ecto.ULID.generate()
+      assert MnesiaQueueEngine.has_active_lease?(other_mod) == false
+      assert {:ok, ticket2} = MnesiaQueueEngine.lease_next_incident(other_mod, "US", false)
+      assert ticket2.id == id2
     end
 
     test "respects geofencing routing", %{moderator: moderator} do
@@ -116,7 +176,8 @@ defmodule Kollective.Database.MnesiaQueueEngineTest do
       end)
 
       # US moderator without global clearance cannot lease Indian ticket
-      assert {:error, :empty_queue} = MnesiaQueueEngine.lease_next_incident(moderator.id, "US", false)
+      assert {:error, :empty_queue} =
+               MnesiaQueueEngine.lease_next_incident(moderator.id, "US", false)
 
       # Global moderator CAN lease Indian ticket
       assert {:ok, ticket} = MnesiaQueueEngine.lease_next_incident(moderator.id, "US", true)
@@ -124,10 +185,11 @@ defmodule Kollective.Database.MnesiaQueueEngineTest do
     end
 
     test "returns {:error, :empty_queue} when no pending tickets exist", %{moderator: moderator} do
-      assert {:error, :empty_queue} = MnesiaQueueEngine.lease_next_incident(moderator.id, "US", false)
+      assert {:error, :empty_queue} =
+               MnesiaQueueEngine.lease_next_incident(moderator.id, "US", false)
     end
 
-    test "prevents double leasing under concurrent requests", %{moderator: moderator} do
+    test "prevents double leasing under concurrent requests", %{moderator: _moderator} do
       now = System.system_time(:second)
       incident_id = Ecto.ULID.generate()
 
@@ -145,11 +207,11 @@ defmodule Kollective.Database.MnesiaQueueEngineTest do
         })
       end)
 
-      # Run 20 concurrent lease attempts
+      # Run 20 concurrent lease attempts from 20 distinct moderators
       tasks =
-        Enum.map(1..20, fn _ ->
+        Enum.map(1..20, fn idx ->
           Task.async(fn ->
-            MnesiaQueueEngine.lease_next_incident(moderator.id, "US", true)
+            MnesiaQueueEngine.lease_next_incident("concurrent_mod_#{idx}", "US", true)
           end)
         end)
 

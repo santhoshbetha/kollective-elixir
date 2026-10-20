@@ -8,11 +8,18 @@ defmodule KollectiveWeb.DeadlineControllerTest do
   setup %{conn: conn} do
     u = fn attrs ->
       id = System.unique_integer([:positive])
-      insert(:user, Map.merge(%{
-        email: "deadline_#{id}@test.com",
-        username: "deadline_#{id}",
-        identity_hash: "hash_#{id}"
-      }, Map.new(attrs)))
+
+      insert(
+        :user,
+        Map.merge(
+          %{
+            email: "deadline_#{id}@test.com",
+            username: "deadline_#{id}",
+            identity_hash: "hash_#{id}"
+          },
+          Map.new(attrs)
+        )
+      )
     end
 
     admin_user = u.(role: :admin, is_admin: true)
@@ -63,7 +70,12 @@ defmodule KollectiveWeb.DeadlineControllerTest do
   end
 
   describe "GET /api/v1/campaigns/deadlines" do
-    test "lists deadlines filtered by district code", %{conn: conn, admin_user: admin_user, unique_state: state, deadline1: d1} do
+    test "lists deadlines filtered by district code", %{
+      conn: conn,
+      admin_user: admin_user,
+      unique_state: state,
+      deadline1: d1
+    } do
       conn =
         conn
         |> assign(:current_user, admin_user)
@@ -80,7 +92,11 @@ defmodule KollectiveWeb.DeadlineControllerTest do
       assert hd(response)["district_code"] == "austin_tx"
     end
 
-    test "lists all deadlines for state and level when code is 'all'", %{conn: conn, admin_user: admin_user, unique_state: state} do
+    test "lists all deadlines for state and level when code is 'all'", %{
+      conn: conn,
+      admin_user: admin_user,
+      unique_state: state
+    } do
       conn =
         conn
         |> assign(:current_user, admin_user)
@@ -167,7 +183,8 @@ defmodule KollectiveWeb.DeadlineControllerTest do
         |> assign(:user, regular_user)
         |> post(~p"/api/v1/campaigns/deadlines", params)
 
-      assert json_response(conn, 401)["error"] =~ "credentials lack authorized ledger writer status"
+      assert json_response(conn, 401)["error"] =~
+               "credentials lack authorized ledger writer status"
     end
   end
 end

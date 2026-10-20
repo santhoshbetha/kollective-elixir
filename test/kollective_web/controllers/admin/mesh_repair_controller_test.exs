@@ -7,7 +7,9 @@ defmodule KollectiveWeb.Admin.MeshRepairControllerTest do
     admin = insert(:user, is_admin: true, is_moderator: true, badge_type: "moderator")
 
     :mnesia.transaction(fn ->
-      :mnesia.write({:node_sovereign_operators, admin.username, "admin", "system", "2026-10-17T00:00:00Z"})
+      :mnesia.write(
+        {:node_sovereign_operators, admin.username, "admin", "system", "2026-10-17T00:00:00Z"}
+      )
     end)
 
     conn =
@@ -41,7 +43,9 @@ defmodule KollectiveWeb.Admin.MeshRepairControllerTest do
 
       conn = post(conn, ~p"/api/v1/admin/mesh/force_recovery", payload)
       assert response = json_response(conn, 403)
-      assert response["error"] =~ "Access Denied" or response["error"] =~ "Sovereign" or response["error"] =~ "Forbidden"
+
+      assert response["error"] =~ "Access Denied" or response["error"] =~ "Sovereign" or
+               response["error"] =~ "Forbidden"
     end
   end
 end

@@ -294,7 +294,10 @@ defmodule Kollective.Chats.Chats do
   and clearing any attached file metadata (file_url, keys, iv, file_name).
   Supports both a `%Message{}` struct and a message binary ID.
   """
-  def soft_delete_message(message_or_id, deleted_text \\ "🚫 This message was deleted by the sender.")
+  def soft_delete_message(
+        message_or_id,
+        deleted_text \\ "🚫 This message was deleted by the sender."
+      )
 
   def soft_delete_message(%Message{} = message, deleted_text) do
     message

@@ -40,7 +40,6 @@ defmodule KollectiveWeb.Plugs.SovereignAuth do
         false
       end
 
-
     # An operator has clearance if they are an admin/moderator,
     # OR if they are explicitly whitelisted by the physical node owner or Mnesia table.
     is_authorized? =

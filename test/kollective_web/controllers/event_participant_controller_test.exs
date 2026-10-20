@@ -8,11 +8,18 @@ defmodule KollectiveWeb.EventParticipantControllerTest do
   setup %{conn: conn} do
     u = fn attrs ->
       id = System.unique_integer([:positive])
-      insert(:user, Map.merge(%{
-        email: "evp_#{id}@test.com",
-        username: "evp_#{id}",
-        identity_hash: "hash_#{id}"
-      }, Map.new(attrs)))
+
+      insert(
+        :user,
+        Map.merge(
+          %{
+            email: "evp_#{id}@test.com",
+            username: "evp_#{id}",
+            identity_hash: "hash_#{id}"
+          },
+          Map.new(attrs)
+        )
+      )
     end
 
     organizer = u.([])

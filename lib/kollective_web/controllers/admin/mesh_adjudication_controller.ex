@@ -8,25 +8,25 @@ defmodule KollectiveWeb.Admin.MeshAdjudicationController do
 
   @doc """
   POST /api/v1/admin/moderation_appeals/:id/adjudicate
-  Processes an administrative court verdict, modifying Ecto disk arrays [INDEX]
-  and purging active transaction records from distributed Mnesia rings concurrently [INDEX].
+  Processes an administrative court verdict, modifying Ecto disk arrays
+  and purging active transaction records from distributed Mnesia rings concurrently.
   """
   def adjudicate(conn, %{"id" => appeal_id, "resolution" => resolution}) do
     operator = conn.assigns[:current_user] || conn.assigns[:user]
     status_target = if resolution == "approve", do: "approved", else: "rejected"
 
     Repo.transaction(fn ->
-      # 1️⃣ Fetch full historical contextual records out of SQL tables [INDEX]
+      # 1️⃣ Fetch full historical contextual records out of SQL tables
       case Repo.get(ModerationAppeal, appeal_id) do
         nil ->
           Repo.rollback(:appeal_not_found)
 
         appeal ->
-          # Update the global tracking status parameter of the appeal [INDEX]
+          # Update the global tracking status parameter of the appeal
           appeal_changeset = Ecto.Changeset.change(appeal, %{status: status_target})
           {:ok, updated_appeal} = Repo.update(appeal_changeset)
 
-          # 2️⃣ If the appeal is approved, restore the original content [INDEX]
+          # 2️⃣ If the appeal is approved, restore the original content
           if status_target == "approved" do
             case Repo.get(Incident, appeal.incident_id) do
               nil ->
@@ -40,8 +40,8 @@ defmodule KollectiveWeb.Admin.MeshAdjudicationController do
             end
           end
 
-          # 3️⃣ 🚀 PURGE REPLICATED TRANSACTION CHIPS FROM MNESIA CORES [INDEX]
-          # Removes the active ticket context frame across all libcluster server network interfaces [INDEX]
+          # 3️⃣ 🚀 PURGE REPLICATED TRANSACTION CHIPS FROM MNESIA CORES
+          # Removes the active ticket context frame across all libcluster server network interfaces
           _ =
             :mnesia.transaction(fn ->
               :mnesia.delete({:distributed_appeals, to_string(appeal_id)})
@@ -51,7 +51,7 @@ defmodule KollectiveWeb.Admin.MeshAdjudicationController do
           # 4️⃣ Out-of-band push notification dispatch rules
           dispatch_resolution_push(updated_appeal, status_target)
 
-          # 5️⃣ Log permanent operational footprint track to Audit registers [INDEX]
+          # 5️⃣ Log permanent operational footprint track to Audit registers
           # Kollective.Accounts.AuditLogs.log_action(%{
           #   actor_username: operator.username,
           #   action: "appeal_adjudication_#{status_target}",
@@ -87,7 +87,7 @@ defmodule KollectiveWeb.Admin.MeshAdjudicationController do
   end
 
   defp dispatch_resolution_push(appeal, status) do
-    # Trigger out-of-band notification relays [INDEX]
+    # Trigger out-of-band notification relays
     KollectiveWeb.Endpoint.broadcast(
       "user_notifications:#{appeal.user_id}",
       "appeal_resolved_event",

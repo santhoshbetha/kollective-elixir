@@ -100,8 +100,13 @@ defmodule KollectiveWeb.Admin.MeshIncidentControllerTest do
       assert json_response(conn_extend, 200)["status"] == "success"
 
       # 3. Resolve
-      conn_resolve = post(conn, ~p"/api/v1/admin/incidents/#{incident.id}/resolve", %{"action" => "dismiss"})
-      assert json_response(conn_resolve, 200) == %{"status" => "success", "final_status" => "resolved_restored"}
+      conn_resolve =
+        post(conn, ~p"/api/v1/admin/incidents/#{incident.id}/resolve", %{"action" => "dismiss"})
+
+      assert json_response(conn_resolve, 200) == %{
+               "status" => "success",
+               "final_status" => "resolved_restored"
+             }
     end
   end
 end

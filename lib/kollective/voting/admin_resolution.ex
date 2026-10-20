@@ -43,7 +43,9 @@ defmodule Kollective.Voting.AdminResolution do
         # Step B: Mark the internal platform compliance logging ticket as resolved
         |> Multi.update_all(
           :ticket_close,
-          from(i in Kollective.Moderation.ScholarIncident, where: i.user_id == ^user.id and i.status in ["open", "pending"]),
+          from(i in Kollective.Moderation.ScholarIncident,
+            where: i.user_id == ^user.id and i.status in ["open", "pending"]
+          ),
           set: [
             status: "resolved",
             resolved_by_id: admin_user_id,

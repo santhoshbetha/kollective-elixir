@@ -27,7 +27,10 @@ defmodule KollectiveWeb.Admin.MeshGroupInviteControllerTest do
   end
 
   describe "MeshGroupInviteController invite" do
-    test "adds user to active conversation and broadcasts event", %{conn: conn, conversation: conversation} do
+    test "adds user to active conversation and broadcasts event", %{
+      conn: conn,
+      conversation: conversation
+    } do
       invitee = insert(:user, username: "operator_dave", display_name: "Dave Operator")
 
       payload = %{
@@ -38,7 +41,9 @@ defmodule KollectiveWeb.Admin.MeshGroupInviteControllerTest do
       assert json_response(conn, 201)["status"] == "success"
 
       # Verify participant in DB
-      participant = Repo.get_by(Participant, user_id: invitee.id, conversation_id: conversation.id)
+      participant =
+        Repo.get_by(Participant, user_id: invitee.id, conversation_id: conversation.id)
+
       assert participant != nil
     end
 
@@ -52,7 +57,11 @@ defmodule KollectiveWeb.Admin.MeshGroupInviteControllerTest do
       assert response["error"] =~ "Citizen account mapping profile not found"
     end
 
-    test "returns 409 conflict when user is already participant", %{conn: conn, conversation: conversation, creator: creator} do
+    test "returns 409 conflict when user is already participant", %{
+      conn: conn,
+      conversation: conversation,
+      creator: creator
+    } do
       # Creator is already participant in setup
       payload = %{
         "username" => creator.username
@@ -65,7 +74,11 @@ defmodule KollectiveWeb.Admin.MeshGroupInviteControllerTest do
   end
 
   describe "MeshGroupInviteController index" do
-    test "lists participants with profile metadata", %{conn: conn, conversation: conversation, creator: creator} do
+    test "lists participants with profile metadata", %{
+      conn: conn,
+      conversation: conversation,
+      creator: creator
+    } do
       conn = get(conn, ~p"/api/v1/admin/chat_groups/#{conversation.id}/members")
       assert %{"data" => members} = json_response(conn, 200)
 

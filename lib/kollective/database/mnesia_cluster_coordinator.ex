@@ -12,18 +12,36 @@ defmodule Kollective.Database.MnesiaClusterCoordinator do
 
   @impl true
   def init(_opts) do
-    # 1️⃣ Ensure Mnesia is stopped locally so we can safely initialize schemas
-    :mnesia.stop()
-    :mnesia.create_schema([Node.self()])
-    :mnesia.start()
-
-    # 2️⃣ Initialize local database tables if they do not yet exist on disk
-    initialize_sovereign_tables()
-
-    # 3️⃣ Subscribe to internal node cluster changes emitted by libcluster
+    # 1️⃣ Subscribe to internal node cluster changes emitted by libcluster
     :net_kernel.monitor_nodes(true)
 
-    # Trigger a soft synchronization sync against any already active nodes
+    # 2️⃣ Detect active cluster peers already connected via Erlang distribution
+    active_peers = Node.list()
+
+    if active_peers != [] do
+      Logger.info(
+        "📡 [MNESIA CLUSTER]: Joining active cluster via peers: #{inspect(active_peers)}"
+      )
+
+      :mnesia.start()
+
+      case :mnesia.change_config(:extra_db_nodes, active_peers) do
+        {:ok, _} ->
+          _ = :mnesia.change_table_copy_type(:schema, Node.self(), :disc_copies)
+          copy_cluster_tables_to_local()
+
+        error ->
+          Logger.warning(
+            "⚠️ [MNESIA CLUSTER]: Failed to join peer schemas, initializing local: #{inspect(error)}"
+          )
+
+          initialize_local_schema_and_tables()
+      end
+    else
+      initialize_local_schema_and_tables()
+    end
+
+    # 3️⃣ Trigger a soft synchronization sync against any already active nodes
     send(self(), :sync_existing_cluster_nodes)
 
     {:ok, %{}}
@@ -38,7 +56,7 @@ defmodule Kollective.Database.MnesiaClusterCoordinator do
     # Connect the remote node to our Mnesia cluster context
     case :mnesia.change_config(:extra_db_nodes, [remote_node]) do
       {:ok, _} ->
-        # Force-copy your table structures directly onto the new node's disk/RAM layers
+        # Mirror table structures to the new node's disk/RAM layers
         replicate_tables_to_node(remote_node)
 
       error ->
@@ -63,11 +81,46 @@ defmodule Kollective.Database.MnesiaClusterCoordinator do
   def handle_info(:sync_existing_cluster_nodes, state) do
     # Mount any nodes libcluster has already connected via Erlang distribution
     Enum.each(Node.list(), fn active_node ->
-      :mnesia.change_config(:extra_db_nodes, [active_node])
-      replicate_tables_to_node(active_node)
+      case :mnesia.change_config(:extra_db_nodes, [active_node]) do
+        {:ok, _} ->
+          replicate_tables_to_node(active_node)
+
+        _ ->
+          :ok
+      end
     end)
 
     {:noreply, state}
+  end
+
+  defp initialize_local_schema_and_tables do
+    # Ensure local schema exists or create it safely
+    _ = :mnesia.stop()
+    _ = :mnesia.create_schema([Node.self()])
+    _ = :mnesia.start()
+    initialize_sovereign_tables()
+  end
+
+  defp copy_cluster_tables_to_local do
+    tables = [
+      :scholar_incidents,
+      :node_sovereign_operators,
+      :distributed_chat_groups,
+      :distributed_appeals
+    ]
+
+    Enum.each(tables, fn table ->
+      case :mnesia.add_table_copy(table, Node.self(), :disc_copies) do
+        {:atomic, :ok} ->
+          Logger.info("✅ [MNESIA SYNC]: Local node synced table copy for #{table}")
+
+        {:aborted, {:already_exists, _, _}} ->
+          :ok
+
+        err ->
+          Logger.warning("⚠️ [MNESIA SYNC]: Table copy for #{table} deferred: #{inspect(err)}")
+      end
+    end)
   end
 
   # --- Private Database Definition Engines ---
@@ -113,50 +166,28 @@ defmodule Kollective.Database.MnesiaClusterCoordinator do
   end
 
   defp replicate_tables_to_node(remote_node) do
-    # Remotely push an identical copy of local database structures over network lines
-    # disc_copies = Saves copies to remote disk; ram_copies = keeps it strictly in memory
-    case :mnesia.add_table_copy(:scholar_incidents, remote_node, :disc_copies) do
-      {:atomic, :ok} ->
-        Logger.info("✅ [MNESIA SYNC]: Incidents schema successfully mirrored to #{remote_node}")
+    _ = :mnesia.change_table_copy_type(:schema, remote_node, :disc_copies)
 
-      {:aborted, {:already_exists, _, _}} ->
-        :ok
+    tables = [
+      :scholar_incidents,
+      :node_sovereign_operators,
+      :distributed_chat_groups,
+      :distributed_appeals
+    ]
 
-      err ->
-        Logger.error("❌ [MNESIA SYNC ERROR]: Table copy failed: #{inspect(err)}")
-    end
+    Enum.each(tables, fn table ->
+      case :mnesia.add_table_copy(table, remote_node, :disc_copies) do
+        {:atomic, :ok} ->
+          Logger.info("✅ [MNESIA SYNC]: Table #{table} mirrored to #{remote_node}")
 
-    case :mnesia.add_table_copy(:node_sovereign_operators, remote_node, :disc_copies) do
-      {:atomic, :ok} ->
-        Logger.info("✅ [MNESIA SYNC]: Sovereignty registers mirrored to #{remote_node}")
+        {:aborted, {:already_exists, _, _}} ->
+          :ok
 
-      {:aborted, {:already_exists, _, _}} ->
-        :ok
-
-      _ ->
-        :ok
-    end
-
-    case :mnesia.add_table_copy(:distributed_chat_groups, remote_node, :disc_copies) do
-      {:atomic, :ok} ->
-        Logger.info("✅ [MNESIA SYNC]: Distributed chat groups mirrored to #{remote_node}")
-
-      {:aborted, {:already_exists, _, _}} ->
-        :ok
-
-      _ ->
-        :ok
-    end
-
-    case :mnesia.add_table_copy(:distributed_appeals, remote_node, :disc_copies) do
-      {:atomic, :ok} ->
-        Logger.info("✅ [MNESIA SYNC]: Distributed appeals mirrored to #{remote_node}")
-
-      {:aborted, {:already_exists, _, _}} ->
-        :ok
-
-      _ ->
-        :ok
-    end
+        err ->
+          Logger.warning(
+            "⚠️ [MNESIA SYNC]: Table #{table} replication to #{remote_node} notice: #{inspect(err)}"
+          )
+      end
+    end)
   end
 end

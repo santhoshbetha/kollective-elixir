@@ -17,7 +17,7 @@ defmodule KollectiveWeb.Admin.ObanTelemetryController do
       |> Repo.all()
       |> Map.new()
 
-    # 2️⃣ Fetch the 8 most recent failure incidents to help admins trace exceptions
+    # 2️⃣ Fetch recent failure incidents to help admins trace exceptions
     recent_errors =
       from(j in "oban_jobs",
         where: j.state in ["retryable", "discarded"],
@@ -27,10 +27,14 @@ defmodule KollectiveWeb.Admin.ObanTelemetryController do
           worker: j.worker,
           state: j.state,
           errors: j.errors,
-          attempted_at: j.attempted_at
+          args: j.args,
+          attempt: j.attempt,
+          max_attempts: j.max_attempts,
+          attempted_at: j.attempted_at,
+          inserted_at: j.inserted_at
         },
         order_by: [desc: j.attempted_at],
-        limit: 8
+        limit: 15
       )
       |> Repo.all()
 

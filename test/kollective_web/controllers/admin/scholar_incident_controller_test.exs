@@ -110,7 +110,12 @@ defmodule KollectiveWeb.Admin.ScholarIncidentControllerTest do
       now = System.system_time(:second)
 
       # Insert an incident schema into Postgres
-      {:ok, _user} = Repo.insert(%Kollective.Accounts.User{email: "target@kollective.org", username: "target_user"})
+      {:ok, _user} =
+        Repo.insert(%Kollective.Accounts.User{
+          email: "target@kollective.org",
+          username: "target_user"
+        })
+
       {:ok, incident} =
         %Kollective.Moderation.Incident{}
         |> Kollective.Moderation.Incident.changeset(%{
@@ -190,7 +195,6 @@ defmodule KollectiveWeb.Admin.ScholarIncidentControllerTest do
       assert %{"data" => nil, "status" => "empty_queue"} = json_response(conn, 200)
     end
   end
-
 
   describe "security clearance boundary" do
     test "denies access to non-moderator user", %{conn: conn} do

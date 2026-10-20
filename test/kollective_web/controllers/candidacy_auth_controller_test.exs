@@ -9,11 +9,18 @@ defmodule KollectiveWeb.CandidacyAuthControllerTest do
   setup %{conn: conn} do
     u = fn attrs ->
       id = System.unique_integer([:positive])
-      insert(:user, Map.merge(%{
-        email: "candidacy_#{id}@test.com",
-        username: "cand_#{id}",
-        identity_hash: "hash_#{id}"
-      }, Map.new(attrs)))
+
+      insert(
+        :user,
+        Map.merge(
+          %{
+            email: "candidacy_#{id}@test.com",
+            username: "cand_#{id}",
+            identity_hash: "hash_#{id}"
+          },
+          Map.new(attrs)
+        )
+      )
     end
 
     candidate = u.(state: "TX")
@@ -124,8 +131,15 @@ defmodule KollectiveWeb.CandidacyAuthControllerTest do
       voucher3: voucher3,
       app: app
     } do
-      conn |> assign(:current_user, voucher1) |> assign(:user, voucher1) |> post(~p"/api/v1/campaigns/apply/vouch", %{"application_id" => app.id})
-      conn |> assign(:current_user, voucher2) |> assign(:user, voucher2) |> post(~p"/api/v1/campaigns/apply/vouch", %{"application_id" => app.id})
+      conn
+      |> assign(:current_user, voucher1)
+      |> assign(:user, voucher1)
+      |> post(~p"/api/v1/campaigns/apply/vouch", %{"application_id" => app.id})
+
+      conn
+      |> assign(:current_user, voucher2)
+      |> assign(:user, voucher2)
+      |> post(~p"/api/v1/campaigns/apply/vouch", %{"application_id" => app.id})
 
       conn3 =
         conn

@@ -39,11 +39,15 @@ defmodule KollectiveWeb.DeadlineController do
   POST /api/v1/campaigns/deadlines
   """
   def create_deadline(conn, %{"deadline" => deadline_params}) do
-    user_id = conn.assigns[:current_user_id] || (conn.assigns[:current_user] && conn.assigns[:current_user].id)
+    user_id =
+      conn.assigns[:current_user_id] ||
+        (conn.assigns[:current_user] && conn.assigns[:current_user].id)
+
     user = Repo.get!(User, user_id)
 
     # 🛡️ Structural Role Constraint Check: Validate entry authority limits before writing to disk
-    if user.is_admin or user.role in [:admin, :moderator] or to_string(user.role) == "Vanguard" or user.is_verified_candidate do
+    if user.is_admin or user.role in [:admin, :moderator] or to_string(user.role) == "Vanguard" or
+         user.is_verified_candidate do
       full_attrs = Map.put(deadline_params, "logged_by_id", user_id)
 
       %ElectionDeadline{}
