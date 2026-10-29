@@ -4,6 +4,9 @@ defmodule KollectiveWeb.RelationshipController do
 
   alias Kollective.Accounts.{Accounts, Users, UserRelationship}
   alias Kollective.Repo
+  alias KollectiveWeb.Plugs.AuthorizeOrgSocialAction
+
+  plug AuthorizeOrgSocialAction when action in [:toggle]
 
   # ─── ACTION 1: LIST ACTIVE SYSTEM BLOCKS / MUTES (SETTINGS VIEWPORTS) ───
   # GET /api/v1/relationships
@@ -36,7 +39,13 @@ defmodule KollectiveWeb.RelationshipController do
   # Expected payload: %{"target_id" => "01J0A..." or "username", "type" => "follow" | "block" | "mute"}
   def toggle(conn, %{"target_id" => target_id, "type" => type})
       when type in ["follow", "block", "mute"] do
-    user = conn.assigns.current_user
+    actor =
+      if conn.assigns[:account_type] == :organization and conn.assigns[:current_organization] do
+        conn.assigns[:current_organization]
+      else
+        conn.assigns.current_user
+      end
+
     target_user = Accounts.get_user_profile(target_id)
     target_user_id = if target_user, do: target_user.id, else: target_id
 
@@ -47,14 +56,14 @@ defmodule KollectiveWeb.RelationshipController do
         |> put_status(:not_found)
         |> json(%{error: "User account not found."})
 
-      user.id == target_user.id ->
+      actor.id == target_user.id ->
         conn
         |> put_status(:unprocessable_entity)
         |> json(%{error: "Self-referencing actions are blocked."})
 
       true ->
         # Routes directly through your unified atomic Ecto.Multi context wrappers
-        case Users.toggle_relationship(user, target_user_id, type) do
+        case Users.toggle_relationship(actor, target_user_id, type) do
           {:ok, :created} ->
             json(conn, %{
               status: "success",

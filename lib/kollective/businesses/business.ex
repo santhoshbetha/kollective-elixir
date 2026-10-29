@@ -268,7 +268,16 @@ defmodule Kollective.Businesses.Business do
   Enforces category structures and embeds financing parameters securely inside JSONB.
   """
   def proposal_changeset(business, attrs) do
-    attrs = normalize_proposal_attrs(attrs)
+    attrs =
+      attrs
+      |> normalize_proposal_attrs()
+      |> then(fn map ->
+        cat = Map.get(map, "category") || business.category || "other"
+        sub = Map.get(map, "sub_category") || business.sub_category || default_subcategory_for(cat)
+        map
+        |> Map.put_new("category", cat)
+        |> Map.put_new("sub_category", sub)
+      end)
 
     business
     |> cast(attrs, [
@@ -286,6 +295,7 @@ defmodule Kollective.Businesses.Business do
       :district_l2,
       :district_l3,
       :city_id,
+      :profile_image_url,
       :metadata
     ])
     |> validate_required([:name, :description, :category, :sub_category, :user_id])
@@ -309,7 +319,17 @@ defmodule Kollective.Businesses.Business do
         extract_funding_data_from_attrs(attrs)
 
     current_metadata = get_field(changeset, :metadata) || %{}
-    updated_metadata = Map.merge(current_metadata, %{"funding_data" => funding_data})
+
+    img = attrs["profile_image_url"] || attrs[:profile_image_url] || attrs["image"] || attrs[:image]
+    tags = attrs["tags"] || attrs[:tags] || attrs["looking_for"] || attrs[:looking_for]
+
+    updated_metadata =
+      current_metadata
+      |> Map.put("funding_data", funding_data)
+      |> then(fn meta ->
+        meta = if img, do: Map.put(meta, "image", img) |> Map.put("profile_image_url", img), else: meta
+        if tags && is_list(tags), do: Map.put(meta, "tags", tags) |> Map.put("looking_for", tags), else: meta
+      end)
 
     put_change(changeset, :metadata, updated_metadata)
   end
@@ -379,11 +399,31 @@ defmodule Kollective.Businesses.Business do
     |> normalize_category()
     |> normalize_proposal_funding()
     |> normalize_proposal_location()
+    |> normalize_business_image()
+    |> normalize_proposal_metadata()
     |> normalize_sub_category()
     |> ensure_default_type("proposals")
   end
 
   def normalize_proposal_attrs(attrs), do: attrs
+
+  defp normalize_proposal_metadata(attrs) do
+    meta = attrs["metadata"] || attrs[:metadata] || %{}
+
+    img = attrs["profile_image_url"] || attrs[:profile_image_url] || attrs["image"] || attrs[:image]
+    meta = if img, do: Map.put(meta, "image", img) |> Map.put("profile_image_url", img), else: meta
+
+    tags = attrs["tags"] || attrs[:tags] || attrs["looking_for"] || attrs[:looking_for]
+    meta = if tags && is_list(tags), do: Map.put(meta, "tags", tags) |> Map.put("looking_for", tags), else: meta
+
+    owner = attrs["owner"] || attrs[:owner]
+    meta = if owner, do: Map.put(meta, "owner_handle", owner), else: meta
+
+    avatar = attrs["ownerAvatar"] || attrs[:ownerAvatar] || attrs["owner_avatar"]
+    meta = if avatar, do: Map.put(meta, "owner_avatar", avatar), else: meta
+
+    Map.put(attrs, "metadata", meta)
+  end
 
   defp stringify_keys(map) when is_map(map) do
     Map.new(map, fn
@@ -610,6 +650,14 @@ defmodule Kollective.Businesses.Business do
 
     reviews_count = attrs["reviewsCount"] || attrs[:reviewsCount] || attrs["reviews_count"]
     meta = if reviews_count, do: Map.put(meta, "reviews_count", reviews_count), else: meta
+
+    images = attrs["images"] || attrs[:images] || attrs["gallery"] || attrs[:gallery]
+    meta =
+      if images && is_list(images) do
+        Map.put(meta, "images", images) |> Map.put("gallery", images)
+      else
+        meta
+      end
 
     Map.put(attrs, "metadata", meta)
   end

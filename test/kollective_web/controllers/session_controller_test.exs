@@ -2,8 +2,10 @@ defmodule KollectiveWeb.SessionControllerTest do
   use KollectiveWeb.ConnCase, async: true
 
   import Kollective.AccountsFixtures
+  import Kollective.Factory
   # 🔄 FIX 1: Change alias from Kollective.Accounts to point to your deep sub-context module
   alias Kollective.Accounts.Accounts
+  alias Kollective.Repo
 
   setup do
     %{user: user_fixture()}
@@ -218,6 +220,27 @@ defmodule KollectiveWeb.SessionControllerTest do
       # 🔄 FIX 5: Unauthenticated logout returns a 400 Bad Request via your with block fallback
       assert conn.status == 400
     end
+
+    test "revokes both personal and organization-scoped session tokens for the user upon logout", %{conn: conn, user: user} do
+      personal_token = Accounts.generate_user_session_token(user)
+      org = insert(:user, type: :organization)
+      org_token = Accounts.generate_user_session_token(user, org.id)
+
+      # Verify both tokens are valid before logout
+      assert Accounts.get_user_by_session_token(personal_token) != nil
+      assert Accounts.get_user_by_session_token(org_token) != nil
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{org_token}")
+        |> delete(~p"/api/users/logout")
+
+      assert conn.status == 200
+
+      # Both tokens must now be revoked
+      assert Accounts.get_user_by_session_token(personal_token) == nil
+      assert Accounts.get_user_by_session_token(org_token) == nil
+    end
   end
 
   describe "GET /api/v1/profiles and X-Active-Account-Id resolution" do
@@ -332,6 +355,149 @@ defmodule KollectiveWeb.SessionControllerTest do
       conn =
         build_conn()
         |> get(~p"/api/v1/profiles")
+
+      assert conn.status == 401
+    end
+  end
+
+  describe "POST /api/v1/session/switch_profile" do
+    setup %{conn: conn} do
+      user = user_fixture()
+      {:ok, org} =
+        Repo.insert(%Kollective.Accounts.User{
+          display_name: "Action Union",
+          username: "action_union",
+          email: "action@union.org",
+          type: :organization
+        })
+
+      {:ok, _membership} =
+        Repo.insert(%Kollective.Accounts.OrganizationMembership{
+          user_id: user.id,
+          organization_id: org.id,
+          role: :admin,
+          status: :approved
+        })
+
+      token = Accounts.generate_user_session_token(user)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+
+      %{conn: conn, user: user, org: org, initial_token: token}
+    end
+
+    test "rotates token and sets organization context for authorized membership", %{
+      conn: conn,
+      user: _user,
+      org: org,
+      initial_token: initial_token
+    } do
+      conn =
+        post(conn, ~p"/api/v1/session/switch_profile", %{
+          "organization_id" => to_string(org.id)
+        })
+
+      assert conn.status == 200
+      response = json_response(conn, 200)
+
+      new_token = response["token"]
+      assert is_binary(new_token)
+      assert new_token != initial_token
+
+      assert response["active_account"]["id"] == to_string(org.id)
+      assert response["active_account"]["type"] == "organization"
+      assert response["active_account"]["role"] == "admin"
+      assert response["organization"]["id"] == to_string(org.id)
+
+      # Verify initial token is revoked and old token cannot authenticate
+      unauth_conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{initial_token}")
+        |> get(~p"/api/v1/profiles")
+
+      assert unauth_conn.status == 401
+
+      # Verify consecutive request using rotated token populates current_organization
+      authed_conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{new_token}")
+        |> get(~p"/api/v1/profiles")
+
+      assert authed_conn.status == 200
+      assert authed_conn.assigns[:current_organization].id == org.id
+      assert authed_conn.assigns[:active_account_id] == to_string(org.id)
+      assert authed_conn.assigns[:account_type] == :organization
+    end
+
+    test "returns 403 forbidden when user lacks active membership in target organization", %{
+      conn: conn
+    } do
+      {:ok, other_org} =
+        Repo.insert(%Kollective.Accounts.User{
+          display_name: "Unauthorized Union",
+          username: "unauth_union",
+          email: "unauth@union.org",
+          type: :organization
+        })
+
+      conn =
+        post(conn, ~p"/api/v1/session/switch_profile", %{
+          "organization_id" => to_string(other_org.id)
+        })
+
+      assert conn.status == 403
+      response = json_response(conn, 403)
+      assert response["error"] == "forbidden"
+    end
+
+    test "rotates token back to personal profile and clears current_organization", %{
+      conn: conn,
+      user: user,
+      org: org
+    } do
+      # First switch to organization
+      org_conn =
+        post(conn, ~p"/api/v1/session/switch_profile", %{
+          "organization_id" => to_string(org.id)
+        })
+
+      org_token = json_response(org_conn, 200)["token"]
+
+      # Now switch back to personal
+      personal_conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{org_token}")
+        |> post(~p"/api/v1/session/switch_profile", %{
+          "organization_id" => "personal"
+        })
+
+      assert personal_conn.status == 200
+      personal_response = json_response(personal_conn, 200)
+
+      personal_token = personal_response["token"]
+      assert is_binary(personal_token)
+      assert personal_token != org_token
+      assert personal_response["active_account"]["id"] == to_string(user.id)
+      assert personal_response["active_account"]["type"] == "personal"
+
+      # Consecutive request has current_organization == nil
+      check_conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{personal_token}")
+        |> get(~p"/api/v1/profiles")
+
+      assert check_conn.status == 200
+      assert is_nil(check_conn.assigns[:current_organization])
+      assert check_conn.assigns[:active_account_id] == to_string(user.id)
+      assert check_conn.assigns[:account_type] == user.type
+    end
+
+    test "returns 401 unauthenticated when unauthenticated client attempts switch" do
+      conn =
+        build_conn()
+        |> post(~p"/api/v1/session/switch_profile", %{"organization_id" => "personal"})
 
       assert conn.status == 401
     end

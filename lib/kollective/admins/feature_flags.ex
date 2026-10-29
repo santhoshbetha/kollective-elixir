@@ -53,9 +53,13 @@ defmodule Kollective.Admin.FeatureFlags do
     :ets.new(@table_name, [:set, :protected, :named_table, read_concurrency: true])
 
     # 2. Synchronize memory state parameters with your persistent database entries
-    hydrate_cache_from_db()
+    {:ok, %{}, {:continue, :hydrate_cache}}
+  end
 
-    {:ok, %{}}
+  @impl true
+  def handle_continue(:hydrate_cache, state) do
+    hydrate_cache_from_db()
+    {:noreply, state}
   end
 
   @impl true

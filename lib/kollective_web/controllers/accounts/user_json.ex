@@ -65,7 +65,8 @@ defmodule KollectiveWeb.UserJSON do
       is_verified_candidate: user.is_verified_candidate,
       settings: %{
         auto_play_gifs: user.auto_play_gifs
-      }
+      },
+      memberships: KollectiveWeb.AccountJSON.serialize_memberships(user.id)
     }
   end
 end

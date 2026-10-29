@@ -140,10 +140,44 @@ defmodule Kollective.Accounts.UserToken do
     hashed_token = :crypto.hash(:sha256, decoded_token)
 
     query =
-      from token in by_token_and_context_query(hashed_token, "session"),
+      from token in UserToken,
+        where:
+          token.token == ^hashed_token and
+            (token.context == "session" or like(token.context, "session:org:%")),
         join: user in assoc(token, :user),
         where: token.inserted_at > ago(@session_validity_in_days, "day"),
         select: {%{user | authenticated_at: token.authenticated_at}, token.inserted_at}
+
+    {:ok, query}
+  end
+
+  @doc """
+  Checks if the session token is valid and returns user, inserted_at, and context tuple.
+  """
+  def verify_session_token_and_context_query(token) when is_binary(token) do
+    decoded_token =
+      cond do
+        byte_size(token) == 32 ->
+          token
+
+        true ->
+          case Base.url_decode64(token, padding: false) do
+            {:ok, bytes} -> bytes
+            :error -> token
+          end
+      end
+
+    hashed_token = :crypto.hash(:sha256, decoded_token)
+
+    query =
+      from token in UserToken,
+        where:
+          token.token == ^hashed_token and
+            (token.context == "session" or like(token.context, "session:org:%")),
+        join: user in assoc(token, :user),
+        where: token.inserted_at > ago(@session_validity_in_days, "day"),
+        select:
+          {%{user | authenticated_at: token.authenticated_at}, token.inserted_at, token.context}
 
     {:ok, query}
   end

@@ -3,7 +3,8 @@ alias Kollective.Repo
 alias Kollective.Governance.GeoNode
 
 # 1. Resolve path pointing straight to your external asset file
-geojson_file_path = Path.join([:code.priv_dir(:your_app), "repo", "data", "india_districts.json"])
+geojson_file_path =
+  Path.join([:code.priv_dir(:kollective), "repo", "data", "india_districts.json"])
 
 unless File.exists?(geojson_file_path) do
   IO.puts(:stderr, "Error: Place your map file at priv/repo/data/india_districts.json first!")
@@ -11,11 +12,13 @@ unless File.exists?(geojson_file_path) do
 end
 
 # 2. Load and decode the file into memory
-IO.puts "📂 Reading Indian District map file from disk..."
+IO.puts("📂 Reading Indian District map file from disk...")
 raw_json_string = File.read!(geojson_file_path)
 %{"features" => features} = Jason.decode!(raw_json_string)
 
-IO.puts "🚀 Processing and writing #{Enum.count(features)} geographical entities into Universal GeoNodes..."
+IO.puts(
+  "🚀 Processing and writing #{Enum.count(features)} geographical entities into Universal GeoNodes..."
+)
 
 Repo.transaction(fn ->
   Enum.each(features, fn feature ->
@@ -37,7 +40,8 @@ Repo.transaction(fn ->
       level: 1,
       name: String.trim(state_name),
       local_type: "State",
-      geom: nil # Level 1 fallback can remain text-based or update later
+      # Level 1 fallback can remain text-based or update later
+      geom: nil
     }
 
     state_node =
@@ -57,8 +61,10 @@ Repo.transaction(fn ->
       level: 2,
       name: String.trim(district_name),
       local_type: "District",
-      area_type: String.downcase(file_area_type), # 🚀 Injects "urban" or "rural"
-      parent_id: state_node.id, # 🌟 Locks down the hierarchical box-in-a-box parent link!
+      # 🚀 Injects "urban" or "rural"
+      area_type: String.downcase(file_area_type),
+      # 🌟 Locks down the hierarchical box-in-a-box parent link!
+      parent_id: state_node.id,
       geom: postgis_geom
     }
 
@@ -70,8 +76,8 @@ Repo.transaction(fn ->
       conflict_target: [:country_code, :level, :name]
     )
 
-    IO.puts "   ✅ Ingested: #{district_name} District ──> (Nested under #{state_name})"
+    IO.puts("   ✅ Ingested: #{district_name} District ──> (Nested under #{state_name})")
   end)
 end)
 
-IO.puts "🎉 India box-in-a-box spatial infrastructure compiled under 10ms indexes successfully!"
+IO.puts("🎉 India box-in-a-box spatial infrastructure compiled under 10ms indexes successfully!")

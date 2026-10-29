@@ -33,6 +33,24 @@ defmodule KollectiveWeb.BookmarkControllerTest do
       assert is_list(response["data"])
       assert length(response["data"]) == 2
     end
+
+    test "multi-user isolation: user only sees their own bookmarks", %{conn: conn, user: _user} do
+      other_user = insert(:user)
+      author = insert(:user)
+      post1 = insert(:post, author: author)
+      post2 = insert(:post, author: author)
+
+      insert(:post_bookmark, user: other_user, post: post1)
+      insert(:post_bookmark, user: other_user, post: post2)
+
+      response =
+        conn
+        |> get(~p"/api/v1/bookmarks")
+        |> json_response(200)
+
+      assert response["status"] == "success"
+      assert response["data"] == []
+    end
   end
 
   describe "toggle/2 (POST /api/v1/posts/:post_id/bookmark)" do

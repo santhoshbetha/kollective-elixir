@@ -7,10 +7,12 @@ defmodule KollectiveWeb.PostController do
   alias Kollective.Moderation.Moderation
   alias Kollective.Accounts.Accounts
   alias Kollective.Accounts.OrganizationMembership
-  alias Kollective.Security.Security
   alias KollectiveWeb.PostJSON
   alias KollectiveWeb.AccountJSON
   alias KollectiveWeb.ChangesetJSON
+  alias KollectiveWeb.Plugs.AuthorizeOrgSocialAction
+
+  plug AuthorizeOrgSocialAction when action in [:handle_like, :handle_reblog]
 
   # GET /api/v1/posts
   # Accessible options via query string: ?category=voice&scope=local&sort=top&cursor=432
@@ -81,7 +83,10 @@ defmodule KollectiveWeb.PostController do
       )
 
     # 1. Organization / Identity Context Gateway
-    org_id = post_params["organization_id"] || post_params["override_author_id"]
+    org_id =
+      post_params["organization_id"] ||
+        post_params["override_author_id"] ||
+        (conn.assigns[:current_organization] && conn.assigns[:current_organization].id)
 
     {authorized?, final_org_id} =
       cond do
@@ -94,6 +99,9 @@ defmodule KollectiveWeb.PostController do
 
         org_id == user.id ->
           {true, user.id}
+
+        conn.assigns[:current_organization] && conn.assigns[:current_organization].id == org_id ->
+          {true, org_id}
 
         true ->
           is_member? =
@@ -471,10 +479,15 @@ defmodule KollectiveWeb.PostController do
 
   # POST /api/posts/:id/like
   def handle_like(conn, %{"id" => post_id}) do
-    user = conn.assigns.current_user
+    actor_id =
+      if conn.assigns[:account_type] == :organization and conn.assigns[:current_organization] do
+        conn.assigns[:current_organization].id
+      else
+        conn.assigns.current_user.id
+      end
 
     # 🚀 The controller now reads the count directly out of the context return tuple!
-    case Posts.toggle_like(user.id, post_id) do
+    case Posts.toggle_like(actor_id, post_id) do
       {:ok, :liked, updated_count} ->
         conn
         |> put_status(:ok)
@@ -504,17 +517,24 @@ defmodule KollectiveWeb.PostController do
   def handle_reblog(conn, %{"id" => post_id}) do
     user = conn.assigns.current_user
 
-    IO.inspect("handle_reblog")
-    IO.inspect(post_id, label: "post_id")
+    org_id =
+      if conn.assigns[:account_type] == :organization and conn.assigns[:current_organization] do
+        conn.assigns[:current_organization].id
+      else
+        nil
+      end
 
-    case Posts.reblog_post(user.id, post_id) do
+    case Posts.reblog_post(user.id, post_id, org_id) do
       {:ok, :reblogged, reblog_struct} ->
         # Preload and hydrate the original target post so the returned card has updated reblogs_count
         original_post =
           Posts.get_post!(post_id)
           |> Kollective.Repo.preload([:author, :attachments, :hashtags, poll: :options])
 
-        [hydrated_item] = Posts.hydrate_virtual_fields([original_post], user)
+        actor =
+          if org_id, do: conn.assigns[:current_organization], else: user
+
+        [hydrated_item] = Posts.hydrate_virtual_fields([original_post], actor)
 
         conn
         |> put_status(:created)
@@ -530,7 +550,10 @@ defmodule KollectiveWeb.PostController do
           Posts.get_post!(post_id)
           |> Kollective.Repo.preload([:author, :attachments, :hashtags, poll: :options])
 
-        [hydrated_item] = Posts.hydrate_virtual_fields([original_post], user)
+        actor =
+          if org_id, do: conn.assigns[:current_organization], else: user
+
+        [hydrated_item] = Posts.hydrate_virtual_fields([original_post], actor)
 
         conn
         |> put_status(:ok)

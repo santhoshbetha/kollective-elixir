@@ -91,6 +91,17 @@ defmodule Kollective.Accounts.Organizations do
   end
 
   @doc """
+  Fetches all approved or active organization memberships for a user, with preloaded organizations.
+  """
+  def list_user_memberships(user_id) do
+    from(m in OrganizationMembership,
+      where: m.user_id == ^user_id and m.status in [:approved, :active],
+      preload: [:organization]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Searches for organization accounts matching a query string.
   """
   def search_organizations_by_type(query_str) when is_binary(query_str) do

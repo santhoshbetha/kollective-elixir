@@ -906,7 +906,7 @@ defmodule Kollective.Accounts.User do
 
   def backup_changeset(user, attrs) do
     user
-    |> cast(attrs, [:encrypted_private_key_backup, :backup_salt])
+    |> cast(attrs, [:encrypted_private_key_backup, :backup_salt, :public_key])
     |> validate_required([:encrypted_private_key_backup, :backup_salt])
   end
 end

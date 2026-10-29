@@ -5,7 +5,7 @@ defmodule Kollective.Governance.Strategies.USStrategy do
 
   @impl true
   def fetch_context(address) do
-    api_key = Application.get_env(:your_app, :google_civic_api_key)
+    api_key = Application.get_env(:kollective, :google_civic_api_key)
 
     # Hits the target Google endpoint to receive raw boundary tokens efficiently
     case Req.get(@base_url, query: %{"address" => address, "key" => api_key}) do

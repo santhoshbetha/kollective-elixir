@@ -61,6 +61,8 @@ defmodule Kollective.Businesses.Businesses do
           %{}
         end
 
+      user_geo = extract_user_geo(user)
+
       base_attrs =
         attrs
         |> Map.put("user_id", user.id)
@@ -68,6 +70,14 @@ defmodule Kollective.Businesses.Businesses do
         # Queue for postcard/OTP review
         |> Map.put("verification_status", "pending")
         |> Map.merge(city_fields, fn _k, v1, v2 -> v1 || v2 end)
+
+      base_attrs =
+        if is_nil(base_attrs["location"]) and is_nil(base_attrs[:location]) and
+             is_nil(base_attrs["latitude"]) and is_nil(base_attrs[:latitude]) and user_geo do
+          Map.put(base_attrs, "location", user_geo)
+        else
+          base_attrs
+        end
 
       Business.creation_changeset(%Business{user_id: user.id}, base_attrs)
     end)
@@ -196,6 +206,8 @@ defmodule Kollective.Businesses.Businesses do
           %{}
         end
 
+      user_geo = extract_user_geo(user)
+
       base_attrs =
         attrs
         |> Map.put("user_id", user.id)
@@ -204,6 +216,14 @@ defmodule Kollective.Businesses.Businesses do
         # Proposals stay unverified until launched
         |> Map.put("verification_status", "unverified")
         |> Map.merge(city_fields, fn _k, v1, v2 -> v1 || v2 end)
+
+      base_attrs =
+        if is_nil(base_attrs["location"]) and is_nil(base_attrs[:location]) and
+             is_nil(base_attrs["latitude"]) and is_nil(base_attrs[:latitude]) and user_geo do
+          Map.put(base_attrs, "location", user_geo)
+        else
+          base_attrs
+        end
 
       # Pipes into your specific crowdfunding validation rules
       Business.proposal_changeset(%Business{user_id: user.id}, base_attrs)
@@ -343,7 +363,7 @@ defmodule Kollective.Businesses.Businesses do
               {:business_updated, updated_business.id}
             )
 
-            {:ok, Repo.preload(updated_business, [:user])}
+            {:ok, Repo.preload(updated_business, [:user, :city_relation])}
 
           {:error, :resolved_attrs, {:city_resolution_failed, reason}, _changes} ->
             changeset =
@@ -675,9 +695,15 @@ defmodule Kollective.Businesses.Businesses do
     # 3. COMPLIANCE VERIFICATION LOCK (The Business Kill-Switch)
     # Approved ideas transition to "verified", unverified drafts are left viewable under "proposals"
     query =
-      if type == "existing",
-        do: where(query, [b], b.verification_status == "verified"),
-        else: query
+      if type == "existing" do
+        if user && Map.get(user, :id) do
+          where(query, [b], b.verification_status == "verified" or b.user_id == ^user.id)
+        else
+          where(query, [b], b.verification_status == "verified")
+        end
+      else
+        query
+      end
 
     # 4. EXECUTE B-TREE INDEXED DISK RETRIEVAL PASS
     query
@@ -779,6 +805,62 @@ defmodule Kollective.Businesses.Businesses do
     |> where([b], b.id == ^id and b.type == ^expected_type)
     |> preload([:user, :city_relation])
     |> Repo.one!()
+  end
+
+  @doc """
+  Appends an image URL to a business's gallery in metadata.
+  """
+  def add_business_image(%User{} = user, business_id, image_url) when is_binary(image_url) do
+    business = Repo.get!(Business, business_id) |> Repo.preload([:user, :city_relation])
+
+    if business.user_id != user.id do
+      {:error, :unauthorized}
+    else
+      meta = business.metadata || %{}
+      existing_images = Map.get(meta, "images") || Map.get(meta, "gallery") || []
+      updated_images = if image_url in existing_images, do: existing_images, else: existing_images ++ [image_url]
+
+      updated_meta =
+        meta
+        |> Map.put("images", updated_images)
+        |> Map.put("gallery", updated_images)
+
+      business
+      |> Ecto.Changeset.change(%{metadata: updated_meta})
+      |> Repo.update()
+      |> case do
+        {:ok, updated_b} -> {:ok, Repo.preload(updated_b, [:user, :city_relation])}
+        err -> err
+      end
+    end
+  end
+
+  @doc """
+  Removes an image URL from a business's gallery in metadata.
+  """
+  def delete_business_image(%User{} = user, business_id, image_url) when is_binary(image_url) do
+    business = Repo.get!(Business, business_id) |> Repo.preload([:user, :city_relation])
+
+    if business.user_id != user.id do
+      {:error, :unauthorized}
+    else
+      meta = business.metadata || %{}
+      existing_images = Map.get(meta, "images") || Map.get(meta, "gallery") || []
+      updated_images = Enum.reject(existing_images, &(&1 == image_url))
+
+      updated_meta =
+        meta
+        |> Map.put("images", updated_images)
+        |> Map.put("gallery", updated_images)
+
+      business
+      |> Ecto.Changeset.change(%{metadata: updated_meta})
+      |> Repo.update()
+      |> case do
+        {:ok, updated_b} -> {:ok, Repo.preload(updated_b, [:user, :city_relation])}
+        err -> err
+      end
+    end
   end
 
   @doc """
@@ -893,23 +975,23 @@ defmodule Kollective.Businesses.Businesses do
       opts[:radius_meters] ->
         case parse_coord(opts[:radius_meters]) do
           {:ok, r} -> r
-          _ -> 96560.0
+          _ -> 160934.0
         end
 
       opts[:radius_miles] ->
         case parse_coord(opts[:radius_miles]) do
           {:ok, r} -> r * 1609.34
-          _ -> 96560.0
+          _ -> 160934.0
         end
 
       opts[:radius] ->
         case parse_coord(opts[:radius]) do
           {:ok, r} -> r * 1609.34
-          _ -> 96560.0
+          _ -> 160934.0
         end
 
       true ->
-        96560.0
+        160934.0
     end
   end
 

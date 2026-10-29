@@ -65,4 +65,67 @@ defmodule KollectiveWeb.SearchControllerTest do
       assert is_list(res["accounts"])
     end
   end
+
+  describe "GET /api/v1/search/global" do
+    test "returns empty lists when query is too short", %{conn: conn} do
+      res =
+        conn
+        |> get(~p"/api/v1/search/global", q: "a")
+        |> json_response(200)
+
+      assert res == %{
+               "posts" => [],
+               "businesses" => [],
+               "proposals" => [],
+               "accounts" => []
+             }
+    end
+
+    test "returns categorized search hits across multiple entities", %{conn: conn, user: user} do
+      # 1. Create a business
+      %Kollective.Businesses.Business{
+        name: "Austin Solar Cooperative",
+        description: "Community-owned solar power array",
+        type: "existing",
+        category: "sustainable_energy",
+        user_id: user.id
+      }
+      |> Repo.insert!()
+
+      # 2. Create a proposal
+      %Kollective.Businesses.Business{
+        name: "Austin Food Commons",
+        description: "Grassroots community food distribution hub",
+        type: "proposals",
+        category: "food_beverage",
+        user_id: user.id
+      }
+      |> Repo.insert!()
+
+      # 3. Create a post with content words and nil published_at (as in feed seeds)
+      %Kollective.Posts.Post{
+        user_id: user.id,
+        content: "Community gathering in Austin for clean energy and digital rights",
+        text: "Community gathering in Austin for clean energy and digital rights",
+        status: :published,
+        visibility: "public",
+        published_at: nil
+      }
+      |> Repo.insert!()
+
+      res =
+        conn
+        |> get(~p"/api/v1/search/global", q: "Austin")
+        |> json_response(200)
+
+      assert is_list(res["posts"])
+      assert is_list(res["businesses"])
+      assert is_list(res["proposals"])
+      assert is_list(res["accounts"])
+
+      assert Enum.any?(res["businesses"], &(&1["name"] == "Austin Solar Cooperative"))
+      assert Enum.any?(res["proposals"], &(&1["name"] == "Austin Food Commons"))
+      assert Enum.any?(res["posts"], &(String.contains?(&1["content"] || "", "Austin")))
+    end
+  end
 end

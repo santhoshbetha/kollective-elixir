@@ -9,6 +9,7 @@ defmodule Kollective.Posts.Posts do
   alias Kollective.Accounts.AuditLog
   alias Kollective.Accounts.OrganizationMembership
   alias Kollective.Posts.Post
+  alias Kollective.Posts.PostAttachment
   alias Kollective.Posts.Like
   alias Kollective.Accounts.UserRelationship
   alias Kollective.Notifications.Notifications
@@ -673,24 +674,94 @@ defmodule Kollective.Posts.Posts do
     end)
 
     # Step 5: CLOUDFLARE R2 MULTI-IMAGE CAROUSEL ALLOCATION
-    # Connects direct frontend asset URLs directly to the post_attachments join table
-    |> Multi.run(:media_upload, fn _repo, %{notifications_and_mentions: post} ->
+    # Connects direct frontend asset URLs and pre-uploaded media_ids to post_attachments
+    |> Multi.run(:media_upload, fn repo, %{notifications_and_mentions: post} ->
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
+      # 1. Bind any pre-uploaded PostAttachment records via media_ids
+      media_ids =
+        (attrs["media_ids"] || attrs[:media_ids] || [])
+        |> List.wrap()
+        |> Enum.map(&to_string/1)
+
+      if media_ids != [] do
+        repo.update_all(
+          from(a in PostAttachment, where: a.id in ^media_ids and a.user_id == ^user.id),
+          set: [post_id: post.id]
+        )
+      end
+
+      # 2. Extract any images passed as URLs or maps
+      raw_images =
+        (if uploaded_images != [], do: uploaded_images, else: attrs["images"] || attrs[:images] || [])
+        |> List.wrap()
+
+      image_alts =
+        (attrs["imageAlts"] || attrs[:image_alts] || attrs["image_alts"] || [])
+        |> List.wrap()
+
+      existing_attachment_urls =
+        if media_ids != [] do
+          repo.all(from(a in PostAttachment, where: a.post_id == ^post.id, select: a.url))
+        else
+          []
+        end
+
       attachment_rows =
-        Enum.map(uploaded_images, fn img_url ->
-          %{
-            id: Kollective.Schemas.ULIDType.generate(),
-            post_id: post.id,
-            url: img_url,
-            media_type: "image/jpeg",
-            inserted_at: now,
-            updated_at: now
-          }
+        raw_images
+        |> Enum.with_index()
+        |> Enum.reduce([], fn {img, idx}, acc ->
+          url =
+            case img do
+              %{"url" => u} -> u
+              %{url: u} -> u
+              u when is_binary(u) -> u
+              _ -> nil
+            end
+
+          alt =
+            case img do
+              %{"description" => d} -> d
+              %{description: d} -> d
+              _ -> Enum.at(image_alts, idx) || ""
+            end
+
+          if url && url != "" && url not in existing_attachment_urls do
+            [
+              %{
+                id: Kollective.Schemas.ULIDType.generate(),
+                post_id: post.id,
+                user_id: user.id,
+                url: url,
+                description: alt,
+                media_type: "image/jpeg",
+                inserted_at: now,
+                updated_at: now
+              }
+              | acc
+            ]
+          else
+            acc
+          end
         end)
+        |> Enum.reverse()
 
       if attachment_rows != [] do
-        Repo.insert_all("post_attachments", attachment_rows)
+        repo.insert_all("post_attachments", attachment_rows)
+      end
+
+      # 3. Update descriptions for media_ids if imageAlts provided
+      if media_ids != [] and image_alts != [] do
+        Enum.with_index(media_ids)
+        |> Enum.each(fn {m_id, idx} ->
+          alt_val = Enum.at(image_alts, idx)
+          if alt_val && alt_val != "" do
+            repo.update_all(
+              from(a in PostAttachment, where: a.id == ^m_id and a.user_id == ^user.id),
+              set: [description: alt_val]
+            )
+          end
+        end)
       end
 
       {:ok, post}
@@ -740,7 +811,7 @@ defmodule Kollective.Posts.Posts do
       # C. Mention Notification Worker Queue (Only if post is clear/published)
       if post.status in [:published, "published"] do
         %{
-          "actor_id" => user.id,
+          "actor_id" => post.organization_id || user.id,
           "text" => post.content,
           "post_id" => post.id,
           "type" => "mention"
@@ -781,7 +852,7 @@ defmodule Kollective.Posts.Posts do
         # Step 6:
         # Hydrate associations to pass safely into your unified serialization view components
         # Ensure relationships and newly bound polls preload cleanly for the view layer
-        hydrated_post = Repo.preload(final_post, [:author, :attachments, :poll, poll: :options])
+        hydrated_post = Repo.preload(final_post, [:author, :organization, :attachments, :poll, poll: :options])
 
         # ─── UNIVERSAL REAL-TIME BROADCAST MATRIX ───
         # Only stream if the content successfully bypasses standard moderation queues
@@ -966,12 +1037,14 @@ defmodule Kollective.Posts.Posts do
   end
 
   defp register_mention_notifications(post, verified_mentions, parent_author_id) do
+    actor_id = post.organization_id || post.user_id
+
     Enum.each(verified_mentions, fn recipient ->
-      if recipient.id != post.user_id && recipient.id != parent_author_id do
+      if recipient.id != post.user_id && recipient.id != actor_id && recipient.id != parent_author_id do
         {:ok, notification} =
           Notifications.notify(
             recipient.id,
-            post.user_id,
+            actor_id,
             "mention",
             %{
               post_id: post.id,
@@ -997,14 +1070,20 @@ defmodule Kollective.Posts.Posts do
     if post.in_reply_to_id do
       parent = Repo.get(Post, post.in_reply_to_id)
 
-      if parent && parent.user_id && post.user_id && parent.user_id != post.user_id do
+      target_recipient_id = parent && (parent.organization_id || parent.user_id)
+      actor_id = post.organization_id || post.user_id
+
+      if parent && target_recipient_id && actor_id && target_recipient_id != actor_id do
+        extra_attrs =
+          if parent.organization_id,
+            do: %{organization_id: parent.organization_id},
+            else: %{}
+
         Notifications.notify_reply(
-          # The recipient (The author of the parent post being replied to)
-          parent.user_id,
-          # The actor (The user writing the reply)
-          post.user_id,
-          # The full %Post{} struct reply node object
-          post
+          target_recipient_id,
+          actor_id,
+          post,
+          extra_attrs
         )
       end
     end
@@ -1815,7 +1894,7 @@ defmodule Kollective.Posts.Posts do
 
         if state && state != "" do
           from(p in base_country_query,
-            where: is_nil(p.origin_state) or p.origin_state != ^state
+            where: p.target_scope == :country or is_nil(p.origin_state) or p.origin_state != ^state
           )
         else
           base_country_query
@@ -2092,22 +2171,29 @@ defmodule Kollective.Posts.Posts do
     # Fetch the post author and the liker's details
     post = Repo.get(Post, post_id)
     liker = Repo.get(User, liker_id)
+    target_recipient_id = post && (post.organization_id || post.user_id)
 
     # Prevent users from getting notifications when they like their own posts
-    if post && liker && post.user_id && post.user_id != liker_id do
-      notification_payload = %{
-        id: System.unique_integer([:positive]),
-        type: "like",
-        post_id: post_id,
-        message: "@#{liker.username} liked your post!",
-        created_at: DateTime.utc_now()
-      }
+    if post && liker && target_recipient_id && target_recipient_id != liker_id do
+      attrs =
+        %{
+          post_id: post.id,
+          target_id: post.id,
+          target_type: "Post"
+        }
+        |> then(fn m ->
+          if post.organization_id, do: Map.put(m, :organization_id, post.organization_id), else: m
+        end)
 
-      # Broadcast to the specific author's notification pipeline channel
-      Phoenix.PubSub.broadcast(
-        Kollective.PubSub,
-        "user_notifications:#{post.user_id}",
-        {:new_notification, notification_payload}
+      Notifications.notify(
+        target_recipient_id,
+        liker_id,
+        "like",
+        attrs,
+        %{
+          post_id: post.id,
+          preview: "liked your post."
+        }
       )
     end
   end
@@ -2350,38 +2436,50 @@ defmodule Kollective.Posts.Posts do
 
   # Reblog:
 
-  def reblog_post(user_id, post_id) do
+  def reblog_post(user_id, post_id, org_id \\ nil) do
     original_post = Repo.get!(Post, post_id)
 
-    IO.inspect("reblog_post")
+    # Check if user/org is trying to reblog their own content
+    is_self =
+      if org_id do
+        not is_nil(original_post.organization_id) and original_post.organization_id == org_id
+      else
+        not is_nil(original_post.user_id) and original_post.user_id == user_id and
+          is_nil(original_post.organization_id)
+      end
 
-    # Check if user is trying to reblog their own content
-    if not is_nil(original_post.user_id) and original_post.user_id == user_id do
-      IO.inspect("Self reblog")
+    if is_self do
       {:error, :self_reblog_not_allowed}
     else
-      IO.inspect("Not self reblog")
-      # ... Multi logic for toggle ...
-      execute_reblog_toggle(user_id, post_id)
+      execute_reblog_toggle(user_id, post_id, org_id)
     end
   end
 
-  def execute_reblog_toggle(user_id, post_id) do
-    existing = Repo.get_by(Post, user_id: user_id, reblog_of_id: post_id)
-
-    IO.inspect("execute_reblog_toggle")
+  def execute_reblog_toggle(user_id, post_id, org_id \\ nil) do
+    existing =
+      if org_id do
+        from(p in Post, where: p.organization_id == ^org_id and p.reblog_of_id == ^post_id)
+        |> Repo.one()
+      else
+        from(p in Post,
+          where: p.user_id == ^user_id and p.reblog_of_id == ^post_id and is_nil(p.organization_id)
+        )
+        |> Repo.one()
+      end
 
     if existing do
+      actor_id = org_id || user_id
+
       # --- UNDO REBLOG LOGIC ---
       Multi.new()
       |> Multi.delete(:reblog, existing)
       |> Multi.update_all(
         :decrement_note_count,
-        from(u in User, where: u.id == ^user_id and u.note_count > 0),
+        from(u in User, where: u.id == ^actor_id and u.note_count > 0),
         inc: [note_count: -1]
       )
       |> Multi.run(:feed_cleanup, fn _repo, %{reblog: reblog} ->
-        follower_ids = fetch_follower_ids(user_id)
+        follower_ids = fetch_follower_ids(actor_id)
 
         from(e in "home_feed_entries",
           where:
@@ -2402,38 +2500,38 @@ defmodule Kollective.Posts.Posts do
       end
     else
       # --- CREATE REBLOG LOGIC ---
-      case execute_create_reblog(user_id, post_id) do
+      case execute_create_reblog(user_id, post_id, org_id) do
         {:ok, %{reblog: reblog}} ->
           notify_reblog(reblog)
-          IO.inspect(reblog, label: "reblog")
           {:ok, :reblogged, reblog}
 
         {:error, _failed_operation, _failed_value, _changes_so_far} ->
-          IO.inspect("failed_to_reblog")
           {:error, :failed_to_reblog}
       end
     end
   end
 
-  defp execute_create_reblog(user_id, post_id) do
+  defp execute_create_reblog(user_id, post_id, org_id \\ nil) do
     now_naive = DateTime.utc_now() |> DateTime.to_naive() |> NaiveDateTime.truncate(:second)
+    actor_id = org_id || user_id
 
     Multi.new()
     |> Multi.insert(:reblog, %Post{
       user_id: user_id,
+      organization_id: org_id,
       reblog_of_id: post_id,
       content: nil
     })
     |> Multi.update_all(
       :increment_note_count,
-      from(u in User, where: u.id == ^user_id),
+      from(u in User, where: u.id == ^actor_id),
       inc: [note_count: 1],
       set: [last_post_at: now_naive]
     )
     |> Multi.run(:fanout_job, fn _repo, %{reblog: reblog} ->
       %{
         "post_id" => reblog.id,
-        "author_id" => user_id
+        "author_id" => actor_id
       }
       |> Kollective.Workers.FeedFanoutWorker.new()
       |> Oban.insert()
@@ -2456,19 +2554,30 @@ defmodule Kollective.Posts.Posts do
     original_post = Repo.get!(Post, reblog.reblog_of_id) |> Repo.preload(:author)
     _reblog_author = Repo.get!(User, reblog.user_id)
 
+    target_recipient_id = original_post.organization_id || original_post.user_id
+    reblog_actor_id = (Map.has_key?(reblog, :organization_id) && reblog.organization_id) || reblog.user_id
+
     # Avoid notifying yourself if you somehow boost your own post
-    if original_post.user_id && original_post.user_id != reblog.user_id do
+    if target_recipient_id && target_recipient_id != reblog_actor_id do
+      attrs =
+        %{
+          post_id: original_post.id,
+          target_id: reblog.id,
+          target_type: "Post"
+        }
+        |> then(fn m ->
+          if original_post.organization_id,
+            do: Map.put(m, :organization_id, original_post.organization_id),
+            else: m
+        end)
+
       # 2. Broadcast real-time via Phoenix Channels
       {:ok, _notif} =
         Notifications.notify(
-          original_post.user_id,
-          reblog.user_id,
+          target_recipient_id,
+          reblog_actor_id,
           "reblog",
-          %{
-            post_id: original_post.id,
-            target_id: reblog.id,
-            target_type: "Post"
-          },
+          attrs,
           %{
             post_id: original_post.id,
             preview: "boosted your post."
@@ -2657,11 +2766,23 @@ defmodule Kollective.Posts.Posts do
     query_string = String.trim(query_string || "")
     current_user_id = if current_user, do: current_user.id, else: nil
 
-    if query_string == "" or String.length(query_string) < 3 do
-      []
+    if query_string == "" or String.length(query_string) < 2 do
+      %{entries: [], next_cursor: nil}
     else
       # 2. Extract social safety masks to protect user data
       hidden_ids = fetch_hidden_user_ids(current_user_id)
+
+      pattern = "%#{query_string}%"
+      limit =
+        case params["limit"] do
+          l when is_integer(l) and l > 0 -> min(l, 50)
+          l when is_binary(l) ->
+            case Integer.parse(l) do
+              {val, _} when val > 0 -> min(val, 50)
+              _ -> 20
+            end
+          _ -> 20
+        end
 
       # 3. Build Unified Hybrid Query Execution Block
       query =
@@ -2672,40 +2793,45 @@ defmodule Kollective.Posts.Posts do
           # Enforce public timeline discovery
           where: p.visibility == "public",
           # Filter out shadow-banned pending states
-          where: p.status == "published",
+          where: p.status == :published,
           # Enforce blocks and mutes
           where: p.user_id not in ^hidden_ids,
 
-          # HYBRID MATCHING LAYER: FTS Vector Match OR Trigram Similarity Match
-          # Typo tolerance
+          # HYBRID MATCHING LAYER: FTS Vector Match OR ILIKE substring match across content and text
           where:
             fragment(
-              "p.searchable @@ websearch_to_tsquery(cast(p.language as regconfig), ?)",
+              "? @@ websearch_to_tsquery(cast(coalesce(?, 'english') as regconfig), cast(? as text))",
+              p.searchable,
+              p.language,
               ^query_string
-            ) or
-              fragment("p.content % ?", ^query_string)
+            ) or ilike(p.content, ^pattern) or ilike(p.text, ^pattern)
         )
 
       # INJECT PAGINATION: Apply the keyset filter threshold to keep reads under 1ms
       query = apply_cursor_pagination(query, params["cursor"])
 
-      # HYBRID RANKING LAYER: Combines Text Density Rank with Trigram String Similarity
+      # HYBRID RANKING LAYER: Combines Text Density Rank with post id desc
       query =
         from(p in query,
           order_by: [
             desc:
               fragment(
-                "ts_rank_cd(p.searchable, websearch_to_tsquery(cast(p.language as regconfig), ?)) + similarity(p.content, ?)",
-                ^query_string,
+                "ts_rank_cd(?, websearch_to_tsquery(cast(coalesce(?, 'english') as regconfig), cast(? as text)))",
+                p.searchable,
+                p.language,
                 ^query_string
               ),
             desc: p.id
           ],
-          limit: 20
+          limit: ^limit
         )
 
       # 4. Execute data load and populate hydration layers
-      raw_posts = Repo.all(query)
+      raw_posts =
+        query
+        |> Repo.all()
+        |> Repo.preload([:author])
+
       hydrated_entries = hydrate_virtual_fields(raw_posts, current_user)
 
       next_cursor =
@@ -2714,8 +2840,13 @@ defmodule Kollective.Posts.Posts do
             nil
 
           last_item ->
-            ts_iso = DateTime.to_iso8601(last_item.post.published_at)
-            "#{ts_iso},#{last_item.post.id}"
+            ts = last_item.post.published_at || last_item.post.inserted_at
+            if ts do
+              ts_iso = DateTime.to_iso8601(ts)
+              "#{ts_iso},#{last_item.post.id}"
+            else
+              "#{last_item.post.id}"
+            end
         end
 
       %{entries: hydrated_entries, next_cursor: next_cursor}

@@ -307,5 +307,20 @@ defmodule Kollective.Posts.PostsTest do
       assert root_post.id in feed_ids
       refute reply.id in feed_ids
     end
+
+    test "country-scoped posts appear in country feed even if authored in user's state", %{user: user} do
+      user = Ecto.Changeset.change(user, %{state: "TX", country: "US"}) |> Repo.update!()
+
+      {:ok, national_post} =
+        Posts.create_post(user, %{
+          "content" => "Countrywide consensus initiative",
+          "target_scope" => "country",
+          "visibility" => "public"
+        })
+
+      feed = Posts.list_posts_for_feed(user, %{"scope" => "country"})
+      feed_ids = Enum.map(feed.entries, & &1.post.id)
+      assert national_post.id in feed_ids
+    end
   end
 end

@@ -9,7 +9,7 @@ defmodule Kollective.Polls.Polls do
   # GET "/polls/:id" uses this
   def get_poll_results(poll_id, user_id \\ nil) do
     Poll
-    |> where([p], p.id == ^poll_id)
+    |> where([p], p.id == ^poll_id or p.post_id == ^poll_id)
     |> preload([:options])
     |> Repo.one()
     |> case do
@@ -44,28 +44,37 @@ defmodule Kollective.Polls.Polls do
     # Fetch fresh results (without a specific user_id so it's a generic update)
     poll = get_poll_results(poll_id)
 
-    # Broadcast to the specific topic for this poll
-    KollectiveWeb.Endpoint.broadcast("poll:#{poll_id}", "results_updated", %{
-      votes_count: poll.votes_count,
-      options:
-        Enum.map(poll.options, fn o ->
-          %{id: o.id, votes_count: o.votes_count}
-        end)
-    })
+    if poll do
+      # Broadcast to the specific topic for this poll
+      KollectiveWeb.Endpoint.broadcast("poll:#{poll_id}", "results_updated", %{
+        votes_count: poll.votes_count,
+        options:
+          Enum.map(poll.options, fn o ->
+            %{id: o.id, votes_count: o.votes_count}
+          end)
+      })
+    end
   end
 
   # POST /polls/:poll_id/votes uses this
   def cast_votes(user_id, poll_id, option_ids) when is_list(option_ids) do
-    poll = Repo.get!(Poll, poll_id)
+    poll =
+      Poll
+      |> where([p], p.id == ^poll_id or p.post_id == ^poll_id)
+      |> preload([:options])
+      |> Repo.one()
 
     cond do
+      is_nil(poll) ->
+        {:error, :not_found}
+
       # 1. Check Expiry
       # 🟢 FIXED: Zone-safe timestamp comparison pattern
       DateTime.diff(DateTime.utc_now(), poll.expires_at) > 0 ->
         {:error, :poll_expired}
 
       # 2. Check if already voted
-      Repo.exists?(from v in PollVote, where: v.poll_id == ^poll_id and v.user_id == ^user_id) ->
+      Repo.exists?(from v in PollVote, where: v.poll_id == ^poll.id and v.user_id == ^user_id) ->
         {:error, :already_voted}
 
       # 3. If not 'multiple', ensure only one option is sent
@@ -73,7 +82,42 @@ defmodule Kollective.Polls.Polls do
         {:error, :too_many_options}
 
       true ->
-        execute_voting_transaction(user_id, poll_id, option_ids)
+        # Resolve choice indices to actual option IDs if necessary
+        sorted_options = Enum.sort_by(poll.options, & {&1.inserted_at, &1.id})
+
+        resolved_option_ids =
+          Enum.map(option_ids, fn
+            idx when is_integer(idx) ->
+              case Enum.at(sorted_options, idx) do
+                nil -> nil
+                opt -> opt.id
+              end
+
+            id when is_binary(id) ->
+              case Integer.parse(id) do
+                {num, ""} when num >= 0 and num < length(sorted_options) ->
+                  case Enum.at(sorted_options, num) do
+                    nil -> nil
+                    opt -> opt.id
+                  end
+
+                _ ->
+                  case Enum.find(sorted_options, &(&1.id == id)) do
+                    nil -> id
+                    opt -> opt.id
+                  end
+              end
+
+            other ->
+              other
+          end)
+          |> Enum.reject(&is_nil/1)
+
+        if resolved_option_ids == [] do
+          {:error, :invalid_option}
+        else
+          execute_voting_transaction(user_id, poll.id, resolved_option_ids)
+        end
     end
   end
 
@@ -88,6 +132,7 @@ defmodule Kollective.Polls.Polls do
       PollVote,
       Enum.map(option_ids, fn id ->
         %{
+          id: Ecto.ULID.generate(),
           user_id: user_id,
           poll_id: poll_id,
           option_id: id,

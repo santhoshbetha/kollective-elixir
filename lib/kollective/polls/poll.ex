@@ -33,6 +33,8 @@ defmodule Kollective.Polls.Poll do
   # dd a custom validation to your Poll.changeset. This prevents users from creating "polls" with only one choice or
   # overwhelming the UI with 50 options
   def changeset(poll, attrs) do
+    attrs = normalize_attrs(attrs)
+
     poll
     |> cast(attrs, [:multiple, :expires_at, :non_anonymous])
     |> cast_assoc(:options, required: true, with: &Kollective.Polls.PollOption.changeset/2)
@@ -41,6 +43,81 @@ defmodule Kollective.Polls.Poll do
     |> validate_options_count()
     # <--- Bonus: Ensure it doesn't expire in the past
     |> validate_future_expiry()
+  end
+
+  defp normalize_attrs(attrs) when is_map(attrs) do
+    attrs
+    |> normalize_expiry()
+    |> normalize_options()
+  end
+
+  defp normalize_attrs(attrs), do: attrs
+
+  defp normalize_expiry(attrs) do
+    has_expires_at =
+      (Map.has_key?(attrs, "expires_at") and not is_nil(attrs["expires_at"])) or
+        (Map.has_key?(attrs, :expires_at) and not is_nil(attrs[:expires_at]))
+
+    raw_expires_in = attrs["expires_in"] || attrs[:expires_in]
+
+    expires_in =
+      cond do
+        is_integer(raw_expires_in) and raw_expires_in > 0 ->
+          raw_expires_in
+
+        is_binary(raw_expires_in) ->
+          case Integer.parse(raw_expires_in) do
+            {num, _} when num > 0 -> num
+            _ -> nil
+          end
+
+        true ->
+          nil
+      end
+
+    if not has_expires_at and not is_nil(expires_in) do
+      future =
+        DateTime.utc_now()
+        |> DateTime.add(expires_in, :second)
+        |> DateTime.truncate(:second)
+
+      if Map.has_key?(attrs, :options) do
+        Map.put(attrs, :expires_at, future)
+      else
+        Map.put(attrs, "expires_at", future)
+      end
+    else
+      attrs
+    end
+  end
+
+  defp normalize_options(attrs) do
+    raw_options = attrs["options"] || attrs[:options]
+
+    if is_list(raw_options) do
+      norm_options =
+        Enum.map(raw_options, fn
+          opt when is_binary(opt) ->
+            %{"title" => opt}
+
+          %{text: t} = opt when not is_nil(t) ->
+            Map.put(opt, "title", t)
+
+          %{"text" => t} = opt when not is_nil(t) ->
+            Map.put(opt, "title", t)
+
+          opt ->
+            opt
+        end)
+
+      if Map.has_key?(attrs, :options) do
+        Map.put(attrs, :options, norm_options)
+      else
+        Map.put(attrs, "options", norm_options)
+      end
+    else
+      attrs
+    end
   end
 
   defp validate_options_count(changeset) do

@@ -15,11 +15,37 @@ defmodule Kollective.Storage do
   end
 
   @doc """
+  Returns the active R2 key prefix.
+  In :test and :e2e environments, defaults to "kollective-test".
+  """
+  def prefix do
+    Application.get_env(:kollective, :r2_prefix) ||
+      System.get_env("R2_PREFIX") ||
+      System.get_env("R2_TEST_PREFIX") ||
+      (if Mix.env() in [:test, :e2e], do: "kollective-test", else: nil)
+  end
+
+  @doc """
+  Builds an object key with the environment prefix (if configured).
+  Always standardizes on forward slashes for S3 / R2 keys.
+  """
+  def object_key(path) do
+    case prefix() do
+      nil -> String.trim_leading(path, "/")
+      "" -> String.trim_leading(path, "/")
+      p ->
+        clean_prefix = String.trim(p, "/")
+        clean_path = String.trim_leading(path, "/")
+        "#{clean_prefix}/#{clean_path}"
+    end
+  end
+
+  @doc """
   Returns the active R2 public domain or CDN base URL for serving uploaded assets.
   """
   def cdn_domain do
     Application.get_env(:kollective, :r2_public_domain) ||
       System.get_env("R2_PUBLIC_DOMAIN") ||
-      "https://47701ef2e87f29505064cb21fd2513ed.r2.cloudflarestorage.com/kollective"
+      "/media"
   end
 end

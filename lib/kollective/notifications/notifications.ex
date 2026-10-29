@@ -79,11 +79,7 @@ defmodule Kollective.Notifications.Notifications do
   # When someone replies to a post, your notification system needs to check if the author of the original
   # post (the person being replied to) has muted that thread.
 
-  @doc """
-  Thread/Conversation Muting Router. Verifies if the recipient has silenced the
-  root thread context before delivering reply notification alerts.
-  """
-  def notify_reply(recipient_id, actor_id, %Post{} = post) do
+  def notify_reply(recipient_id, actor_id, %Post{} = post, extra_attrs \\ %{}) do
     root_id = post.root_post_id || post.id
 
     is_thread_muted =
@@ -97,12 +93,14 @@ defmodule Kollective.Notifications.Notifications do
       type = determine_type(post)
 
       # Build the notification properties
-      attrs = %{
-        post_id: post.id,
-        target_id: post.id,
-        target_type: "Post",
-        metadata: %{preview: String.slice(post.content || "", 0, 40) <> "..."}
-      }
+      attrs =
+        %{
+          post_id: post.id,
+          target_id: post.id,
+          target_type: "Post",
+          metadata: %{preview: String.slice(post.content || "", 0, 40) <> "..."}
+        }
+        |> Map.merge(extra_attrs)
 
       # Reuse your primary notify engine to catch relationship locks automatically
       notify(recipient_id, actor_id, type, attrs, %{
@@ -114,7 +112,6 @@ defmodule Kollective.Notifications.Notifications do
     end
   end
 
-  # Private DB Insertion Routines
   def create_action_object_notification(attrs) do
     # ⚡ FIXED: Cast any potential loose text strings into strict 16-byte binaries
     # before passing them to the insert pipeline
@@ -123,6 +120,7 @@ defmodule Kollective.Notifications.Notifications do
       |> cast_ulid_key(:target_id)
       |> cast_ulid_key(:post_id)
       |> cast_ulid_key(:event_id)
+      |> cast_ulid_key(:organization_id)
 
     %Kollective.Notifications.Notification{}
     |> Kollective.Notifications.Notification.changeset(attrs)
@@ -148,21 +146,19 @@ defmodule Kollective.Notifications.Notifications do
 
   @doc """
   Fetches paginated notification rows using optimized keyset cursor parameters.
-  Returns %{notifications: [...], next_cursor: id_or_nil}.
   """
-  def list_notifications(user_id, params \\ %{}) do
+  def list_notifications(user_id, params \\ %{}, opts \\ []) do
     cursor = params["cursor"] || params["max_id"]
     limit = 20
 
-    query =
-      from n in Notification,
-        where: n.user_id == ^user_id,
-        preload: [:actor, :post, :event],
-        # Keyset sorting matching sequential ULIDs/IDs
-        order_by: [desc: n.id],
-        limit: ^limit
+    base_query =
+      Notification
+      |> scope_notification_context(user_id, opts)
+      |> preload([:actor, :post, :event])
+      |> order_by([n], desc: n.id)
+      |> limit(^limit)
 
-    query = if cursor && cursor != "", do: where(query, [n], n.id < ^cursor), else: query
+    query = if cursor && cursor != "", do: where(base_query, [n], n.id < ^cursor), else: base_query
 
     notifications = Repo.all(query)
     next_cursor = if List.last(notifications), do: List.last(notifications).id, else: nil
@@ -209,15 +205,19 @@ defmodule Kollective.Notifications.Notifications do
   # --- Aggregate Unread State Management Toggles ---
 
   # "Read Status" so that the notification badge in React disappears once the user opens their notifications tab
-  def count_unread_notifications(user_id) do
-    from(n in Notification, where: n.user_id == ^user_id and n.read == false)
+  def count_unread_notifications(user_id, opts \\ []) do
+    Notification
+    |> where([n], n.read == false)
+    |> scope_notification_context(user_id, opts)
     |> Repo.aggregate(:count, :id)
   end
 
-  def mark_all_as_read(user_id) do
+  def mark_all_as_read(user_id, opts \\ []) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    from(n in Notification, where: n.user_id == ^user_id and n.read == false)
+    Notification
+    |> where([n], n.read == false)
+    |> scope_notification_context(user_id, opts)
     |> Repo.update_all(set: [read: true, updated_at: now])
   end
 
@@ -257,18 +257,15 @@ defmodule Kollective.Notifications.Notifications do
 
   @doc """
   Fetches an active chronological history stream of notifications for a user profile.
-  Preloads the interaction actor to guarantee single-pass database speeds .
   """
-  def list_user_notifications(user_id, params \\ %{}) do
+  def list_user_notifications(user_id, params \\ %{}, opts \\ []) do
     limit = Map.get(params, "limit", 20)
     cursor = Map.get(params, "cursor")
 
     base_query =
-      from(n in Notification,
-        where: n.user_id == ^user_id,
-        # CRITICAL: Grabs user profiles in one pass to avoid N+1 traps
-        preload: [:actor]
-      )
+      Notification
+      |> scope_notification_context(user_id, opts)
+      |> preload([:actor])
 
     query =
       if cursor,
@@ -280,6 +277,20 @@ defmodule Kollective.Notifications.Notifications do
     |> order_by([n], desc: n.id)
     |> limit(^limit)
     |> Repo.all()
+  end
+
+  defp get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)
+  defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key) || Map.get(opts, to_string(key))
+  defp get_opt(_opts, _key), do: nil
+
+  defp scope_notification_context(query, user_id, opts) do
+    case get_opt(opts, :organization_id) do
+      nil ->
+        from(n in query, where: n.user_id == ^user_id and is_nil(n.organization_id))
+
+      org_id ->
+        from(n in query, where: n.organization_id == ^org_id or (n.user_id == ^org_id and is_nil(n.organization_id)))
+    end
   end
 
   # ─── ASYNC ENQUEUE CONTROLLERS (Offloads work away from the Web Thread) ───

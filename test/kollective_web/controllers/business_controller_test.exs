@@ -619,4 +619,196 @@ defmodule KollectiveWeb.BusinessControllerTest do
       assert response["message"] =~ "lack privileges to delete"
     end
   end
+
+  describe "regression: business location defaulting and discovery" do
+    test "business creation sets location from creator user coordinates when coordinates are omitted", %{
+      conn: conn,
+      user: user
+    } do
+      user =
+        user
+        |> Ecto.Changeset.change(%{location: "POINT(-97.7431 30.2672)"})
+        |> Repo.update!()
+
+      conn = assign(conn, :current_user, user)
+
+      params = %{
+        "business" => %{
+          "name" => "Austin Local Workshop Co-op",
+          "category" => "manufacturing",
+          "sub_category" => "metal_woodworking",
+          "legal_structure" => "Worker-Owned Co-op",
+          "description" => "A community manufacturing and woodworking workshop.",
+          "address" => "123 Workshop Lane",
+          "city" => "Austin",
+          "state" => "TX",
+          "zip" => "78701",
+          "phone" => "512-555-0199",
+          "email" => "workshop@austincoop.org"
+        }
+      }
+
+      response =
+        conn
+        |> post(~p"/api/v1/businesses", params)
+        |> json_response(201)
+
+      assert response["status"] == "success"
+      biz_id = response["data"]["id"]
+
+      created = Repo.get!(Kollective.Businesses.Business, biz_id)
+      assert created.location != nil
+      assert created.location.coordinates == {-97.7431, 30.2672}
+
+      # Creator can discover their newly created pending business
+      list_res =
+        conn
+        |> get(~p"/api/v1/businesses?radius_miles=10&latitude=30.2672&longitude=-97.7431")
+        |> json_response(200)
+
+      assert list_res["status"] == "success"
+      names = Enum.map(list_res["data"], & &1["name"])
+      assert "Austin Local Workshop Co-op" in names
+    end
+  end
+
+  describe "business media presign and image management" do
+    setup %{user: user} do
+      business = insert(:business, user: user)
+      {:ok, business: business}
+    end
+
+    test "GET /api/v1/businesses/media/presign returns presigned ticket", %{conn: conn} do
+      response =
+        conn
+        |> get(~p"/api/v1/businesses/media/presign", %{"filename" => "storefront.jpg", "content_type" => "image/jpeg"})
+        |> json_response(200)
+
+      assert response["status"] == "success"
+      assert is_binary(response["upload_url"])
+      assert is_binary(response["final_asset_url"])
+      assert response["final_asset_url"] =~ "business_"
+      assert String.ends_with?(response["final_asset_url"], ".jpg")
+    end
+
+    test "POST /api/v1/businesses/:id/images adds a gallery image to business", %{conn: conn, business: business} do
+      image_url = "https://cdn.example.com/gallery_1.jpg"
+
+      response =
+        conn
+        |> post(~p"/api/v1/businesses/#{business.id}/images", %{"image_url" => image_url})
+        |> json_response(200)
+
+      assert response["status"] == "success"
+      assert image_url in response["data"]["images"]
+      assert image_url in response["data"]["gallery"]
+    end
+
+    test "POST /api/v1/businesses/:id/images rejects non-owner with 403", %{conn: conn} do
+      other_user = insert(:user)
+      other_business = insert(:business, user: other_user)
+
+      response =
+        conn
+        |> post(~p"/api/v1/businesses/#{other_business.id}/images", %{"image_url" => "https://cdn.example.com/hack.jpg"})
+        |> json_response(403)
+
+      assert response["error"] =~ "not the registered operator"
+    end
+
+    test "DELETE /api/v1/businesses/:id/images removes a gallery image from business", %{conn: conn, business: business} do
+      image_url = "https://cdn.example.com/gallery_to_remove.jpg"
+
+      # First add it
+      conn |> post(~p"/api/v1/businesses/#{business.id}/images", %{"image_url" => image_url}) |> json_response(200)
+
+      # Now delete it
+      response =
+        conn
+        |> delete(~p"/api/v1/businesses/#{business.id}/images", %{"image_url" => image_url})
+        |> json_response(200)
+
+      assert response["status"] == "success"
+      refute image_url in response["data"]["images"]
+    end
+
+    test "PATCH /api/v1/businesses/:id updates business details and gallery images", %{conn: conn, business: business} do
+      patch_params = %{
+        "business" => %{
+          "name" => "Austin Co-op Renamed",
+          "description" => "Updated description for the co-op storefront.",
+          "phone" => "512-555-9999",
+          "images" => ["https://cdn.example.com/pic1.jpg", "https://cdn.example.com/pic2.jpg"]
+        }
+      }
+
+      response =
+        conn
+        |> patch(~p"/api/v1/businesses/#{business.id}", patch_params)
+        |> json_response(200)
+
+      assert response["status"] == "success"
+      assert response["data"]["name"] == "Austin Co-op Renamed"
+      assert response["data"]["description"] == "Updated description for the co-op storefront."
+      assert response["data"]["phone"] == "512-555-9999"
+      assert "https://cdn.example.com/pic1.jpg" in response["data"]["images"]
+      assert "https://cdn.example.com/pic2.jpg" in response["data"]["images"]
+      assert response["data"]["user_id"] == to_string(business.user_id)
+    end
+
+    test "PATCH /api/v1/business_proposals/:id updates proposal details and image", %{conn: conn, user: user} do
+      proposal = insert(:business_proposal, user: user)
+
+      patch_params = %{
+        "proposal" => %{
+          "title" => "Solar Grid Austin Updated",
+          "description" => "Expanded distributed solar battery microgrid.",
+          "category" => "sustainable_energy",
+          "fundingGoal" => 120_000,
+          "minInvest" => 250,
+          "maxInvest" => 15_000,
+          "image" => "https://cdn.example.com/solar_grid.jpg"
+        }
+      }
+
+      response =
+        conn
+        |> patch(~p"/api/v1/business_proposals/#{proposal.id}", patch_params)
+        |> json_response(200)
+
+      assert response["status"] == "success"
+      assert response["data"]["title"] == "Solar Grid Austin Updated"
+      assert response["data"]["description"] == "Expanded distributed solar battery microgrid."
+      assert response["data"]["fundingGoal"] == 120_000
+      assert response["data"]["image"] == "https://cdn.example.com/solar_grid.jpg"
+      assert response["data"]["profile_image_url"] == "https://cdn.example.com/solar_grid.jpg"
+      assert response["data"]["user_id"] == to_string(user.id)
+    end
+
+    test "PATCH /api/v1/business_proposals/:id rejects non-owner with 403", %{conn: conn} do
+      other_user = insert(:user)
+      proposal = insert(:business_proposal, user: other_user)
+
+      response =
+        conn
+        |> patch(~p"/api/v1/business_proposals/#{proposal.id}", %{"proposal" => %{"title" => "Hacked Proposal"}})
+        |> json_response(403)
+
+      assert response["status"] == "error"
+      assert response["message"] =~ "not authorized"
+    end
+
+    test "GET /api/v1/business_proposals/media/presign returns presigned ticket", %{conn: conn} do
+      response =
+        conn
+        |> get(~p"/api/v1/business_proposals/media/presign", %{"filename" => "proposal_banner.png", "content_type" => "image/png"})
+        |> json_response(200)
+
+      assert response["status"] == "success"
+      assert is_binary(response["upload_url"])
+      assert is_binary(response["final_asset_url"])
+      assert response["final_asset_url"] =~ "business_"
+      assert String.ends_with?(response["final_asset_url"], ".png")
+    end
+  end
 end

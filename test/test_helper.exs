@@ -1,3 +1,15 @@
+if Mix.env() != :test do
+  raise """
+  mix test must be run in MIX_ENV=test, but the current environment is MIX_ENV=#{Mix.env()}.
+
+  In Windows PowerShell, your terminal session likely has $env:MIX_ENV set to "#{Mix.env()}".
+  To fix this in your PowerShell session, reset it before running mix test:
+      Remove-Item Env:\\MIX_ENV
+  or:
+      $env:MIX_ENV = "test"
+  """
+end
+
 # 1. Force your application supervisor tree (and Kollective.Repo) to start first
 {:ok, _} = Application.ensure_all_started(:kollective)
 

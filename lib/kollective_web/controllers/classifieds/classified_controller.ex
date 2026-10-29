@@ -16,6 +16,24 @@ defmodule KollectiveWeb.ClassifiedController do
       conn.assigns[:current_user] ||
         (conn.assigns[:current_scope] && conn.assigns.current_scope.user)
 
+    org_id =
+      conn.assigns[:current_org_id] ||
+        (conn.assigns[:current_organization] && conn.assigns[:current_organization].id)
+
+    params =
+      cond do
+        Map.has_key?(params, "context") ->
+          params
+
+        conn.assigns[:account_type] in [:organization, "organization"] and not is_nil(org_id) ->
+          params
+          |> Map.put("context", "organization")
+          |> Map.put("organization_id", to_string(org_id))
+
+        true ->
+          params
+      end
+
     classifieds = Classifieds.list_classifieds(params, user)
     json(conn, ClassifiedJSON.index(%{classifieds: classifieds}))
   end
@@ -51,7 +69,24 @@ defmodule KollectiveWeb.ClassifiedController do
       |> put_status(:unauthorized)
       |> json(%{error: "unauthorized", message: "You must log in to post an ad."})
     else
-      classified_params = Map.get(params, "classified", params)
+      classified_params =
+        params
+        |> Map.get("classified", params)
+        |> Map.put_new("email", user.email)
+
+      org_id =
+        conn.assigns[:current_org_id] ||
+          (conn.assigns[:current_organization] && conn.assigns[:current_organization].id) ||
+          (conn.assigns[:account_type] in [:organization, "organization"] && conn.assigns[:active_account_id])
+
+      classified_params =
+        cond do
+          org_id && org_id not in ["personal", "usr-1", ""] ->
+            Map.put(classified_params, "organization_id", to_string(org_id))
+
+          true ->
+            classified_params
+        end
 
       case Classifieds.create_classified(user, classified_params) do
         {:ok, classified} ->
@@ -60,7 +95,7 @@ defmodule KollectiveWeb.ClassifiedController do
           conn
           |> put_status(:created)
           # Merge both top-level keys for React's direct response unpacking and data wrapper
-          |> json(Map.merge(rendered, %{status: "success", data: rendered}))
+          |> json(Map.merge(rendered, %{status: "success", data: rendered, classified: rendered}))
 
         {:error, changeset} ->
           conn

@@ -2,6 +2,8 @@ defmodule KollectiveWeb.ConversationChannel do
   import Ecto.Query
 
   use KollectiveWeb, :channel
+  require Logger
+
   alias Kollective.Chats.Chats
   alias Kollective.Repo
   alias Kollective.Chats.Participant
@@ -15,34 +17,6 @@ defmodule KollectiveWeb.ConversationChannel do
       {:ok, assign(socket, :conversation_id, conversation_id)}
     else
       {:error, %{reason: "unauthorized"}}
-    end
-  end
-
-  # @impl true
-  def handle_inX("send_direct_message", payload, socket) do
-    conversation_id = socket.assigns.conversation_id
-    user_id = socket.assigns.user_id
-    text = payload["text"] || payload["content"] || ""
-    nonce = payload["nonce"]
-
-    msg_params = %{
-      "encrypted_content" => text,
-      "text" => text,
-      "content" => text
-    }
-
-    case Chats.create_message_with_attachment(user_id, conversation_id, msg_params) do
-      {:ok, %{message: message}} ->
-        base_payload = KollectiveWeb.MessageJSON.broadcast_data(message)
-        final_payload = if nonce, do: Map.put(base_payload, :nonce, nonce), else: base_payload
-
-        # Broadcast live to all users active in the conversation topic
-        broadcast!(socket, "new_message", final_payload)
-
-        {:reply, {:ok, final_payload}, socket}
-
-      {:error, _failed_op, _changeset, _} ->
-        {:reply, {:error, %{reason: "Failed to persist message"}}, socket}
     end
   end
 
@@ -68,24 +42,64 @@ defmodule KollectiveWeb.ConversationChannel do
   end
 
   # ==========================================
-  # 📣 CLAUSE 2: Direct Message Core Ingress (Fully Aligned)
+  # ⚡ CLAUSE 2: Real-Time Delivery Receipts (Double Checkmarks)
   # ==========================================
-  # THE CRITICAL REAL-TIME GAP FIX:
+  @impl true
+  def handle_in("mark_delivered", payload, socket) do
+    conversation_id = socket.assigns.conversation_id
+    user_id = socket.assigns.user_id
+    msg_ids = Map.get(payload, "message_ids") || List.wrap(Map.get(payload, "message_id", []))
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    # ⚡ Update the caller participant's last_delivered_at timestamp
+    Chats.mark_as_delivered(conversation_id, user_id)
+
+    # Broadcast delivery confirmations down the channel loop so senders can render gray check icons
+    broadcast!(socket, "delivery_receipt_bump", %{
+      user_id: to_string(user_id),
+      conversation_id: to_string(conversation_id),
+      message_ids: msg_ids,
+      delivered_at: DateTime.to_iso8601(now)
+    })
+
+    {:reply, :ok, socket}
+  end
+
+  # ==========================================
+  # 💬 CLAUSE 3: Typing Status Heartbeat
+  # ==========================================
+  @impl true
+  def handle_in("typing_heartbeat", payload, socket) do
+    user_id = socket.assigns.user_id
+    status = Map.get(payload, "is_typing", false)
+    username = (socket.assigns[:user] && socket.assigns[:user].username) || "Someone"
+
+    broadcast_from!(socket, "typing_receipt_broadcast", %{
+      user_id: to_string(user_id),
+      username: username,
+      is_typing: status
+    })
+
+    {:noreply, socket}
+  end
+
+  # ==========================================
+  # 📣 CLAUSE 4: Direct Message Core Ingress (Fully Aligned)
+  # ==========================================
   # Captures incoming WebSocket messages, commits them to the database transaction,
   # and broadcasts them to BOTH the active window AND the recipient's background notification line!
   @impl true
-  def handle_in("send_direct_message", %{"text" => text_payload} = params, socket) do
+  def handle_in("send_direct_message", params, socket) do
     sender_id = socket.assigns.user_id
     conv_id = socket.assigns.conversation_id
     client_nonce = Map.get(params, "nonce")
+    text_payload = Map.get(params, "text") || Map.get(params, "content", "")
 
-    # This keeps your storage parameters intact for seamless text-routing right now
     msg_params = %{
       "encrypted_content" => text_payload,
       "text" => text_payload
     }
 
-    # Corrected the evaluation target module call string pathway signature
     case Chats.create_message_with_attachment(sender_id, conv_id, msg_params) do
       {:ok, %{message: message}} ->
         room_payload = KollectiveWeb.MessageJSON.broadcast_data(message)
@@ -104,7 +118,7 @@ defmodule KollectiveWeb.ConversationChannel do
   end
 
   # ==========================================
-  # 🗑️ CLAUSE 3: Real-Time Message Deletion
+  # 🗑️ CLAUSE 5: Real-Time Message Deletion
   # ==========================================
   @impl true
   def handle_in("delete_message", %{"message_id" => msg_id}, socket) do
@@ -134,6 +148,18 @@ defmodule KollectiveWeb.ConversationChannel do
           {:reply, {:error, %{reason: "unauthorized_ownership_tier"}}, socket}
         end
     end
+  end
+
+  # ==========================================
+  # 🛡️ FALLBACK: Catch unhandled events to prevent GenServer process crashes
+  # ==========================================
+  @impl true
+  def handle_in(event, payload, socket) do
+    Logger.debug(
+      "Unhandled event in ConversationChannel: #{inspect(event)} with payload: #{inspect(payload)}"
+    )
+
+    {:noreply, socket}
   end
 
   # --- Private Real-Time Background Notification Triggers ---

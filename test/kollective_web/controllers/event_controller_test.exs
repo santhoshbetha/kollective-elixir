@@ -131,7 +131,7 @@ defmodule KollectiveWeb.EventControllerTest do
         "description" => "Building decentralized tech for community resilience.",
         "format" => "In-Person",
         "category" => "Technology",
-        "date" => "Jun 20, 2026",
+        "date" => "Dec 20, 2026",
         "time" => "14:00 - 17:00",
         "location" => "Austin Public Library, 710 W Cesar Chavez St",
         "capacity" => 150,
@@ -149,6 +149,40 @@ defmodule KollectiveWeb.EventControllerTest do
       assert data["image"] == "https://example.com/cover.jpg"
       assert data["location_name"] == "Austin Public Library, 710 W Cesar Chavez St"
       assert data["start_time"] != nil
+    end
+
+    test "returns 422 when end time is before start time", %{conn: conn} do
+      now = DateTime.utc_now() |> DateTime.add(86400, :second)
+
+      params = %{
+        "title" => "Invalid Event Times",
+        "description" => "Test description for timing validation.",
+        "category" => "Technology",
+        "participation_format" => "in_person",
+        "location" => "100 Congress Ave",
+        "start_time" => now |> DateTime.add(7200, :second) |> DateTime.to_iso8601(),
+        "end_time" => now |> DateTime.add(3600, :second) |> DateTime.to_iso8601()
+      }
+
+      response = conn |> post(~p"/api/v1/events", params) |> json_response(422)
+      assert response["errors"]["end_time"] != nil
+    end
+
+    test "returns 422 when end time or date is in the past", %{conn: conn} do
+      past = DateTime.utc_now() |> DateTime.add(-86400, :second)
+
+      params = %{
+        "title" => "Past Event",
+        "description" => "Test description for past date validation.",
+        "category" => "Technology",
+        "participation_format" => "in_person",
+        "location" => "100 Congress Ave",
+        "start_time" => past |> DateTime.add(-3600, :second) |> DateTime.to_iso8601(),
+        "end_time" => past |> DateTime.to_iso8601()
+      }
+
+      response = conn |> post(~p"/api/v1/events", params) |> json_response(422)
+      assert response["errors"]["end_time"] != nil
     end
 
     test "returns 422 on first hard-ban strike", %{conn: conn} do
@@ -200,6 +234,8 @@ defmodule KollectiveWeb.EventControllerTest do
           title: "Original Title",
           start_time: start_time,
           end_time: DateTime.add(start_time, 3600, :second),
+          location_name: "Community Center Main Hall",
+          street: "123 Civic Plaza",
           event_status: "published"
         )
 
@@ -255,6 +291,63 @@ defmodule KollectiveWeb.EventControllerTest do
 
       response = conn |> put(~p"/api/v1/events/#{event.id}", params) |> json_response(422)
       assert response["error"] == "Your edits contain prohibited language."
+    end
+
+    test "allows the owner to update event details with flat params and patch verb", %{
+      conn: conn,
+      event: event
+    } do
+      params = %{
+        "title" => "Patched Event Title",
+        "category" => "Technology"
+      }
+
+      response = conn |> patch(~p"/api/v1/events/#{event.id}", params) |> json_response(200)
+
+      assert response["status"] == "success"
+      assert response["data"]["title"] == "Patched Event Title"
+      assert response["data"]["category"] == "Technology"
+      assert response["data"]["created_by"] == event.created_by
+    end
+
+    test "allows admin to update an event owned by another user", %{conn: conn} do
+      admin_user = insert(:user, is_admin: true)
+      admin_conn =
+        conn
+        |> assign(:current_user, admin_user)
+        |> assign(:current_scope, %{user: admin_user})
+
+      other_user = insert(:user)
+      start_time = DateTime.utc_now() |> DateTime.add(1800, :second)
+      other_event =
+        insert(:event,
+          created_by: other_user.id,
+          user: other_user,
+          title: "Before Admin",
+          start_time: start_time,
+          end_time: DateTime.add(start_time, 3600, :second),
+          location_name: "Civic Center",
+          street: "456 Civic Blvd"
+        )
+
+      params = %{"title" => "Admin Supervised Event"}
+
+      response =
+        admin_conn
+        |> put(~p"/api/v1/events/#{other_event.id}", params)
+        |> json_response(200)
+
+      assert response["status"] == "success"
+      assert response["data"]["title"] == "Admin Supervised Event"
+    end
+
+    test "returns 404 if event does not exist", %{conn: conn} do
+      response =
+        conn
+        |> put(~p"/api/v1/events/999999999", %{"title" => "Ghost Event"})
+        |> json_response(404)
+
+      assert response["error"] == "Event not found."
     end
   end
 
@@ -387,6 +480,77 @@ defmodule KollectiveWeb.EventControllerTest do
       response = conn |> get(~p"/api/v1/events/nearby") |> json_response(200)
       ids = Enum.map(response["data"], & &1["id"])
       assert event.id in ids
+    end
+  end
+
+  describe "POST /api/v1/events/filter_by_date" do
+    test "filters and orders events by distance ascending", %{conn: conn} do
+      user = insert(:user, location: "POINT(-97.7431 30.2672)")
+
+      austin_event =
+        insert(:event,
+          title: "Austin Event Filter",
+          latitude: 30.2660,
+          longitude: -97.7440,
+          location: %Geo.Point{coordinates: {-97.7440, 30.2660}, srid: 4326},
+          event_status: "published",
+          user: user
+        )
+
+      round_rock_event =
+        insert(:event,
+          title: "Round Rock Event Filter",
+          latitude: 30.5083,
+          longitude: -97.6789,
+          location: %Geo.Point{coordinates: {-97.6789, 30.5083}, srid: 4326},
+          event_status: "published",
+          user: user
+        )
+
+      san_antonio_event =
+        insert(:event,
+          title: "San Antonio Event Filter",
+          latitude: 29.4260,
+          longitude: -98.4861,
+          location: %Geo.Point{coordinates: {-98.4861, 29.4260}, srid: 4326},
+          event_status: "published",
+          user: user
+        )
+
+      conn =
+        conn
+        |> assign(:current_user, user)
+        |> assign(:current_scope, %{user: user})
+
+      # 5 miles -> only Austin
+      res_5 =
+        conn
+        |> post(~p"/api/v1/events/filter_by_date", %{"distance" => "5", "latitude" => 30.2672, "longitude" => -97.7431})
+        |> json_response(200)
+
+      ids_5 = Enum.map(res_5["data"], & &1["id"])
+      assert austin_event.id in ids_5
+      refute round_rock_event.id in ids_5
+      refute san_antonio_event.id in ids_5
+
+      # 25 miles -> Austin and Round Rock, ordered by distance ascending
+      res_25 =
+        conn
+        |> post(~p"/api/v1/events/filter_by_date", %{"distance" => "25", "latitude" => 30.2672, "longitude" => -97.7431})
+        |> json_response(200)
+
+      ids_25 = Enum.map(res_25["data"], & &1["id"])
+      assert ids_25 == [austin_event.id, round_rock_event.id]
+      refute san_antonio_event.id in ids_25
+
+      # 100 miles -> Austin, Round Rock, San Antonio ordered by distance ascending
+      res_100 =
+        conn
+        |> post(~p"/api/v1/events/filter_by_date", %{"distance" => "100", "latitude" => 30.2672, "longitude" => -97.7431})
+        |> json_response(200)
+
+      ids_100 = Enum.map(res_100["data"], & &1["id"])
+      assert ids_100 == [austin_event.id, round_rock_event.id, san_antonio_event.id]
     end
   end
 end

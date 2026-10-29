@@ -1,5 +1,6 @@
 defmodule KollectiveWeb.ChatGroupChannel do
   use KollectiveWeb, :channel
+  require Logger
   import Ecto.Query
 
   alias Kollective.Repo
@@ -105,42 +106,7 @@ defmodule KollectiveWeb.ChatGroupChannel do
     {:noreply, socket}
   end
 
-  # ==========================================
-  # 🗑️ CLAUSE 3: Real-Time Message Deletion
-  # ==========================================
-  @impl true
-  def handle_inX("delete_message", %{"message_id" => msg_id}, socket) do
-    user_id = socket.assigns.user_id
-    group_id = socket.assigns.group_id
 
-    # 🔒 ACCESS VALIDATION SHIELD: Ensure the user deleting the message is actually the author
-    # This prevents malicious message tampering over open network lanes
-    case Kollective.Chats.Chats.get_message(msg_id) do
-      nil ->
-        {:reply, {:error, %{reason: "message_not_found"}}, socket}
-
-      message ->
-        if to_string(message.sender_id) == to_string(user_id) do
-          # Execute an atomic soft-delete write operation in your database schema registers
-          case Kollective.Chats.Chats.soft_delete_message(message) do
-            {:ok, updated_msg} ->
-              # Broadcast the eviction notice downstream to all active client windows
-              broadcast!(socket, "message_deleted", %{
-                "message_id" => to_string(updated_msg.id),
-                "conversation_id" => to_string(group_id),
-                "deleted_text" => "🚫 This message was deleted by the sender."
-              })
-
-              {:reply, {:ok, %{status: "success"}}, socket}
-
-            {:error, _changeset} ->
-              {:reply, {:error, %{reason: "database_mutation_failed"}}, socket}
-          end
-        else
-          {:reply, {:error, %{reason: "unauthorized_ownership_tier"}}, socket}
-        end
-    end
-  end
 
   # ==========================================
   # 🗑️ CLAUSE 3 REFACTORED: Real-Time Message Deletion with Moderator Override
@@ -213,37 +179,14 @@ defmodule KollectiveWeb.ChatGroupChannel do
     end
   end
 
-  def handle_in("new_group_comment", %{"text" => text_payload} = params, socket) do
-    sender_user = socket.assigns.current_user_object_cache
 
-    # 🕵️‍♂️ RUN IN-MEMORY TEXT COMPLIANCE SWEEP BEFORE COMMITTING TO DISK STORAGE
-    case Kollective.Moderation.TextInterceptorPlug.scan_and_intercept_content(
-           text_payload,
-           sender_user,
-           socket.assigns.group_id
-         ) do
-      {:flagged_violation, incident_id} ->
-        # Instantly bounce an extraction error notice packet directly back to the sender browser
-        {:reply,
-         {:error, %{reason: "content_policy_violation_intercepted", case_file_id: incident_id}},
-         socket}
 
-      :clean_pass ->
-        # Continue with standard message creation logic pipelines normally completely...
-        {:reply, :ok, socket}
-    end
-
-    # 🛑 EVALUATE DISTRIBUTED TOKEN BUCKETS BEFORE EXECUTING TRANSACTIONS
-    case Kollective.Moderation.RateLimiterPlug.check_ingress_throttle(sender_user.id) do
-      {:throttled_lockout, cooldown_seconds} ->
-        # Bounce the message request and supply exact cool-down metric arrays back to React
-        {:reply,
-         {:error, %{reason: "request_throttled_lockout", retry_after_seconds: cooldown_seconds}},
-         socket}
-
-      :allow_ingress ->
-        # Proactive text filters scan loops and SQL creation actions continue below normally...
-        {:reply, :ok, socket}
-    end
+  # ==========================================
+  # 🛡️ FALLBACK: Catch unhandled events to prevent GenServer process crashes
+  # ==========================================
+  @impl true
+  def handle_in(event, payload, socket) do
+    Logger.debug("Unhandled event in ChatGroupChannel: #{inspect(event)} with payload: #{inspect(payload)}")
+    {:noreply, socket}
   end
 end

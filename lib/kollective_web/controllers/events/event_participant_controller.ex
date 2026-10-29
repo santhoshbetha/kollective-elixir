@@ -4,13 +4,21 @@ defmodule KollectiveWeb.EventParticipantController do
   alias Kollective.Accounts.Accounts
   alias Kollective.Events.Events
   alias KollectiveWeb.EventJSON
+  alias KollectiveWeb.Plugs.AuthorizeOrgSocialAction
+
+  plug AuthorizeOrgSocialAction when action in [:join, :rsvp, :leave]
 
   # POST /api/v1/kollective/events/:event_id/join
   def join(conn, %{"event_id" => event_id}) do
-    user = conn.assigns.current_user
+    actor =
+      if conn.assigns[:account_type] == :organization and conn.assigns[:current_organization] do
+        conn.assigns[:current_organization]
+      else
+        conn.assigns.current_user
+      end
 
-    case Events.join_event(user, event_id) do
-      {:ok, :joined} ->
+    case Events.join_event(actor, event_id) do
+        {:ok, :joined} ->
         conn
         |> put_status(:ok)
         |> json(%{
@@ -69,9 +77,14 @@ defmodule KollectiveWeb.EventParticipantController do
 
   # POST /api/v1/kollective/events/:event_id/leave
   def leave(conn, %{"event_id" => event_id}) do
-    user = conn.assigns.current_user
+    actor =
+      if conn.assigns[:account_type] == :organization and conn.assigns[:current_organization] do
+        conn.assigns[:current_organization]
+      else
+        conn.assigns.current_user
+      end
 
-    case Events.leave_event(user, event_id) do
+    case Events.leave_event(actor, event_id) do
       {:ok, _} ->
         conn
         |> put_status(:ok)
@@ -142,57 +155,87 @@ defmodule KollectiveWeb.EventParticipantController do
 
   # POST /api/v1/kollective/events/:event_id/rsvp
   # Expected payload parameter: %{"status" => "going"} or "maybe", "no", "interested"
-  def rsvp(conn, %{"event_id" => event_id} = params) do
-    user = conn.assigns.current_user
+  def rsvp(conn, params) do
+    actor =
+      if conn.assigns[:account_type] == :organization and conn.assigns[:current_organization] do
+        conn.assigns[:current_organization]
+      else
+        conn.assigns.current_user
+      end
+
+    event_id = params["event_id"] || params["id"] || params["action_id"]
     status = Map.get(params, "status", "interested")
 
-    case Events.rsvp_to_event(user, event_id, status) do
-      {:ok, code} when code in [:removed, "removed"] ->
-        conn
-        |> put_status(:ok)
-        |> json(%{
-          status: "success",
-          code: "removed",
-          isInterested: false,
-          isAttending: false,
-          message: "RSVP removed."
-        })
+    case Events.rsvp_to_event(actor, event_id, status) do
+        {:ok, code} when code in [:removed, "removed"] ->
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            status: "success",
+            code: "removed",
+            isInterested: false,
+            isAttending: false,
+            rsvp: "None",
+            user_rsvp_status: "None",
+            userStatus: "None",
+            message: "RSVP removed."
+          })
 
-      {:ok, {:ok, inner_code}} ->
-        code_str = to_string(inner_code)
-        is_interested = code_str == "interested"
-        is_attending = code_str in ["accepted", "joined"]
+        {:ok, {:ok, inner_code}} ->
+          code_str = to_string(inner_code) |> String.downcase()
+          is_interested = code_str == "interested"
+          is_attending = code_str in ["accepted", "joined", "going", "attending"]
 
-        conn
-        |> put_status(:ok)
-        |> json(%{
-          status: "success",
-          code: code_str,
-          isInterested: is_interested,
-          isAttending: is_attending,
-          message: "RSVP updated to: #{status}"
-        })
+          rsvp_status =
+            cond do
+              is_attending -> "Attending"
+              is_interested -> "Interested"
+              true -> "None"
+            end
 
-      {:ok, final_code} when is_atom(final_code) or is_binary(final_code) ->
-        code_str = to_string(final_code)
-        is_interested = code_str == "interested"
-        is_attending = code_str in ["accepted", "joined"]
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            status: "success",
+            code: code_str,
+            isInterested: is_interested,
+            isAttending: is_attending,
+            rsvp: rsvp_status,
+            user_rsvp_status: rsvp_status,
+            userStatus: rsvp_status,
+            message: "RSVP updated to: #{status}"
+          })
 
-        conn
-        |> put_status(:ok)
-        |> json(%{
-          status: "success",
-          code: code_str,
-          isInterested: is_interested,
-          isAttending: is_attending,
-          message: "RSVP updated to: #{status}"
-        })
+        {:ok, final_code} when is_atom(final_code) or is_binary(final_code) ->
+          code_str = to_string(final_code) |> String.downcase()
+          is_interested = code_str == "interested"
+          is_attending = code_str in ["accepted", "joined", "going", "attending"]
 
-      {:error, error_msg} ->
-        conn
-        |> put_status(:bad_request)
-        |> json(%{error: "rsvp_failed", message: error_msg})
-    end
+          rsvp_status =
+            cond do
+              is_attending -> "Attending"
+              is_interested -> "Interested"
+              true -> "None"
+            end
+
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            status: "success",
+            code: code_str,
+            isInterested: is_interested,
+            isAttending: is_attending,
+            rsvp: rsvp_status,
+            user_rsvp_status: rsvp_status,
+            userStatus: rsvp_status,
+            message: "RSVP updated to: #{status}"
+          })
+
+        {:error, error_msg} ->
+          conn
+          |> put_status(:bad_request)
+          |> json(%{error: "rsvp_failed", message: error_msg})
+      end
   end
 
   # ─── ACTION 1: LIST ACCEPTED PARTICIPANTS ROSTER ───

@@ -355,7 +355,9 @@ defmodule Kollective.Accounts.Accounts do
     token
   end
 
-  def generate_user_session_token(user) do
+  def generate_user_session_token(user, org_id \\ nil)
+
+  def generate_user_session_token(user, nil) do
     # 1. Generate the raw random bytes
     token = :crypto.strong_rand_bytes(32)
 
@@ -377,6 +379,76 @@ defmodule Kollective.Accounts.Accounts do
 
     # 5. Return the Base64 token to the test case
     encoded_token
+  end
+
+  def generate_user_session_token(user, org_id) do
+    generate_organization_session_token(user, org_id)
+  end
+
+  @doc """
+  Generates a new token for a specific user, scoped to an organization profile context.
+  Returns the raw token string to pass to the JSON client, while saving the hashed version.
+  """
+  def generate_organization_session_token(user, org_id) do
+    # 1. Create a 32-byte secure random binary token
+    token = :crypto.strong_rand_bytes(32)
+
+    # 2. Hash it with SHA-256 to match the database column values
+    hashed_token = :crypto.hash(:sha256, token)
+
+    # 3. Encode it to Base64 for the application/React client
+    encoded_token = Base.url_encode64(token, padding: false)
+
+    # 4. Context tracking the specific organization
+    context = "session:org:#{org_id}"
+
+    # 5. Insert the token record into the database table
+    Repo.insert!(%UserToken{
+      token: hashed_token,
+      context: context,
+      user_id: user.id,
+      authenticated_at: user.authenticated_at || DateTime.utc_now() |> DateTime.truncate(:second)
+    })
+
+    # 6. Return the Base64 token to the client
+    encoded_token
+  end
+
+  @doc """
+  Revokes all active session tokens (both personal and organization-scoped) for a user.
+  """
+  def revoke_user_session_tokens(user) do
+    from(t in UserToken,
+      where:
+        t.user_id == ^user.id and
+          (t.context == "session" or like(t.context, "session:org:%"))
+    )
+    |> Repo.delete_all()
+  end
+
+  @doc """
+  Looks up a user and extracts the organization ID out of the active token context.
+  """
+  def get_user_by_org_token(raw_token) do
+    case get_user_and_context_by_session_token(raw_token) do
+      {user, _inserted_at, "session:org:" <> org_id_str} ->
+        {:ok, user, org_id_str}
+
+      _ ->
+        {:error, :unauthenticated}
+    end
+  end
+
+  @doc """
+  Gets the user and context with the given signed session token.
+  """
+  def get_user_and_context_by_session_token(token) do
+    with {:ok, query} <- UserToken.verify_session_token_and_context_query(token),
+         result when not is_nil(result) <- Repo.one(query) do
+      result
+    else
+      _ -> nil
+    end
   end
 
   @doc """
@@ -528,7 +600,7 @@ defmodule Kollective.Accounts.Accounts do
 
     # 3. Target the correct hashed token row for deletion
     Repo.delete_all(
-      from(t in UserToken, where: t.token == ^hashed_token and t.context == "session")
+      from(t in UserToken, where: t.token == ^hashed_token)
     )
 
     :ok

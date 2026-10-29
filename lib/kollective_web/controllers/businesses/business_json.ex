@@ -45,14 +45,25 @@ defmodule KollectiveWeb.BusinessJSON do
     money_req = Map.get(funding, "money_required") || Map.get(funding, "fundingGoal") || 0
     min_inv = Map.get(funding, "minimum_amount") || Map.get(funding, "minInvest") || 0
     max_inv = Map.get(funding, "maximum_amount") || Map.get(funding, "maxInvest") || 0
+    is_processed = Map.get(proposal, :is_image_processed, false)
 
     %{
       id: to_string(proposal.id),
+      user_id: if(proposal.user_id, do: to_string(proposal.user_id), else: nil),
       name: proposal.name,
       title: proposal.name,
       description: proposal.description,
       category: proposal.category,
       sub_category: proposal.sub_category,
+      location: proposal.city || proposal.address || proposal.district_l1 || "Local District",
+      address: proposal.address,
+      city: proposal.city,
+      state: proposal.state,
+      image: proposal.profile_image_url,
+      profile_image_url: proposal.profile_image_url,
+      is_image_processed: is_processed,
+      tags: Map.get(meta, "tags") || Map.get(meta, "looking_for") || [],
+      looking_for: Map.get(meta, "looking_for") || Map.get(meta, "tags") || [],
       status: Map.get(funding, "status", "New"),
       fundingGoal: money_req,
       money_required: money_req,
@@ -65,7 +76,8 @@ defmodule KollectiveWeb.BusinessJSON do
       funding_data: funding,
       owner: serialize_owner(proposal),
       owner_name: serialize_owner_name(proposal),
-      ownerAvatar: serialize_owner_avatar(proposal)
+      ownerAvatar: serialize_owner_avatar(proposal),
+      owner_avatar: serialize_owner_avatar(proposal)
     }
   end
 
@@ -76,12 +88,16 @@ defmodule KollectiveWeb.BusinessJSON do
     min_inv = Map.get(funding, "minimum_amount") || Map.get(funding, "minInvest") || 0
     max_inv = Map.get(funding, "maximum_amount") || Map.get(funding, "maxInvest") || 0
     is_processed = Map.get(item, :is_image_processed, false)
+    coords = unpack_coordinates(item.location)
 
     %{
       id: to_string(item.id),
+      user_id: if(item.user_id, do: to_string(item.user_id), else: nil),
       name: item.name,
       title: item.name,
       description: item.description,
+      latitude: if(coords, do: coords.latitude, else: nil),
+      longitude: if(coords, do: coords.longitude, else: nil),
       category: item.category,
       sub_category: item.sub_category,
       type: item.type,
@@ -92,6 +108,8 @@ defmodule KollectiveWeb.BusinessJSON do
       reviewsCount: Map.get(meta, "reviews_count", 0),
       image: item.profile_image_url,
       profile_image_url: item.profile_image_url,
+      images: Map.get(meta, "images") || Map.get(meta, "gallery") || [],
+      gallery: Map.get(meta, "gallery") || Map.get(meta, "images") || [],
       # 🚀 ASYNC PRELOAD INTEGRATION: Injects the image optimization flag
       is_image_processed: is_processed,
       address: item.address,
@@ -156,6 +174,7 @@ defmodule KollectiveWeb.BusinessJSON do
 
     %{
       id: to_string(item.id),
+      user_id: if(item.user_id, do: to_string(item.user_id), else: nil),
       name: item.name,
       title: item.name,
       description: item.description,
@@ -174,6 +193,8 @@ defmodule KollectiveWeb.BusinessJSON do
       hours: Map.get(meta, "business_hours") || Map.get(meta, "hours", "9:00 AM - 5:00 PM"),
       image: item.profile_image_url,
       profile_image_url: item.profile_image_url,
+      images: Map.get(meta, "images") || Map.get(meta, "gallery") || [],
+      gallery: Map.get(meta, "gallery") || Map.get(meta, "images") || [],
       # 🚀 ASYNC PRELOAD INTEGRATION: Injects the image optimization flag
       is_image_processed: is_processed,
       rating: Map.get(meta, "rating", 5.0),
@@ -221,7 +242,8 @@ defmodule KollectiveWeb.BusinessJSON do
       owner: serialize_owner_name(item) || "community_member",
       owner_info: serialize_owner(item),
       owner_name: serialize_owner_name(item),
-      ownerAvatar: serialize_owner_avatar(item)
+      ownerAvatar: serialize_owner_avatar(item),
+      owner_avatar: serialize_owner_avatar(item)
     }
   end
 

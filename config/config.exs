@@ -7,6 +7,29 @@
 # General application configuration
 import Config
 
+for env_file <- [Path.expand("../.env", __DIR__), Path.expand("../../.env", __DIR__)] do
+  if File.exists?(env_file) do
+    File.read!(env_file)
+    |> String.split(["\r\n", "\n"], trim: true)
+    |> Enum.each(fn line ->
+      trimmed = String.trim(line)
+      if trimmed != "" and not String.starts_with?(trimmed, "#") do
+        case String.split(trimmed, "=", parts: 2) do
+          [k, v] ->
+            clean_k = String.trim(k)
+            clean_v = String.trim(v) |> String.trim("\"") |> String.trim("'")
+            if System.get_env(clean_k) in [nil, ""] do
+              System.put_env(clean_k, clean_v)
+            end
+
+          _ ->
+            :ok
+        end
+      end
+    end)
+  end
+end
+
 config :kollective, :scopes,
   user: [
     default: true,
@@ -31,20 +54,9 @@ config :kollective,
 
 config :kollective, :http_client, Kollective.HTTPClient.Impl
 
-config :libcluster,
-  topologies: [
-    kollective_mesh: [
-      # Gossip protocol automatically broadcasts heartbeat beacons across your local network [1.4]
-      strategy: Cluster.Strategy.Gossip,
-      config: [
-        port: 45892,
-        if_addr: {0, 0, 0, 0},
-        multicast_addr: {230, 1, 1, 251},
-        # Secrets matching token prevents un-verified foreign rogue nodes from joining your cluster
-        secret: "kollective_secure_mesh_handshake_salt_2026"
-      ]
-    ]
-  ]
+# Default libcluster topologies to empty. Environment-specific clustering is loaded in
+# config/dev.exs, config/runtime.exs, and disabled in config/test.exs to prevent UDP port conflicts (:eaddrinuse).
+config :libcluster, topologies: []
 
 # to ensure binary_id is used by default in all your schemas
 config :kollective, Kollective.Repo,

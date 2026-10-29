@@ -17,14 +17,19 @@ defmodule Kollective.Locations.GeoUtilities do
     lat = attrs["latitude"] || attrs[:latitude]
     lng = attrs["longitude"] || attrs[:longitude]
 
-    if lat && lng do
-      parsed_lat = if is_binary(lat), do: String.to_float(lat), else: lat
-      parsed_lng = if is_binary(lng), do: String.to_float(lng), else: lng
+    cond do
+      lat && lng ->
+        parsed_lat = if is_binary(lat), do: String.to_float(lat), else: lat
+        parsed_lng = if is_binary(lng), do: String.to_float(lng), else: lng
 
-      geo_point = %Geo.Point{coordinates: {parsed_lng, parsed_lat}, srid: 4326}
-      put_change(changeset, :location, geo_point)
-    else
-      changeset
+        geo_point = %Geo.Point{coordinates: {parsed_lng, parsed_lat}, srid: 4326}
+        put_change(changeset, :location, geo_point)
+
+      match?(%Geo.Point{}, attrs["location"] || attrs[:location]) ->
+        put_change(changeset, :location, attrs["location"] || attrs[:location])
+
+      true ->
+        changeset
     end
   end
 

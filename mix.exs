@@ -67,6 +67,7 @@ defmodule Kollective.MixProject do
       {:waffle_ecto, "~> 0.0.12"},
       {:ex_aws, "~> 2.0"},
       {:ex_aws_s3, "~> 2.0"},
+      {:sweet_xml, "~> 0.7"},
       {:geo_postgis, "~> 3.4"},
       {:geospatial, "~> 0.3.4"},
       {:hackney, "1.25.0", override: true},
@@ -102,8 +103,22 @@ defmodule Kollective.MixProject do
       setup: ["deps.get", "ecto.setup"],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
-      test: ["ecto.create --quiet", "test"],
+      test: [&ensure_test_env/1, "ecto.create --quiet", "test"],
       precommit: ["compile --warning-as-errors", "deps.unlock --unused", "format", "test"]
     ]
+  end
+
+  defp ensure_test_env(_) do
+    if Mix.env() != :test do
+      Mix.raise("""
+      mix test must be run in MIX_ENV=test, but current environment is MIX_ENV=#{Mix.env()}.
+
+      In Windows PowerShell, your session has $env:MIX_ENV set to "#{Mix.env()}".
+      Run this in PowerShell to reset it:
+          Remove-Item Env:\\MIX_ENV
+      or:
+          $env:MIX_ENV = "test"
+      """)
+    end
   end
 end

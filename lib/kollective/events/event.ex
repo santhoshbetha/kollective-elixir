@@ -271,6 +271,24 @@ defmodule Kollective.Events.Event do
   end
 
   defp normalize_location(attrs) do
+    attrs =
+      case attrs["meetingLink"] || attrs[:meetingLink] do
+        link when is_binary(link) and link != "" ->
+          maybe_put_str(attrs, "location_url", link)
+
+        _ ->
+          attrs
+      end
+
+    attrs =
+      case attrs["venue"] || attrs[:venue] do
+        v when is_binary(v) and v != "" ->
+          maybe_put_str(attrs, "location_name", v)
+
+        _ ->
+          attrs
+      end
+
     loc_val = attrs["location"] || attrs[:location]
 
     if is_binary(loc_val) and String.trim(loc_val) != "" do
@@ -395,9 +413,13 @@ defmodule Kollective.Events.Event do
       attrs["endTime"] || attrs[:endTime] ||
         extract_end_from_time_range(attrs["time"] || attrs[:time])
 
-    case combine_date_time_to_utc(date_str, time_str) do
-      {:ok, dt} -> Map.put(attrs, "end_time", dt)
-      _ -> attrs
+    if is_binary(date_str) and is_binary(time_str) and String.trim(time_str) != "" do
+      case combine_date_time_to_utc(date_str, time_str) do
+        {:ok, dt} -> Map.put(attrs, "end_time", dt)
+        _ -> attrs
+      end
+    else
+      attrs
     end
   end
 
@@ -542,6 +564,7 @@ defmodule Kollective.Events.Event do
   defp validate_times(changeset) do
     start_time = get_field(changeset, :start_time)
     end_time = get_field(changeset, :end_time)
+    now = DateTime.utc_now()
 
     cond do
       is_nil(start_time) and is_nil(end_time) ->
@@ -551,10 +574,17 @@ defmodule Kollective.Events.Event do
         add_error(changeset, :start_time, "must be set when end_time is provided")
 
       is_nil(end_time) ->
-        changeset
+        if DateTime.compare(start_time, now) == :lt do
+          add_error(changeset, :start_time, "cannot be in the past")
+        else
+          changeset
+        end
 
-      DateTime.compare(start_time, end_time) == :gt ->
+      DateTime.compare(start_time, end_time) in [:gt, :eq] ->
         add_error(changeset, :end_time, "must be after start_time")
+
+      DateTime.compare(end_time, now) == :lt ->
+        add_error(changeset, :end_time, "cannot be in the past")
 
       true ->
         changeset
@@ -567,7 +597,7 @@ defmodule Kollective.Events.Event do
         is_nil(value) || value == "" || is_struct(value) || is_map(value) ->
           []
 
-        is_binary(value) and String.starts_with?(value, ["http://", "https://"]) ->
+        is_binary(value) and String.starts_with?(value, ["http://", "https://", "/"]) ->
           []
 
         true ->
@@ -627,7 +657,8 @@ defmodule Kollective.Events.Event do
 
     case banner do
       url when is_binary(url) ->
-        put_change(changeset, :banner_url, %{file_name: url, updated_at: nil})
+        safe_url = if String.length(url) > 255, do: String.slice(url, 0, 255), else: url
+        put_change(changeset, :banner_url, %{file_name: safe_url, updated_at: nil})
 
       _ ->
         cast_attachments(changeset, attrs, [:banner_url])

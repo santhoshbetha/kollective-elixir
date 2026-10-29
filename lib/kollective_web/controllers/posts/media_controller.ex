@@ -15,26 +15,55 @@ defmodule KollectiveWeb.MediaController do
   # Expected params: ?filename=vacation.png&content_type=image/png
   def presign(conn, %{"filename" => filename, "content_type" => content_type}) do
     user = conn.assigns.current_user
-    config = s3_config()
 
     cleaned_ext = Path.extname(filename) |> String.downcase()
-    unique_name = "media_#{System.system_time(:second)}#{cleaned_ext}"
-    file_key = "attachments/#{user.id}/#{unique_name}"
+    unique_name = "media_#{System.system_time(:second)}_#{System.unique_integer([:positive])}#{cleaned_ext}"
+    relative_path = "attachments/#{user.id}/#{unique_name}"
+    file_key = Kollective.Storage.object_key(relative_path)
 
-    {:ok, upload_url} =
-      @s3_engine.presigned_url(config, :put, Kollective.Storage.bucket_name(), file_key,
-        expires_in: 900,
-        query_params: [{"Content-Type", content_type}]
-      )
+    upload_url =
+      cond do
+        Mix.env() == :e2e ->
+          "/media/#{file_key}"
+
+        @s3_engine != ExAws.S3 ->
+          case @s3_engine.presigned_url(s3_config(), :put, Kollective.Storage.bucket_name(), file_key,
+                 expires_in: 900,
+                 query_params: [{"Content-Type", content_type}]
+               ) do
+            {:ok, url} -> url
+            _ -> "/media/#{file_key}"
+          end
+
+        has_r2_credentials?() ->
+          case @s3_engine.presigned_url(s3_config(), :put, Kollective.Storage.bucket_name(), file_key,
+                 expires_in: 900,
+                 query_params: [{"Content-Type", content_type}]
+               ) do
+            {:ok, url} -> url
+            _ -> "/media/#{file_key}"
+          end
+
+        true ->
+          "/media/#{file_key}"
+      end
+
+    final_asset_url = "#{Kollective.Storage.cdn_domain()}/#{file_key}"
 
     conn
     |> put_status(:ok)
     |> json(
       MediaJSON.presign(%{
         upload_url: upload_url,
-        final_asset_url: "#{Kollective.Storage.cdn_domain()}/#{file_key}"
+        final_asset_url: final_asset_url
       })
     )
+  end
+
+  defp has_r2_credentials? do
+    key = System.get_env("R2_ACCESS_KEY_ID")
+    secret = System.get_env("R2_SECRET_ACCESS_KEY")
+    is_binary(key) and key != "" and is_binary(secret) and secret != ""
   end
 
   defp s3_config do

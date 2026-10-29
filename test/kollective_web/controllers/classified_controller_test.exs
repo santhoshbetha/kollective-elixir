@@ -370,4 +370,121 @@ defmodule KollectiveWeb.ClassifiedControllerTest do
       assert conn.status == 403
     end
   end
+
+  describe "Organization context and role validation in classifieds" do
+    setup %{user: user, valid_params: valid_params} do
+      org =
+        Repo.insert!(%User{
+          email: "org_#{System.unique_integer([:positive])}@test.com",
+          username: "org_#{System.unique_integer([:positive])}",
+          display_name: "Community Newspaper",
+          type: :organization
+        })
+
+      # user is admin of org
+      Repo.insert!(%Kollective.Accounts.OrganizationMembership{
+        user_id: user.id,
+        organization_id: org.id,
+        role: :admin,
+        status: :approved
+      })
+
+      non_admin_user =
+        Repo.insert!(%User{
+          email: "contributor_#{System.unique_integer([:positive])}@test.com",
+          username: "contributor_#{System.unique_integer([:positive])}",
+          type: :citizen
+        })
+
+      # non_admin_user is contributor of org
+      Repo.insert!(%Kollective.Accounts.OrganizationMembership{
+        user_id: non_admin_user.id,
+        organization_id: org.id,
+        role: :contributor,
+        status: :approved
+      })
+
+      non_admin_scope = Scope.for_user(non_admin_user)
+
+      %{
+        org: org,
+        non_admin_user: non_admin_user,
+        non_admin_scope: non_admin_scope,
+        valid_params: valid_params
+      }
+    end
+
+    test "creates classified with organization_id when user is org admin", %{
+      conn: conn,
+      user: user,
+      scope: scope,
+      org: org,
+      valid_params: valid_params
+    } do
+      conn =
+        conn
+        |> assign(:current_user, user)
+        |> assign(:current_scope, scope)
+        |> put_req_header("x-active-account-id", to_string(org.id))
+        |> post(~p"/api/v1/classifieds", %{"classified" => valid_params})
+
+      assert conn.status == 201
+      response = json_response(conn, 201)
+      assert response["organization_id"] == to_string(org.id)
+      assert response["user"] == "Community Newspaper"
+    end
+
+    test "blocks non-admin with 403 Forbidden when attempting to post on behalf of org", %{
+      conn: conn,
+      non_admin_user: non_admin_user,
+      non_admin_scope: non_admin_scope,
+      org: org,
+      valid_params: valid_params
+    } do
+      conn =
+        conn
+        |> assign(:current_user, non_admin_user)
+        |> assign(:current_scope, non_admin_scope)
+        |> put_req_header("x-active-account-id", to_string(org.id))
+        |> post(~p"/api/v1/classifieds", %{"classified" => valid_params})
+
+      assert conn.status == 403
+      response = json_response(conn, 403)
+      assert response["error"] == "forbidden" || response["status"] == "error"
+    end
+
+    test "filters classifieds by personal vs organization context", %{
+      conn: conn,
+      user: user,
+      org: org,
+      valid_params: valid_params
+    } do
+      # 1. Personal ad
+      {:ok, personal_ad} = Classifieds.create_classified(user, Map.put(valid_params, "title", "Personal Guitar"))
+
+      # 2. Org ad
+      {:ok, org_ad} =
+        Classifieds.create_classified(
+          user,
+          valid_params
+          |> Map.put("title", "Org Bulletin Announcement")
+          |> Map.put("organization_id", to_string(org.id))
+        )
+
+      # Query personal context
+      personal_conn = get(conn, ~p"/api/v1/classifieds?context=personal")
+      personal_resp = json_response(personal_conn, 200)
+      personal_ids = Enum.map(personal_resp["classifieds"], & &1["id"])
+      assert to_string(personal_ad.id) in personal_ids
+      refute to_string(org_ad.id) in personal_ids
+
+      # Query org context
+      org_conn = get(conn, ~p"/api/v1/classifieds?context=organization&organization_id=#{org.id}")
+      org_resp = json_response(org_conn, 200)
+      org_ids = Enum.map(org_resp["classifieds"], & &1["id"])
+      assert to_string(org_ad.id) in org_ids
+      refute to_string(personal_ad.id) in org_ids
+    end
+  end
 end
+

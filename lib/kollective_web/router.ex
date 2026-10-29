@@ -24,6 +24,10 @@ defmodule KollectiveWeb.Router do
     plug(:require_authenticated_user)
   end
 
+  pipeline :api_optional_auth do
+    plug(KollectiveWeb.Plugs.OptionalAPIAuth)
+  end
+
   # Identifies whether the request context is a personal account or an org
   pipeline :org_context do
     plug(KollectiveWeb.Plugs.AssignOrganization)
@@ -38,6 +42,16 @@ defmodule KollectiveWeb.Router do
   # Blocks the request if the user is not an Admin or Owner of the active org
   pipeline :require_org_admin do
     plug(KollectiveWeb.Plugs.RequireOrgAdmin)
+  end
+
+  # Strictly enforces that the request MUST be executed by a personal user profile
+  pipeline :require_personal_account do
+    plug(KollectiveWeb.Plugs.RequirePersonalAccount)
+  end
+
+  # Permits social actions only if personal or an admin/owner of the active organization
+  pipeline :authorize_org_social_action do
+    plug(KollectiveWeb.Plugs.AuthorizeOrgSocialAction)
   end
 
   pipeline :api_rate_limited do
@@ -71,6 +85,11 @@ defmodule KollectiveWeb.Router do
     end
   end
 
+  scope "/media", KollectiveWeb do
+    put("/*path", MediaProxyController, :upload)
+    get("/*path", MediaProxyController, :serve)
+  end
+
   scope "/api/v1", KollectiveWeb do
     pipe_through([:api, :api_authenticated])
 
@@ -82,6 +101,12 @@ defmodule KollectiveWeb.Router do
     put("/me/political-location", UserController, :update_location)
     patch("/me/political-location", UserController, :update_location)
     delete("/user/location", UserController, :delete_location)
+  end
+
+  scope "/api", KollectiveWeb do
+    pipe_through([:api])
+
+    get("/health", HealthController, :show)
   end
 
   scope "/api", KollectiveWeb do
@@ -119,6 +144,12 @@ defmodule KollectiveWeb.Router do
     post("/confirm/:token", ConfirmationController, :confirm)
   end
 
+  # POST /api/v1/session/switch_profile
+  scope "/api/v1/session", KollectiveWeb do
+    pipe_through([:api, :api_authenticated])
+    post("/switch_profile", SessionController, :switch_profile)
+  end
+
   # Self-serve Crypto Recovery Endpoints
   # Available to all users, but require valid JWT authentication to prevent abuse
   scope "/api/v1/auth", KollectiveWeb do
@@ -144,7 +175,7 @@ defmodule KollectiveWeb.Router do
   end
 
   scope "/api/v1", KollectiveWeb do
-    pipe_through([:api, :api_authenticated])
+    pipe_through([:api, :api_authenticated, :org_context, :require_org_admin])
 
     # 📢 Town Bulletin / Classifieds Post & Management
     post("/classifieds", ClassifiedController, :create)
@@ -292,6 +323,7 @@ defmodule KollectiveWeb.Router do
 
     # GET /api/v1/posts -> Returns Home or Communities Feed (supports unauthenticated guests with ?country=US parameter)
     get("/posts", PostController, :index)
+    get("/timeline", PostController, :index)
     get("/posts/:id", PostController, :show)
     get("/posts/:id/context", PostController, :context)
 
@@ -398,11 +430,11 @@ defmodule KollectiveWeb.Router do
   scope "/api/v1/admin", KollectiveWeb.Admin do
     pipe_through([:api, :api_authenticated, :verify_node_sovereignty_clearance])
 
-    post "/incidents/lease_next", MeshIncidentController, :lease_next
-    post "/incidents/:id/claim", MeshIncidentController, :claim
-    post "/incidents/:id/release", MeshIncidentController, :release
-    post "/incidents/:id/extend", MeshIncidentController, :extend
-    post "/incidents/:id/resolve", MeshIncidentController, :resolve
+    post("/incidents/lease_next", MeshIncidentController, :lease_next)
+    post("/incidents/:id/claim", MeshIncidentController, :claim)
+    post("/incidents/:id/release", MeshIncidentController, :release)
+    post("/incidents/:id/extend", MeshIncidentController, :extend)
+    post("/incidents/:id/resolve", MeshIncidentController, :resolve)
   end
 
   # SECURE MODERATION DESK PANEL OVERRIDES
@@ -477,8 +509,6 @@ defmodule KollectiveWeb.Router do
 
     # /api/v1/posts/:id/replies -> Creates a new reply to the specified post, with content and optional image
     post("/posts/:id/replies", PostController, :create_reply)
-    post("/posts/:post_id/bookmark", BookmarkController, :toggle)
-    delete("/posts/:post_id/bookmark", BookmarkController, :delete)
 
     # Grassroots Registrations & Launch Wizards
     post("/businesses", BusinessController, :create)
@@ -492,7 +522,6 @@ defmodule KollectiveWeb.Router do
     # Interactive Chat Threads & Media Presigns
     post("/events_comments/:event_id/comment", EventCommentController, :create)
     get("/event_comments/image/presign", EventCommentController, :presign_image)
-    get("/media/presign", MediaController, :presign)
 
     # Governance Flags & Geo-Service Handshakes
     # Regular citizens can report posts safely here
@@ -533,6 +562,8 @@ defmodule KollectiveWeb.Router do
     # Bookmark Timeline Feed & Action Switches
     get("/bookmarks", BookmarkController, :index)
     delete("/bookmarks/:bookmark_id", BookmarkController, :delete)
+    post("/posts/:post_id/bookmark", BookmarkController, :toggle)
+    delete("/posts/:post_id/bookmark", BookmarkController, :delete)
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -546,8 +577,10 @@ defmodule KollectiveWeb.Router do
     pipe_through([:api, :api_authenticated])
 
     # Interact with an existing poll
+    post("/polls", PollController, :create)
     get("/polls/:id", PollController, :show)
     post("/polls/:poll_id/votes", PollController, :vote)
+    post("/polls/:poll_id/vote", PollController, :vote)
 
     # POST 	/api/v1/posts 	Publishes a new post. If poll parameters are included, it attaches the poll.
     # GET	  /api/v1/polls/:id  Returns the current state of a poll (counts, expiry, etc.).
@@ -565,6 +598,7 @@ defmodule KollectiveWeb.Router do
     get("/events/:id", EventController, :show)
 
     put("/events/:id", EventController, :update)
+    patch("/events/:id", EventController, :update)
 
     delete("/events/:id", EventController, :delete)
 
@@ -613,14 +647,17 @@ defmodule KollectiveWeb.Router do
     # React UI Query Toggles: ?category=town_hall&scope=state
     get("/actions", ActionController, :index)
 
-    # GET /api/v1/events/:id
-    # Feeds individual protest, meeting, rally, or town hall detail pages
-    get("/actions/:id", EventController, :show)
+    # GET /api/v1/actions/:id
+    # Feeds individual protest, meeting, rally, or town hall detail pages and modals
+    get("/actions/:id", ActionController, :show)
 
     # 4. Action Logistics & Time Remodifier Engine
     # PUT /api/v1/actions/:id
     # Wipes and updates Oban countdown reminder queues automatically on date updates
     put("/actions/:id", EventController, :update)
+    post("/actions/:id/rsvp", ActionController, :rsvp)
+    post("/actions/:id/attend", ActionController, :attend)
+    post("/actions/:event_id/rsvp", ActionController, :rsvp)
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -642,11 +679,19 @@ defmodule KollectiveWeb.Router do
 
     # 🌐 MAP SEARCH NODE ROUTE REGISTRY (Must precede /businesses/:id)
     get("/businesses/search", BusinessSearchController, :index)
+    get("/businesses/media/presign", BusinessController, :presign_media)
+    post("/businesses/media/presign", BusinessController, :presign_media)
+    get("/business_proposals/media/presign", BusinessController, :presign_media)
+    post("/business_proposals/media/presign", BusinessController, :presign_media)
 
     # Individual Detail View Mappings
     get("/businesses/:id", BusinessController, :show_business)
+    get("/businesses/:id/media/presign", BusinessController, :presign_media)
+    post("/businesses/:id/images", BusinessController, :add_image)
+    delete("/businesses/:id/images", BusinessController, :delete_image)
     get("/business_proposals/:id", BusinessController, :show_proposal)
     put("/businesses/:id", BusinessController, :update)
+    patch("/businesses/:id", BusinessController, :update)
     delete("/businesses/:id", BusinessController, :delete_business)
 
     # Map both methods directly to the exact same controller function
@@ -655,6 +700,15 @@ defmodule KollectiveWeb.Router do
     delete("/business_proposals/:id", BusinessController, :delete_proposal)
   end
 
+  # Health route for k8s readiness probes.
+  # This will return 200 only when all dependencies are available.
+  scope "/api", KollectiveWeb do
+    pipe_through([:api])
+    get("/health", HealthController, :show)
+  end
+
+  # API routes that require authentication.
+  # These routes will be protected by the KollectiveWeb.APIAuth plug.
   scope "/api/v1", KollectiveWeb do
     pipe_through([:api, :api_authenticated])
 
@@ -671,6 +725,19 @@ defmodule KollectiveWeb.Router do
 
     # GET /api/v1/search/location?q=New+York -> Returns targeted geospatial search results
     get("/search/location", SearchController, :location)
+  end
+
+  scope "/api/v1", KollectiveWeb do
+    pipe_through([:api, :api_optional_auth])
+
+    # 🌐 Omnipresent Cross-Entity Global Search
+    get("/search/global", SearchController, :global_search)
+  end
+
+  scope "/api", KollectiveWeb do
+    pipe_through([:api, :api_optional_auth])
+
+    get("/search/global", SearchController, :global_search)
   end
 
   scope "/api/v1", KollectiveWeb do
@@ -750,6 +817,7 @@ defmodule KollectiveWeb.Router do
     pipe_through([:api, :api_authenticated])
 
     # 1. Get a "upload ticket" for R2
+    get("/media/presign", MediaController, :presign)
     post("/media", MediaController, :create)
     put("/media/:id", MediaController, :update)
     get("/media/:id", MediaController, :show)
@@ -855,6 +923,10 @@ defmodule KollectiveWeb.Router do
     pipe_through([:api, :api_authenticated])
 
     get("/districts/lookup", DistrictController, :lookup)
+  end
+
+  scope "/api", KollectiveWeb do
+    pipe_through([:api, :api_authenticated, :org_context, :require_org_admin])
 
     post("/classifieds", ClassifiedController, :create)
     delete("/classifieds/:id", ClassifiedController, :delete)
@@ -889,7 +961,7 @@ defmodule KollectiveWeb.Router do
   end
 
   scope "/classifieds", KollectiveWeb do
-    pipe_through([:api, :api_authenticated])
+    pipe_through([:api, :api_authenticated, :org_context, :require_org_admin])
 
     post("/", ClassifiedController, :create)
     delete("/:id", ClassifiedController, :delete)

@@ -5,9 +5,13 @@ defmodule Kollective.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
-    topologies = Application.get_env(:libcluster, :topologies, [])
+    topologies =
+      Application.get_env(:libcluster, :topologies, [])
+      |> sanitize_topologies()
 
     children = [
       KollectiveWeb.Telemetry,
@@ -75,4 +79,38 @@ defmodule Kollective.Application do
     KollectiveWeb.Endpoint.config_change(changed, removed)
     :ok
   end
+
+  defp sanitize_topologies(topologies) when is_list(topologies) do
+    Enum.filter(topologies, fn {_name, topo_config} ->
+      strategy = Keyword.get(topo_config, :strategy)
+
+      if strategy == Cluster.Strategy.Gossip do
+        config = Keyword.get(topo_config, :config, [])
+        port = Keyword.get(config, :port, 45892)
+
+        # Pre-flight check: attempt to bind the UDP port before libcluster crashes the app
+        case :gen_udp.open(port, [:binary, reuseaddr: true]) do
+          {:ok, socket} ->
+            :gen_udp.close(socket)
+            true
+
+          {:error, :eaddrinuse} ->
+            Logger.warning(
+              "⚠️ [LIBCLUSTER]: Port #{port} is already in use by another instance or node. Skipping gossip clustering topology to prevent boot crash."
+            )
+
+            false
+
+          {:error, reason} ->
+            Logger.warning("⚠️ [LIBCLUSTER]: Socket check on port #{port} returned #{inspect(reason)}.")
+            true
+        end
+      else
+        true
+      end
+    end)
+  end
+
+  defp sanitize_topologies(_), do: []
 end
+

@@ -177,7 +177,7 @@ defmodule Kollective.Events.Events do
         # Strip custom parameter overrides; strictly force values to lock onto their physical home base
         changeset
         |> Ecto.Changeset.put_change(:origin_country, user.country || "US")
-        |> Ecto.Changeset.put_change(:origin_state, user.state)
+        |> Ecto.Changeset.put_change(:origin_state, user.state || Map.get(attrs, "origin_state") || Map.get(attrs, :origin_state))
         # Standard city relation foreign key matching your schema
         |> Ecto.Changeset.put_change(:origin_city_id, user.city_id)
         |> Ecto.Changeset.put_change(:origin_district_l1, user.district_l1_id)
@@ -322,7 +322,7 @@ defmodule Kollective.Events.Events do
         attrs["address"] || attrs[:address] || attrs["location_name"] || attrs[:location_name]
 
       has_new_coordinates? = not is_nil(attrs["latitude"] || attrs[:latitude])
-      address_changed? = new_address && new_address != event.location_name
+      address_changed? = not is_nil(new_address) and new_address != event.location_name
 
       # Parse and verify if the start time truly changed from its stored state
       new_start_time =
@@ -1198,11 +1198,14 @@ defmodule Kollective.Events.Events do
   def rsvp_to_event(%User{} = user, event_id, input_status)
       when is_binary(input_status) do
     # Normalize input states to match our strict schema boundaries
+    normalized = input_status |> to_string() |> String.trim() |> String.downcase()
+
     target_status =
-      case input_status do
-        "going" -> "accepted"
-        "attending" -> "accepted"
-        "no" -> "rejected"
+      case normalized do
+        s when s in ["going", "attending", "accepted"] -> "accepted"
+        s when s in ["interested", "maybe"] -> "interested"
+        s when s in ["no", "rejected"] -> "rejected"
+        s when s in ["none", "removed", "cancel", "cancelled"] -> "none"
         other -> other
       end
 
@@ -1233,24 +1236,27 @@ defmodule Kollective.Events.Events do
         existing_rsvp = Repo.get_by(EventParticipant, user_id: user.id, event_id: event.id)
 
         result_code =
-          case existing_rsvp do
-            nil ->
+          cond do
+            final_status in ["none", "removed"] ->
+              if existing_rsvp, do: Repo.delete!(existing_rsvp)
+              :removed
+
+            is_nil(existing_rsvp) ->
               %EventParticipant{user_id: user.id, event_id: event.id, status: final_status}
               |> Repo.insert!()
 
               String.to_atom(final_status)
 
-            rsvp ->
-              if rsvp.status == final_status do
-                Repo.delete!(rsvp)
-                :removed
-              else
-                rsvp
-                |> Ecto.Changeset.change(status: final_status)
-                |> Repo.update!()
+            existing_rsvp.status == final_status ->
+              Repo.delete!(existing_rsvp)
+              :removed
 
-                String.to_atom(final_status)
-              end
+            true ->
+              existing_rsvp
+              |> Ecto.Changeset.change(status: final_status)
+              |> Repo.update!()
+
+              String.to_atom(final_status)
           end
 
         # 5. RECALCULATE CACHE COUNTERS & RE-STREAM METRICS TO THE UI
@@ -1483,7 +1489,8 @@ defmodule Kollective.Events.Events do
     if asset_type in allowed_types do
       cleaned_ext = Path.extname(filename) |> String.downcase()
       unique_name = "asset_#{System.system_time(:millisecond)}#{cleaned_ext}"
-      s3_path = "events/#{event_id}/#{asset_type}/#{user.id}/#{unique_name}"
+      relative_path = "events/#{event_id}/#{asset_type}/#{user.id}/#{unique_name}"
+      s3_path = Kollective.Storage.object_key(relative_path)
 
       config = ExAws.Config.new(:s3)
 
@@ -1632,9 +1639,15 @@ defmodule Kollective.Events.Events do
   Safely fetches a single event by ID, returning a clean success/error tuple.
   """
   def get_event(id) do
-    case Repo.get(Event, id) |> Repo.preload([:user]) do
-      nil -> {:error, :not_found}
-      event -> {:ok, event}
+    case Ecto.ULID.cast(id) do
+      {:ok, valid_id} ->
+        case Repo.get(Event, valid_id) |> Repo.preload([:user]) do
+          nil -> {:error, :not_found}
+          event -> {:ok, event}
+        end
+
+      :error ->
+        {:error, :not_found}
     end
   end
 
@@ -1866,11 +1879,44 @@ defmodule Kollective.Events.Events do
   def list_events_filtered(user, params \\ %{}) do
     query = list_visible_events_query(user)
 
+    parse_float = fn
+      val when is_number(val) ->
+        val * 1.0
+
+      val when is_binary(val) ->
+        case Float.parse(val) do
+          {num, _} -> num
+          :error ->
+            case Integer.parse(val) do
+              {num, _} -> num * 1.0
+              :error -> nil
+            end
+        end
+
+      _ ->
+        nil
+    end
+
+    {user_lat, user_lng} =
+      case user && Map.get(user, :location) do
+        "POINT(" <> _ ->
+          case Regex.run(~r/POINT\(\s*([-\d\.]+)\s+([-\d\.]+)\s*\)/, user.location) do
+            [_, lng_s, lat_s] -> {parse_float.(lat_s), parse_float.(lng_s)}
+            _ -> {nil, nil}
+          end
+
+        %Geo.Point{coordinates: {lng, lat}} ->
+          {lat, lng}
+
+        _ ->
+          {nil, nil}
+      end
+
     date_str = params["date"] || params["selected_date"]
     distance_val = params["distance"] || params["radius"]
     state_val = params["state"]
-    lat_val = params["latitude"] || (user && Map.get(user, :latitude))
-    lng_val = params["longitude"] || (user && Map.get(user, :longitude))
+    lat_val = params["latitude"] || (user && Map.get(user, :latitude)) || user_lat
+    lng_val = params["longitude"] || (user && Map.get(user, :longitude)) || user_lng
 
     # Apply Date Filter if present
     query =
@@ -1888,20 +1934,6 @@ defmodule Kollective.Events.Events do
         query
       end
 
-    parse_float = fn
-      val when is_number(val) ->
-        val * 1.0
-
-      val when is_binary(val) ->
-        case Float.parse(val) do
-          {num, _} -> num
-          :error -> nil
-        end
-
-      _ ->
-        nil
-    end
-
     # Apply Distance/Coordinates filter if distance & lat/lng provided
     query =
       if not is_nil(distance_val) and not is_nil(lat_val) and not is_nil(lng_val) do
@@ -1918,9 +1950,12 @@ defmodule Kollective.Events.Events do
           min_lng = lng - lng_delta
           max_lng = lng + lng_delta
 
+          query = exclude(query, :order_by)
+
           from(e in query,
             where: e.latitude >= ^min_lat and e.latitude <= ^max_lat,
-            where: e.longitude >= ^min_lng and e.longitude <= ^max_lng
+            where: e.longitude >= ^min_lng and e.longitude <= ^max_lng,
+            order_by: [asc: fragment("(? - ?) * (? - ?) + (? - ?) * (? - ?)", e.latitude, ^lat, e.latitude, ^lat, e.longitude, ^lng, e.longitude, ^lng)]
           )
         else
           query
@@ -2372,16 +2407,40 @@ defmodule Kollective.Events.Events do
               ],
               else: conditions
 
+          user_geo =
+            cond do
+              match?(%Geo.Point{}, user.location) ->
+                %{user.location | srid: 4326}
+
+              is_binary(user.location) and
+                  String.starts_with?(String.upcase(String.trim(user.location)), "POINT(") ->
+                case Geo.WKT.decode(user.location) do
+                  {:ok, %Geo.Point{} = point} -> %{point | srid: 4326}
+                  _ -> nil
+                end
+
+              true ->
+                nil
+            end
+
           conditions =
-            if user.location,
-              do: [
+            if user_geo do
+              [
                 dynamic(
                   [e],
-                  fragment("ST_DWithin(?, ?, ?)", e.location, ^user.location, ^radius_meters)
+                  not is_nil(e.location) and
+                    fragment(
+                      "ST_DWithin(?::geography, ?::geography, ?)",
+                      e.location,
+                      ^user_geo,
+                      ^radius_meters
+                    )
                 )
                 | conditions
-              ],
-              else: conditions
+              ]
+            else
+              conditions
+            end
 
           if conditions == [] do
             from(e in query, where: false)

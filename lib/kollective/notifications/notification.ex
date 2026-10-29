@@ -6,6 +6,7 @@ defmodule Kollective.Notifications.Notification do
 
   @notification_types ~w{
     favourite
+    like
     follow
     mention
     reply
@@ -39,6 +40,9 @@ defmodule Kollective.Notifications.Notification do
     # The person seeing the notification
     belongs_to :user, Kollective.Accounts.User, foreign_key: :user_id
 
+    # The organization context seeing the notification (if applicable)
+    belongs_to :organization, Kollective.Accounts.User, foreign_key: :organization_id
+
     # The person who did the action
     belongs_to :actor, Kollective.Accounts.User, foreign_key: :actor_id
 
@@ -67,6 +71,7 @@ defmodule Kollective.Notifications.Notification do
       :read,
       :metadata,
       :user_id,
+      :organization_id,
       :actor_id,
       :post_id,
       :event_id,
@@ -76,6 +81,7 @@ defmodule Kollective.Notifications.Notification do
     |> validate_required([:type, :user_id, :actor_id])
     |> validate_inclusion(:type, @notification_types)
     |> Ecto.Changeset.foreign_key_constraint(:user_id)
+    |> Ecto.Changeset.foreign_key_constraint(:organization_id)
     |> Ecto.Changeset.foreign_key_constraint(:actor_id)
     |> Ecto.Changeset.foreign_key_constraint(:post_id)
     |> Ecto.Changeset.foreign_key_constraint(:event_id)

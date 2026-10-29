@@ -70,6 +70,7 @@ defmodule KollectiveWeb.PostJSON do
             # Fallback to base url if background static png worker is still in progress
             static_url: Map.get(att, :static_url) || att.url,
             blurhash: Map.get(att, :blurhash) || "",
+            description: Map.get(att, :description) || "",
             imageMeta: Map.get(att, :description) || post.text || "Timeline attachment asset node"
           }
         end)
@@ -214,8 +215,12 @@ defmodule KollectiveWeb.PostJSON do
         true -> "@#{username}"
       end
 
-    name = Map.get(author, :name) || Map.get(author, :username) || "Anonymous"
+    name =
+      Map.get(author, :display_name) || Map.get(author, :name) || Map.get(author, :username) ||
+        "Anonymous"
+
     avatar = Map.get(author, :avatar) || Map.get(author, :avatar_url) || "/default-avatar.jpg"
+    type = to_string(Map.get(author, :type) || "personal")
 
     %{
       id: to_string(Map.get(author, :id)),
@@ -224,6 +229,7 @@ defmodule KollectiveWeb.PostJSON do
       handle: handle,
       avatar: avatar,
       avatar_url: avatar,
+      type: type,
       verified: Map.get(author, :is_verified) || Map.get(author, :verified) || false
     }
   end
@@ -296,6 +302,7 @@ defmodule KollectiveWeb.PostJSON do
       %{
         id: to_string(att.id),
         url: att.url,
+        description: Map.get(att, :description) || "",
         # 🚀 ADD NEW PROCESSING TELEMETRY FIELDS DYNAMICALLY
         static_url: Map.get(att, :static_url) || att.url,
         type:

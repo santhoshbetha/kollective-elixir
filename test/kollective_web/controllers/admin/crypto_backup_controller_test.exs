@@ -77,9 +77,12 @@ defmodule KollectiveWeb.Admin.CryptoBackupControllerTest do
       assert data["backup_salt"] == "SALT_ABC"
     end
 
-    test "fetch_backup returns 404 when no backup is present", %{conn: conn} do
+    test "fetch_backup returns has_key: false when no backup is present", %{conn: conn} do
       conn = get(conn, ~p"/api/v1/auth/recover_key")
-      assert json_response(conn, 404)["error"] =~ "No secure encrypted identity backups"
+      assert %{"data" => data} = json_response(conn, 200)
+      assert data["has_key"] == false
+      assert data["has_backup"] == false
+      assert data["encrypted_private_key_backup"] == nil
     end
   end
 end

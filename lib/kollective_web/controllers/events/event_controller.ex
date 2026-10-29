@@ -16,7 +16,7 @@ defmodule KollectiveWeb.EventController do
   def index(conn, params) do
     user = conn.assigns[:current_user]
     cursor = Map.get(params, "cursor")
-    limit = 15
+    limit = 50
 
     # 1. Build base visibility query scope matching user authorization context
     base_query = Events.list_visible_events_query(user)
@@ -318,7 +318,8 @@ defmodule KollectiveWeb.EventController do
   end
 
   # PUT /api/v1/kollective/events/:id
-  def update(conn, %{"id" => id, "event" => event_params}) do
+  def update(conn, %{"id" => id} = params) do
+    event_params = Map.get(params, "event", Map.delete(params, "id"))
     user = conn.assigns.current_user
     ip = guest_ip(conn)
 
@@ -329,7 +330,10 @@ defmodule KollectiveWeb.EventController do
 
       {:ok, event} ->
         # 2. OWNERSHIP GUARD: Stop bad actors from modifying other users' groups
-        if event.created_by != user.id do
+        is_creator = event.created_by == user.id
+        is_staff = user.is_admin or user.is_moderator
+
+        if not (is_creator or is_staff) do
           conn
           |> put_status(:forbidden)
           |> json(%{error: "You are not authorized to edit this event."})

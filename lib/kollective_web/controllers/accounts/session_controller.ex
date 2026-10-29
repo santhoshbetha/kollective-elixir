@@ -103,7 +103,13 @@ defmodule KollectiveWeb.SessionController do
   # ─── LOGOUT MUTATION ───
   def delete(conn, _params) do
     with ["Bearer " <> token] <- get_req_header(conn, "authorization") do
-      Accounts.delete_user_session_token(token)
+      case Accounts.get_user_by_session_token(token) do
+        {user, _inserted_at} ->
+          Accounts.revoke_user_session_tokens(user)
+
+        _ ->
+          Accounts.delete_user_session_token(token)
+      end
 
       conn
       |> put_status(:ok)
@@ -152,5 +158,85 @@ defmodule KollectiveWeb.SessionController do
   defp get_user_by_username_and_password(username, password) do
     user = Kollective.Repo.get_by(Kollective.Accounts.User, username: username)
     if user && Kollective.Accounts.User.valid_password?(user, password), do: user
+  end
+
+  # ─── ACTION 4: SWITCH ORGANIZATION / PERSONAL PROFILE ───
+  def switch_profile(conn, params) do
+    user = conn.assigns[:current_user]
+
+    if is_nil(user) do
+      conn
+      |> put_status(:unauthorized)
+      |> json(%{error: "unauthorized", message: "You must be logged in to switch profiles."})
+    else
+      target_id = params["organization_id"] || params["profile_id"]
+
+      cond do
+        # Case 1: Switching back to personal profile
+        is_nil(target_id) or target_id in ["", "personal", "personal_account"] or
+            to_string(target_id) == to_string(user.id) ->
+          Accounts.revoke_user_session_tokens(user)
+          token = Accounts.generate_user_session_token(user)
+          user_data = AccountJSON.login_profile(user)
+
+          active_account = %{
+            id: to_string(user.id),
+            type: "personal",
+            name: user_data.display_name || user.username,
+            username: user.username,
+            handle: "@#{user.username}",
+            avatar: user_data.avatar,
+            role: to_string(user.role || :citizen)
+          }
+
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            token: token,
+            user: user_data,
+            active_account: active_account,
+            message: "Profile switched to personal successfully."
+          })
+
+        # Case 2: Switching to organization profile
+        true ->
+          case Accounts.get_active_membership(user.id, target_id) do
+            nil ->
+              conn
+              |> put_status(:forbidden)
+              |> json(%{
+                error: "forbidden",
+                message: "You do not have access to this organization profile."
+              })
+
+            %Kollective.Accounts.OrganizationMembership{organization: org, role: role} ->
+              Accounts.revoke_user_session_tokens(user)
+              token = Accounts.generate_organization_session_token(user, org.id)
+
+              org_data = AccountJSON.login_profile(org)
+              user_data = AccountJSON.login_profile(user)
+
+              active_account = %{
+                id: to_string(org.id),
+                type: "organization",
+                name: org_data.display_name || org.username,
+                username: org.username,
+                handle: "@#{org.username}",
+                avatar: org_data.avatar,
+                role: to_string(role)
+              }
+
+              conn
+              |> put_status(:ok)
+              |> json(%{
+                token: token,
+                user: user_data,
+                organization: org_data,
+                active_account: active_account,
+                message: "Profile switched successfully."
+              })
+          end
+      end
+    end
   end
 end

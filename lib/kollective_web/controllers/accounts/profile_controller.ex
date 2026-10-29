@@ -2,6 +2,8 @@ defmodule KollectiveWeb.ProfileController do
   use KollectiveWeb, :controller
   alias Kollective.Accounts.Accounts
 
+  @s3_engine Application.compile_env(:kollective, :s3_engine, ExAws.S3)
+
   # ─── ACTION 1: GENERATE PROFILE ASSET PRESIGNED TICKETS ───
   # GET /api/v1/profile/media/presign
   # Expected params: ?filename=avatar.png&type=avatar&content_type=image/png
@@ -12,40 +14,68 @@ defmodule KollectiveWeb.ProfileController do
           "type" => type
         } = params
       )
-      when type in ["avatar", "cover", "banner", "header"] do
+      when type in ["avatar", "cover", "banner", "header", "event", "business"] do
     user = conn.assigns.current_user
     content_type = Map.get(params, "content_type", "image/jpeg")
-    config = ExAws.Config.new(:s3)
 
     cleaned_ext = Path.extname(filename) |> String.downcase()
     cleaned_ext = if cleaned_ext == "", do: ".jpg", else: cleaned_ext
-    unique_name = "profile_#{System.system_time(:second)}#{cleaned_ext}"
-    s3_path = "profiles/#{user.id}/#{type}/#{unique_name}"
+    unique_name = "profile_#{System.system_time(:second)}_#{System.unique_integer([:positive])}#{cleaned_ext}"
+    relative_path = "profiles/#{user.id}/#{type}/#{unique_name}"
+    file_key = Kollective.Storage.object_key(relative_path)
 
-    case ExAws.S3.presigned_url(config, :put, Kollective.Storage.bucket_name(), s3_path,
-           expires_in: 900,
-           query_params: [{"Content-Type", content_type}]
-         ) do
-      {:ok, upload_url} ->
-        json(conn, %{
-          status: "success",
-          upload_url: upload_url,
-          final_asset_url: "#{Kollective.Storage.cdn_domain()}/#{s3_path}"
-        })
+    upload_url =
+      cond do
+        Mix.env() == :e2e ->
+          "/media/#{file_key}"
 
-      _ ->
-        final_url = "#{Kollective.Storage.cdn_domain()}/#{s3_path}"
+        @s3_engine != ExAws.S3 ->
+          case @s3_engine.presigned_url(s3_config(), :put, Kollective.Storage.bucket_name(), file_key,
+                 expires_in: 900,
+                 query_params: [{"Content-Type", content_type}]
+               ) do
+            {:ok, url} -> url
+            _ -> "/media/#{file_key}"
+          end
 
-        json(conn, %{
-          status: "success",
-          upload_url: final_url,
-          final_asset_url: final_url
-        })
-    end
+        has_r2_credentials?() ->
+          case @s3_engine.presigned_url(s3_config(), :put, Kollective.Storage.bucket_name(), file_key,
+                 expires_in: 900,
+                 query_params: [{"Content-Type", content_type}]
+               ) do
+            {:ok, url} -> url
+            _ -> "/media/#{file_key}"
+          end
+
+        true ->
+          "/media/#{file_key}"
+      end
+
+    final_asset_url = "#{Kollective.Storage.cdn_domain()}/#{file_key}"
+
+    json(conn, %{
+      status: "success",
+      upload_url: upload_url,
+      final_asset_url: final_asset_url
+    })
   end
 
   def presign_asset(conn, _),
     do: conn |> put_status(:bad_request) |> json(%{error: "Invalid asset type parameters."})
+
+  defp has_r2_credentials? do
+    key = System.get_env("R2_ACCESS_KEY_ID") || Application.get_env(:ex_aws, :access_key_id)
+    secret = System.get_env("R2_SECRET_ACCESS_KEY") || Application.get_env(:ex_aws, :secret_access_key)
+    is_binary(key) and key != "" and is_binary(secret) and secret != ""
+  end
+
+  defp s3_config do
+    if @s3_engine == ExAws.S3 do
+      ExAws.Config.new(:s3)
+    else
+      %{}
+    end
+  end
 
   # ─── ACTION 2: MUTATE PROFILE PROPERTIES ───
   # PUT /api/v1/profile

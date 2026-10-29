@@ -33,6 +33,7 @@ defmodule Kollective.Classifieds.Classified do
     field :geom, Geo.PostGIS.Geometry
 
     belongs_to :user, Kollective.Accounts.User, foreign_key: :user_id
+    belongs_to :organization, Kollective.Accounts.User, foreign_key: :organization_id
 
     timestamps(type: :utc_datetime)
   end
@@ -56,7 +57,8 @@ defmodule Kollective.Classifieds.Classified do
       :phone_number,
       :district_id,
       :geom,
-      :user_id
+      :user_id,
+      :organization_id
     ])
     |> validate_required([
       :title,
@@ -76,6 +78,7 @@ defmodule Kollective.Classifieds.Classified do
     |> set_location_fallback()
     |> set_expiration_timestamp()
     |> foreign_key_constraint(:user_id)
+    |> foreign_key_constraint(:organization_id)
     |> foreign_key_constraint(:district_id)
   end
 

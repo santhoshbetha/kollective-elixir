@@ -185,11 +185,42 @@ defmodule KollectiveWeb.AccountJSON do
         district_l3_id: user.district_l3_id
       },
       notification_settings: Map.get(user, :notification_settings, %{}) || %{},
-      settings_store: Map.get(user, :settings, %{}) || %{}
+      settings_store: Map.get(user, :settings, %{}) || %{},
+      memberships: serialize_memberships(user.id)
     }
   end
 
   def login_profile(_), do: %{}
+
+  def serialize_memberships(user_id) do
+    case Ecto.ULID.cast(user_id) do
+      {:ok, _valid_id} ->
+        Kollective.Accounts.Organizations.list_user_memberships(user_id)
+        |> Enum.map(fn m ->
+          org = m.organization
+          avatar = resolve_avatar(org)
+
+          %{
+            id: to_string(m.id),
+            role: to_string(m.role),
+            status: "active",
+            organization: %{
+              id: to_string(org.id),
+              name: org.display_name || org.username,
+              username: org.username,
+              handle: "@#{org.username}",
+              avatar: avatar,
+              avatar_url: avatar,
+              badge_type: to_string(org.badge_type || "organization"),
+              bio: org.bio || ""
+            }
+          }
+        end)
+
+      _ ->
+        []
+    end
+  end
 
   # --- Structural Serialization Core Layout ---
   defp do_show(%{user: user} = opts) do
@@ -523,11 +554,11 @@ defmodule KollectiveWeb.AccountJSON do
   defp district_name(%Ecto.Association.NotLoaded{}), do: nil
   defp district_name(dist), do: dist.name || dist.type_label
 
-  defp resolve_avatar(%{avatar_url: avatar_url} = user) when not is_nil(avatar_url) do
+  def resolve_avatar(%{avatar_url: avatar_url} = user) when not is_nil(avatar_url) do
     Kollective.Media.UserAvatar.url({avatar_url, user}, :original) || "/default-avatar.jpg"
   end
 
-  defp resolve_avatar(_), do: "/default-avatar.jpg"
+  def resolve_avatar(_), do: "/default-avatar.jpg"
 
   defp resolve_cover(%{cover_image_url: cover_url} = user) when not is_nil(cover_url) do
     Kollective.Media.UserCover.url({cover_url, user}, :original) || "/default-banner-bg.jpg"

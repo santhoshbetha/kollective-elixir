@@ -4,6 +4,8 @@ defmodule KollectiveWeb.Plugs.AssignOrganization do
   alias Kollective.Accounts.Accounts
   alias Kollective.Accounts.OrganizationMembership
 
+  alias Kollective.Accounts.Organizations
+
   def init(opts), do: opts
 
   def call(conn, _opts) do
@@ -12,33 +14,73 @@ defmodule KollectiveWeb.Plugs.AssignOrganization do
       conn.assigns[:current_user] ||
         (conn.assigns[:current_scope] && conn.assigns.current_scope.user)
 
-    header_org_id =
+    explicit_header_id =
       case get_req_header(conn, "x-organization-id") do
         [id] when id != "" -> id
         _ -> nil
       end
 
-    org_id = header_org_id || conn.path_params["org_id"] || conn.params["org_id"]
+    route_org_id = conn.path_params["org_id"] || conn.params["org_id"]
+
+    context_header_id =
+      case get_req_header(conn, "x-workspace-context-id") do
+        [id] when id != "" -> id
+        _ ->
+          case get_req_header(conn, "x-active-account-id") do
+            [id] when id not in ["", "personal", "usr-1"] ->
+              if user && to_string(user.id) == to_string(id), do: nil, else: id
+            _ -> nil
+          end
+      end
+
+    target_org_id = explicit_header_id || route_org_id || context_header_id
 
     cond do
-      is_nil(org_id) ->
-        # No header or param found, user is operating out of their personal profile
-        assign(conn, :current_org_id, nil)
+      # 1. APIAuth already assigned an active organization context and no conflicting explicit org requested
+      is_nil(target_org_id) and not is_nil(conn.assigns[:current_organization]) ->
+        org = conn.assigns[:current_organization]
+        role = conn.assigns[:org_role] || :member
 
+        conn
+        |> assign(:current_org_id, to_string(org.id))
+        |> assign(:org_role, role)
+
+      # 2. No target org specified and APIAuth is in personal mode
+      is_nil(target_org_id) ->
+        conn
+        |> assign(:current_org_id, nil)
+        |> assign(:org_role, nil)
+
+      # 3. Target org requested, but user is unauthenticated
       is_nil(user) ->
         conn
         |> put_status(:unauthorized)
         |> json(%{error: "You must log in to access this resource."})
         |> halt()
 
+      # 4. Target matches already resolved current_organization
+      not is_nil(conn.assigns[:current_organization]) and
+          to_string(conn.assigns[:current_organization].id) == to_string(target_org_id) ->
+        org = conn.assigns[:current_organization]
+        role = conn.assigns[:org_role] || :member
+
+        conn
+        |> assign(:current_org_id, to_string(org.id))
+        |> assign(:org_role, role)
+
+      # 5. Target org requested and needs verification
       true ->
-        # Verify the user actually has access to this organization context
-        case Accounts.get_organization_membership_by_user(user.id, org_id) do
-          %OrganizationMembership{role: role, status: status}
-          when status in [:approved, :active] ->
+        case Accounts.get_active_membership(user.id, target_org_id) do
+          %OrganizationMembership{organization: org, role: role} when not is_nil(org) ->
+            permissions = Organizations.permissions_for_role(role)
+
             conn
-            |> assign(:current_org_id, org_id)
+            |> assign(:current_organization, org)
+            |> assign(:current_org_id, to_string(org.id))
             |> assign(:org_role, role)
+            |> assign(:active_account_id, to_string(org.id))
+            |> assign(:account_type, org.type)
+            |> assign(:permissions, permissions)
 
           _ ->
             conn

@@ -2,6 +2,8 @@ defmodule KollectiveWeb.TeamController do
   use KollectiveWeb, :controller
   alias Kollective.Accounts.Accounts
 
+  plug KollectiveWeb.Plugs.RequireOrgAdmin when action in [:remove_member]
+
   @doc """
   Fetches and renders the active team roster for the current organization context.
   """

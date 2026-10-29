@@ -21,13 +21,14 @@ defmodule Kollective.Classifieds.Classifieds do
 
     Classified
     |> filter_active(now, params["include_expired"])
+    |> filter_context(params)
     |> filter_category(params["category"])
     |> filter_search(params["search"] || params["query"])
     |> filter_neighborhood(params["neighborhood"])
     |> filter_user(params["user_id"])
     |> filter_distance_or_scope(params, current_user)
     |> order_by([c], desc: c.inserted_at)
-    |> preload([:user, :district])
+    |> preload([:user, :district, :organization])
     |> Repo.all()
   end
 
@@ -36,7 +37,7 @@ defmodule Kollective.Classifieds.Classifieds do
   """
   def get_classified!(id) do
     Classified
-    |> preload([:user, :district])
+    |> preload([:user, :district, :organization])
     |> Repo.get!(id)
   end
 
@@ -45,7 +46,7 @@ defmodule Kollective.Classifieds.Classifieds do
   """
   def get_classified(id) do
     Classified
-    |> preload([:user, :district])
+    |> preload([:user, :district, :organization])
     |> Repo.get(id)
   end
 
@@ -53,6 +54,7 @@ defmodule Kollective.Classifieds.Classifieds do
   Creates a classified ad associated with the given user.
   - Automatically links the posting user's political district and its `geom` coordinates.
   - Enforces that the submitted email matches the user's profile email.
+  - Persists organization_id when created in an organization context.
   """
   def create_classified(%User{} = user, attrs \\ %{}) do
     attrs = Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
@@ -89,13 +91,20 @@ defmodule Kollective.Classifieds.Classifieds do
       |> Map.put("district_id", district_id)
       |> Map.put("geom", geom)
 
+    merged_attrs =
+      if attrs["organization_id"] do
+        Map.put(merged_attrs, "organization_id", attrs["organization_id"])
+      else
+        merged_attrs
+      end
+
     %Classified{}
     |> Classified.changeset(merged_attrs)
     |> validate_email_matches_user(user)
     |> Repo.insert()
     |> case do
       {:ok, classified} ->
-        {:ok, Repo.preload(classified, [:user, :district])}
+        {:ok, Repo.preload(classified, [:user, :district, :organization])}
 
       error ->
         error
@@ -147,6 +156,26 @@ defmodule Kollective.Classifieds.Classifieds do
         end
     end
   end
+
+  defp filter_context(query, %{"context" => "personal"}) do
+    from(c in query, where: is_nil(c.organization_id))
+  end
+
+  defp filter_context(query, %{"context" => "organization", "organization_id" => org_id})
+       when not is_nil(org_id) and org_id != "" do
+    from(c in query, where: c.organization_id == ^org_id)
+  end
+
+  defp filter_context(query, %{"context" => "organization"}) do
+    from(c in query, where: not is_nil(c.organization_id))
+  end
+
+  defp filter_context(query, %{"organization_id" => org_id})
+       when not is_nil(org_id) and org_id != "" do
+    from(c in query, where: c.organization_id == ^org_id)
+  end
+
+  defp filter_context(query, _), do: query
 
   defp filter_active(query, _now, true), do: query
   defp filter_active(query, _now, "true"), do: query

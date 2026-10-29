@@ -6,16 +6,18 @@ defmodule KollectiveWeb.SearchController do
   alias Kollective.Repo
   alias Kollective.Posts.Posts
   alias Kollective.User.Search, as: UserSearch
+  alias Kollective.Businesses.SearchEngine, as: BusinessSearchEngine
   alias KollectiveWeb.PostJSON
   alias KollectiveWeb.AccountJSON
   alias KollectiveWeb.EventJSON
+  alias KollectiveWeb.BusinessJSON
 
   require Logger
 
   @search_limit 40
 
   # 🛡️ Human Gate Firewall: Blocks scrapers and automated API abuse
-  plug KollectiveWeb.Plugs.RateLimiter, [name: :search] when action in [:search, :account_search]
+  plug KollectiveWeb.Plugs.RateLimiter, [name: :search] when action in [:search, :account_search, :global_search]
 
   @doc """
   Unified Comprehensive Search Entryway.
@@ -80,6 +82,89 @@ defmodule KollectiveWeb.SearchController do
     |> json(%{status: "success", accounts: AccountJSON.index(%{users: accounts})})
   end
 
+  @doc """
+  Omnipresent Global Search Endpoint for Top Navigation Bar.
+  Returns categorized results: posts, businesses, proposals, and accounts.
+  """
+  # GET /api/v1/search/global?q=term
+  def global_search(conn, params) do
+    user = conn.assigns[:current_user]
+    query_string = String.trim(params["q"] || params[:q] || "")
+
+    if query_string == "" || String.length(query_string) < 2 do
+      conn
+      |> put_status(:ok)
+      |> json(%{
+        "posts" => [],
+        "businesses" => [],
+        "proposals" => [],
+        "accounts" => []
+      })
+    else
+      options = compile_search_options(params, user)
+
+      # 1. Search Timeline Posts
+      posts =
+        with_fallback(
+          fn ->
+            case Posts.search_posts(query_string, user, %{"limit" => 8}) do
+              %{entries: entries} ->
+                PostJSON.index(%{entries: entries}) |> Enum.take(8)
+
+              list when is_list(list) ->
+                PostJSON.index(list) |> Enum.take(8)
+
+              _ ->
+                []
+            end
+          end,
+          []
+        )
+
+      # 2. Search Local Businesses & Cooperatives
+      businesses =
+        with_fallback(
+          fn ->
+            BusinessSearchEngine.search_businesses(%{"q" => query_string, "type" => "existing"})
+            |> Enum.take(8)
+            |> Enum.map(&BusinessJSON.list_item/1)
+          end,
+          []
+        )
+
+      # 3. Search Active Community Proposals
+      proposals =
+        with_fallback(
+          fn ->
+            BusinessSearchEngine.search_businesses(%{"q" => query_string, "type" => "proposals"})
+            |> Enum.take(8)
+            |> Enum.map(&BusinessJSON.list_item/1)
+          end,
+          []
+        )
+
+      # 4. Search Citizen & Organizer Accounts
+      accounts =
+        with_fallback(
+          fn ->
+            UserSearch.search(query_string, options)
+            |> Enum.take(8)
+            |> then(&AccountJSON.index(%{users: &1}))
+          end,
+          []
+        )
+
+      conn
+      |> put_status(:ok)
+      |> json(%{
+        "posts" => posts,
+        "businesses" => businesses,
+        "proposals" => proposals,
+        "accounts" => accounts
+      })
+    end
+  end
+
   # ─── CORE RESOURCE ROUTING HANDSHAKES ───
 
   defp execute_resource_search("accounts", query, options, _params) do
@@ -131,6 +216,16 @@ defmodule KollectiveWeb.SearchController do
     from(h in Kollective.Hashtags.Hashtag, where: h.name in ^cleaned_tags, select: h.name)
     |> Repo.all()
     |> Enum.map(fn tag -> %{name: tag, url: tags_path <> URI.encode_www_form(tag)} end)
+  end
+
+  defp execute_resource_search("businesses", query, _options, _params) do
+    BusinessSearchEngine.search_businesses(%{"q" => query, "type" => "existing"})
+    |> Enum.map(&BusinessJSON.list_item/1)
+  end
+
+  defp execute_resource_search("proposals", query, _options, _params) do
+    BusinessSearchEngine.search_businesses(%{"q" => query, "type" => "proposals"})
+    |> Enum.map(&BusinessJSON.list_item/1)
   end
 
   # ─── LOGISTICAL COMPILER HELPERS ───

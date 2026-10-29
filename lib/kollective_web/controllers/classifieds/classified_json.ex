@@ -23,9 +23,18 @@ defmodule KollectiveWeb.ClassifiedJSON do
 
   def data(%Classified{} = classified) do
     user_handle =
-      case classified.user do
-        %{username: username} when not is_nil(username) -> "@#{username}"
-        _ -> "@anonymous"
+      cond do
+        classified.organization && classified.organization.display_name ->
+          classified.organization.display_name
+
+        classified.organization && classified.organization.username ->
+          "@#{classified.organization.username}"
+
+        classified.user && classified.user.username ->
+          "@#{classified.user.username}"
+
+        true ->
+          "@anonymous"
       end
 
     %{
@@ -39,6 +48,7 @@ defmodule KollectiveWeb.ClassifiedJSON do
       # Frontend card accesses ad.user
       user: user_handle,
       user_id: to_string(classified.user_id),
+      organization_id: if(classified.organization_id, do: to_string(classified.organization_id), else: nil),
       location: classified.location || classified.neighborhood,
       neighborhood: classified.neighborhood,
       duration_days: classified.duration_days,

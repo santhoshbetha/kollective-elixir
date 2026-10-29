@@ -181,6 +181,9 @@ defmodule KollectiveWeb.OrganizationControllerTest do
 
       response = json_response(conn, 403)
       assert response["status"] == "error"
+
+      unchanged_org = Repo.get(Kollective.Accounts.User, org.id)
+      refute unchanged_org.display_name == "Unauthorized Change"
     end
   end
 end

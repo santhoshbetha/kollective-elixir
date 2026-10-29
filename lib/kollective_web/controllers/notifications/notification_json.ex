@@ -33,7 +33,7 @@ defmodule KollectiveWeb.NotificationJSON do
   Formats unread notification count response.
   """
   def unread_count(count) do
-    %{status: "success", count: count}
+    %{status: "success", count: count, unread_count: count}
   end
 
   @doc """
@@ -60,6 +60,7 @@ defmodule KollectiveWeb.NotificationJSON do
 
       # Actor Metadata profile footprint
       actor: serialize_actor(notification.actor),
+      user: serialize_actor(notification.actor),
 
       # Target metadata maps allow React to route clicks dynamically
       target: %{
@@ -94,6 +95,8 @@ defmodule KollectiveWeb.NotificationJSON do
     %{
       id: to_string(actor.id),
       username: actor.username,
+      name: actor.display_name || actor.username,
+      avatar: actor.avatar_url || "/default-avatar.jpg",
       avatar_url: actor.avatar_url || "/default-avatar.jpg"
     }
   end
@@ -102,6 +105,8 @@ defmodule KollectiveWeb.NotificationJSON do
     %{
       id: to_string(id),
       username: username,
+      name: Map.get(actor, :name) || Map.get(actor, :display_name) || username,
+      avatar: Map.get(actor, :avatar_url) || "/default-avatar.jpg",
       avatar_url: Map.get(actor, :avatar_url) || "/default-avatar.jpg"
     }
   end

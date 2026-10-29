@@ -104,8 +104,18 @@ config :waffle,
 config :kollective,
   r2_account_id: System.get_env("R2_ACCOUNT_ID", "47701ef2e87f29505064cb21fd2513ed"),
   r2_bucket: System.get_env("R2_BUCKET_NAME", "kollective"),
-  r2_public_domain:
-    System.get_env(
-      "R2_PUBLIC_DOMAIN",
-      "https://47701ef2e87f29505064cb21fd2513ed.r2.cloudflarestorage.com/kollective"
-    )
+  r2_public_domain: System.get_env("R2_PUBLIC_DOMAIN", "/media")
+
+# Libcluster Development Gossip Mesh Configuration
+config :libcluster,
+  topologies: [
+    kollective_mesh: [
+      strategy: Cluster.Strategy.Gossip,
+      config: [
+        port: 45892,
+        if_addr: {0, 0, 0, 0},
+        multicast_addr: {230, 1, 1, 251},
+        secret: "kollective_secure_mesh_handshake_salt_2026"
+      ]
+    ]
+  ]

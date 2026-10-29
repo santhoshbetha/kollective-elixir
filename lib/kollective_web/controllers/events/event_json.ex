@@ -60,6 +60,11 @@ defmodule KollectiveWeb.EventJSON do
       # Location string convenience and preloaded structured geography
       location_name: event.location_name,
       location_string: format_location_string(event),
+      latitude: event.latitude,
+      longitude: event.longitude,
+      origin_state: event.origin_state,
+      state: event.origin_state,
+      street: event.street,
       location: %{
         name: event.location_name,
         city: city_name(event.origin_city),
@@ -73,6 +78,8 @@ defmodule KollectiveWeb.EventJSON do
       },
       # Author/Candidate Info
       organizer: serialize_organizer(event.user),
+      created_by: event.created_by,
+      user_id: event.created_by,
       inserted_at: event.inserted_at
     }
 
@@ -209,21 +216,87 @@ defmodule KollectiveWeb.EventJSON do
   end
 
   def action_item(item) do
+    type_str =
+      case item.category do
+        "protest" -> "Protest"
+        "town_hall" -> "Town Hall"
+        "rally" -> "Rally"
+        "meeting" -> "Meeting"
+        other when is_binary(other) ->
+          other
+          |> String.replace("_", " ")
+          |> String.split()
+          |> Enum.map(&String.capitalize/1)
+          |> Enum.join(" ")
+
+        _ -> "Action"
+      end
+
+    formatted_time =
+      cond do
+        item.start_time ->
+          date_part = Calendar.strftime(item.start_time, "%b %d")
+          time_part = Calendar.strftime(item.start_time, "%I:%M %p")
+          "#{date_part} • #{time_part}"
+
+        true ->
+          "TBD"
+      end
+
+    location_str = format_location_string(item)
+
+    organizer_name =
+      cond do
+        Ecto.assoc_loaded?(item.organization) && item.organization &&
+            (item.organization.display_name || item.organization.username) ->
+          item.organization.display_name || item.organization.username
+
+        Ecto.assoc_loaded?(item.user) && item.user &&
+            (item.user.display_name || item.user.username) ->
+          item.user.display_name || item.user.username
+
+        true ->
+          "Organizer"
+      end
+
+    scope_str =
+      case item.target_scope do
+        s when s in [:local, "local"] -> "Local"
+        s when s in [:state, "state"] -> "State"
+        s when s in [:world, "world", :country, "country"] -> "Country"
+        _ -> "Local"
+      end
+
     %{
       id: to_string(item.id),
+      title: item.title,
       name: item.title,
       description: item.description,
       category: item.category,
+      type: type_str,
+      time: formatted_time,
+      location: location_str,
+      venue: item.location_name,
+      address: item.street,
+      location_name: item.location_name,
+      location_url: item.location_url,
+      meetingLink: item.location_url,
+      scope: scope_str,
+      geography: scope_str,
+      target_scope: to_string(item.target_scope || "local"),
       participation_format: item.participation_format,
       start_time:
         if(item.start_time,
           do: Calendar.strftime(item.start_time, "%Y-%m-%dT%H:%M:%SZ"),
           else: nil
         ),
-      location_name: item.location_name,
       participants_count: item.participants_count,
+      attendeesCount: item.participants_count,
       is_official: not is_nil(item.organization_id),
-      initiator: (item.user && item.user.username) || nil
+      initiator: (Ecto.assoc_loaded?(item.user) && item.user && item.user.username) || nil,
+      organizer: organizer_name,
+      user_rsvp_status: Map.get(item, :join_state) || nil,
+      rsvp: Map.get(item, :join_state) || "None"
     }
   end
 
@@ -231,11 +304,7 @@ defmodule KollectiveWeb.EventJSON do
   Serializes newly created action summary data.
   """
   def action_data(action) do
-    %{
-      id: to_string(action.id),
-      name: action.title,
-      category: action.category
-    }
+    action_item(action)
   end
 
   @doc """

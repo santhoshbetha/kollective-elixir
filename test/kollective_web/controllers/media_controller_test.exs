@@ -1,11 +1,5 @@
 # test/kollective_web/controllers/media_controller_test.exs
 
-# ⚡ FIXED: Open-ended mock to eliminate AWS IMDS credential cache generation loops
-defmodule KollectiveWeb.S3Mock do
-  def presigned_url(_config, :put, bucket_name, file_key, _opts) do
-    {:ok, "https://#{bucket_name}/#{file_key}?signed=true"}
-  end
-end
 
 defmodule KollectiveWeb.MediaControllerTest do
   use KollectiveWeb.ConnCase, async: true
@@ -36,6 +30,43 @@ defmodule KollectiveWeb.MediaControllerTest do
       assert response["status"] == "success"
       assert is_binary(response["upload_url"])
       assert response["final_asset_url"] =~ Kollective.Storage.cdn_domain()
+    end
+
+    test "strictly isolates uploaded object keys under the test prefix", %{conn: conn} do
+      params = %{"filename" => "mountain.png", "content_type" => "image/png"}
+
+      response =
+        conn
+        |> get(~p"/api/v1/media/presign", params)
+        |> json_response(200)
+
+      expected_prefix = Kollective.Storage.prefix()
+      assert response["upload_url"] =~ expected_prefix
+      assert response["final_asset_url"] =~ expected_prefix
+    end
+  end
+
+  describe "attachment binding via Posts.create_post" do
+    test "binds pre-uploaded media_ids and updates their description from imageAlts", %{user: user} do
+      att1 = insert(:post_attachment, user: user, user_id: user.id, url: "/media/test/1.png")
+      att2 = insert(:post_attachment, user: user, user_id: user.id, url: "/media/test/2.png")
+
+      post_attrs = %{
+        "content" => "Post with images!",
+        "media_ids" => [att1.id, att2.id],
+        "imageAlts" => ["a test mountain", "a test river"]
+      }
+
+      assert {:ok, post} = Kollective.Posts.Posts.create_post(user, post_attrs)
+
+      serialized = KollectiveWeb.PostJSON.show(post)
+      assert length(serialized.images) == 2
+
+      [img1, img2] = serialized.images
+      assert img1.url == "/media/test/1.png"
+      assert img1.description == "a test mountain"
+      assert img2.url == "/media/test/2.png"
+      assert img2.description == "a test river"
     end
   end
 

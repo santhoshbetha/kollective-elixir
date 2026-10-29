@@ -98,8 +98,11 @@ defmodule KollectiveWeb.TeamControllerTest do
   end
 
   describe "DELETE /api/v1/org-settings/members/:user_id" do
-    test "successfully removes a contributor", %{conn: conn, org: org} do
+    test "successfully removes a contributor", %{conn: conn, org: org, user: user} do
       # Make the acting user an admin so they can manage the team
+      acting_membership = Repo.get_by(Kollective.Accounts.OrganizationMembership, user_id: user.id, organization_id: org.id)
+      Repo.update!(Ecto.Changeset.change(acting_membership, role: :admin))
+
       {:ok, target_user} =
         Repo.insert(%Kollective.Accounts.User{
           display_name: "Target Contributor",
@@ -128,7 +131,10 @@ defmodule KollectiveWeb.TeamControllerTest do
              ) == nil
     end
 
-    test "returns 400 Bad Request when attempting to remove an owner", %{conn: conn, org: org} do
+    test "returns 400 Bad Request when attempting to remove an owner", %{conn: conn, org: org, user: user} do
+      acting_membership = Repo.get_by(Kollective.Accounts.OrganizationMembership, user_id: user.id, organization_id: org.id)
+      Repo.update!(Ecto.Changeset.change(acting_membership, role: :admin))
+
       {:ok, owner_user} =
         Repo.insert(%Kollective.Accounts.User{
           display_name: "Org Owner",
@@ -150,6 +156,38 @@ defmodule KollectiveWeb.TeamControllerTest do
         |> delete(~p"/api/v1/org-settings/members/#{owner_user.id}")
 
       assert json_response(conn, 400)["error"] =~ "transfer brand ownership"
+    end
+
+    test "returns 403 Forbidden when a contributor attempts to remove a member", %{
+      conn: conn,
+      org: org
+    } do
+      {:ok, target_user} =
+        Repo.insert(%Kollective.Accounts.User{
+          display_name: "Target Contributor",
+          username: "target_contrib_non_admin",
+          email: "target_na@test.com"
+        })
+
+      {:ok, _membership} =
+        Repo.insert(%Kollective.Accounts.OrganizationMembership{
+          user_id: target_user.id,
+          organization_id: org.id,
+          role: :contributor,
+          status: :active
+        })
+
+      conn =
+        conn
+        |> put_req_header("x-organization-id", to_string(org.id))
+        |> delete(~p"/api/v1/org-settings/members/#{target_user.id}")
+
+      assert json_response(conn, 403)
+
+      assert Repo.get_by(Kollective.Accounts.OrganizationMembership,
+               user_id: target_user.id,
+               organization_id: org.id
+             ) != nil
     end
   end
 
