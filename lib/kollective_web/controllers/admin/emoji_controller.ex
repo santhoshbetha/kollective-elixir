@@ -6,9 +6,7 @@ defmodule KollectiveWeb.Admin.AdminEmojiController do
 
   # ─── ACTION 1: GENERATE CUSTOM EMOJI PRESIGNED URLS ───
   # GET /api/v1/admin/custom_emojis/presign?shortcode=kollective_logo&content_type=image/gif
-  def presign(conn, %{"shortcode" => shortcode, "content_type" => content_type}) do
-    config = ExAws.Config.new(:s3)
-
+  def presign(conn, %{"shortcode" => shortcode, "content_type" => _content_type}) do
     # Clean the shortcode text input to prevent file directory traversal hacks
     safe_shortcode = String.replace(shortcode, ~r/[^a-zA-Z0-9_\-]/, "")
 
@@ -16,29 +14,18 @@ defmodule KollectiveWeb.Admin.AdminEmojiController do
     key_gif = "custom_emojis/#{safe_shortcode}.gif"
     key_static = "custom_emojis/#{safe_shortcode}_static.png"
 
-    bucket = Kollective.Storage.bucket_name()
     cdn = Kollective.Storage.cdn_domain()
 
-    # Generate an unauthenticated 15-minute write ticket straight to Cloudflare R2 edge pools
-    {:ok, url_gif} =
-      ExAws.S3.presigned_url(config, :put, bucket, key_gif,
-        expires_in: 900,
-        query_params: [{"Content-Type", content_type}]
-      )
-
-    {:ok, url_static} =
-      ExAws.S3.presigned_url(config, :put, bucket, key_static,
-        expires_in: 900,
-        query_params: [{"Content-Type", "image/png"}]
-      )
-
+    # Browser PUTs must go through the same-origin /media proxy. A direct
+    # presigned PUT to *.r2.cloudflarestorage.com fails CORS preflight (403),
+    # and that endpoint is not a public CDN for <img src>. The proxy writes
+    # to R2 server-side via MediaProxyController.upload/2.
     conn
     |> put_status(:ok)
-    # FIX: Corrected string interpolation syntax with a leading root forward slash
     |> json(%{
       status: "success",
-      upload_url_gif: url_gif,
-      upload_url_static: url_static,
+      upload_url_gif: "/media/#{key_gif}",
+      upload_url_static: "/media/#{key_static}",
       final_url: "#{cdn}/#{key_gif}",
       final_static_url: "#{cdn}/#{key_static}"
     })

@@ -38,13 +38,23 @@ defmodule KollectiveWeb.MediaJSON do
   """
   def data(attachment) do
     media_type = Map.get(attachment, :media_type) || "image"
+    fx = Map.get(attachment, :focal_x) || 0.0
+    fy = Map.get(attachment, :focal_y) || 0.0
 
     %{
       id: to_string(attachment.id),
       url: attachment.url,
       type: if(String.starts_with?(media_type, "video"), do: "video", else: "image"),
       description: Map.get(attachment, :description, "") || "",
-      blurhash: attachment.blurhash
+      blurhash: attachment.blurhash,
+      focal_x: fx,
+      focal_y: fy,
+      meta: %{
+        focus: %{
+          x: fx,
+          y: fy
+        }
+      }
     }
   end
 end

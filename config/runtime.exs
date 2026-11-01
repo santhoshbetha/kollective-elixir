@@ -73,9 +73,13 @@ if config_env() == :prod do
   r2_account_id = System.get_env("R2_ACCOUNT_ID") || "47701ef2e87f29505064cb21fd2513ed"
   r2_bucket = System.get_env("R2_BUCKET_NAME") || "kollective"
 
-  r2_public_domain =
-    System.get_env("R2_PUBLIC_DOMAIN") ||
-      "https://#{r2_account_id}.r2.cloudflarestorage.com/#{r2_bucket}"
+  # Public base for serving media to browsers. Default to the same-origin
+  # /media proxy (MediaProxyController), which streams objects from R2
+  # server-side. The raw *.r2.cloudflarestorage.com URL is the S3 API endpoint
+  # (requires auth headers) and is NOT a public CDN, so it must never be used
+  # as an <img src> default. Set R2_PUBLIC_DOMAIN to a real public CDN/custom
+  # domain (e.g. an r2.dev URL) only when one is configured.
+  r2_public_domain = System.get_env("R2_PUBLIC_DOMAIN") || "/media"
 
   config :ex_aws,
     access_key_id: System.get_env("R2_ACCESS_KEY_ID"),

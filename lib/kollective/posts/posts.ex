@@ -680,6 +680,17 @@ defmodule Kollective.Posts.Posts do
     |> Multi.run(:media_upload, fn repo, %{notifications_and_mentions: post} ->
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
+      parse_f = fn
+        nil -> nil
+        v when is_float(v) -> v
+        v when is_integer(v) -> v * 1.0
+        v when is_binary(v) -> (case Float.parse(String.trim(v)) do {f, _} -> f; _ -> nil end)
+        _ -> nil
+      end
+
+      root_fx = parse_f.(attrs["focal_x"] || attrs[:focal_x])
+      root_fy = parse_f.(attrs["focal_y"] || attrs[:focal_y])
+
       # 1. Bind any pre-uploaded PostAttachment records via media_ids
       media_ids =
         (attrs["media_ids"] || attrs[:media_ids] || [])
@@ -687,10 +698,40 @@ defmodule Kollective.Posts.Posts do
         |> Enum.map(&to_string/1)
 
       if media_ids != [] do
+        update_set = [post_id: post.id]
+        update_set = if root_fx, do: Keyword.put(update_set, :focal_x, root_fx), else: update_set
+        update_set = if root_fy, do: Keyword.put(update_set, :focal_y, root_fy), else: update_set
+
         repo.update_all(
           from(a in PostAttachment, where: a.id in ^media_ids and a.user_id == ^user.id),
-          set: [post_id: post.id]
+          set: update_set
         )
+      end
+
+      # Also support media_attachments array updates if provided
+      media_attachments_params =
+        (attrs["media_attachments"] || attrs[:media_attachments] || [])
+        |> List.wrap()
+
+      for att_item <- media_attachments_params, is_map(att_item) do
+        att_id = att_item["id"] || att_item[:id]
+        fx = parse_f.(att_item["focal_x"] || att_item[:focal_x])
+        fy = parse_f.(att_item["focal_y"] || att_item[:focal_y])
+        desc =
+          att_item["description"] || att_item["alt"] || att_item[:description] || att_item[:alt]
+
+        if att_id do
+          m_set = []
+          m_set = if fx, do: Keyword.put(m_set, :focal_x, fx), else: m_set
+          m_set = if fy, do: Keyword.put(m_set, :focal_y, fy), else: m_set
+          m_set = if desc && desc != "", do: Keyword.put(m_set, :description, desc), else: m_set
+          if m_set != [] do
+            repo.update_all(
+              from(a in PostAttachment, where: a.id == ^to_string(att_id) and a.user_id == ^user.id),
+              set: m_set
+            )
+          end
+        end
       end
 
       # 2. Extract any images passed as URLs or maps
@@ -728,6 +769,20 @@ defmodule Kollective.Posts.Posts do
               _ -> Enum.at(image_alts, idx) || ""
             end
 
+          img_fx =
+            case img do
+              %{"focal_x" => x} -> parse_f.(x) || root_fx || 0.0
+              %{focal_x: x} -> parse_f.(x) || root_fx || 0.0
+              _ -> root_fx || 0.0
+            end
+
+          img_fy =
+            case img do
+              %{"focal_y" => y} -> parse_f.(y) || root_fy || 0.0
+              %{focal_y: y} -> parse_f.(y) || root_fy || 0.0
+              _ -> root_fy || 0.0
+            end
+
           if url && url != "" && url not in existing_attachment_urls do
             [
               %{
@@ -737,6 +792,8 @@ defmodule Kollective.Posts.Posts do
                 url: url,
                 description: alt,
                 media_type: "image/jpeg",
+                focal_x: img_fx,
+                focal_y: img_fy,
                 inserted_at: now,
                 updated_at: now
               }
@@ -874,16 +931,10 @@ defmodule Kollective.Posts.Posts do
 
         # ─── DECOUPLED ASYNC WEB CRAWLER INJECTION ───
         # O(1) ASYNC WEB CRAWLER INJECTION
-        # if extracted_link,
-        #   do:
-        #    Task.start(fn ->
-        #      crawl_and_populate_link_preview(hydrated_post.id, extracted_link)
-        #    end)
-
         if extracted_link do
-          %{"post_id" => hydrated_post.id, "url" => extracted_link}
-          |> Kollective.Workers.LinkPreviewWorker.new()
-          |> Oban.insert()
+          Task.start(fn ->
+            crawl_and_populate_link_preview(hydrated_post.id, extracted_link)
+          end)
         end
 
         {:ok, hydrated_post}
@@ -896,45 +947,53 @@ defmodule Kollective.Posts.Posts do
   # ─── ASYNC OPENGRAPH WEB CRAWLER MODULE (THE EXTRACTOR MATRIX) ───
 
   defp crawl_and_populate_link_preview(post_id, url) do
-    case Req.get(url, headers: [{"user-agent", "KollectiveBot/1.0"}], retry: false) do
-      {:ok, %Req.Response{status: 200, body: html_body}} ->
-        {:ok, document} = Floki.parse_document(html_body)
+    try do
+      case Req.get(url, headers: [{"user-agent", "KollectiveBot/1.0"}], retry: false, receive_timeout: 5000) do
+        {:ok, %Req.Response{status: 200, body: html_body}} when is_binary(html_body) ->
+          case Floki.parse_document(html_body) do
+            {:ok, document} ->
+              title =
+                extract_og_tag(document, "og:title") || extract_text_tag(document, "title") ||
+                  "Link Overview"
 
-        title =
-          extract_og_tag(document, "og:title") || extract_text_tag(document, "title") ||
-            "Link Overview"
+              description =
+                extract_og_tag(document, "og:description") || extract_meta_description(document) || ""
 
-        description =
-          extract_og_tag(document, "og:description") || extract_meta_description(document) || ""
+              preview_image = extract_og_tag(document, "og:image") || ""
 
-        preview_image = extract_og_tag(document, "og:image") || ""
+              # Update the main row caches natively
+              from(p in Post, where: p.id == ^post_id)
+              |> Repo.update_all(
+                set: [
+                  link_title: String.slice(title, 0, 255),
+                  link_description: String.slice(description, 0, 500),
+                  link_preview_image: preview_image
+                ]
+              )
 
-        # Update the main row caches natively
-        from(p in Post, where: p.id == ^post_id)
-        |> Repo.update_all(
-          set: [
-            link_title: String.slice(title, 0, 255),
-            link_description: String.slice(description, 0, 500),
-            link_preview_image: preview_image
-          ]
-        )
+              # Push real-time link preview cards out over the websocket network channel
+              Phoenix.PubSub.broadcast(
+                Kollective.PubSub,
+                # "feed:public",
+                "timeline:global",
+                {:link_preview_ready,
+                 %{
+                   post_id: post_id,
+                   link_title: title,
+                   link_description: description,
+                   link_preview_image: preview_image
+                 }}
+              )
 
-        # Push real-time link preview cards out over the websocket network channel
-        Phoenix.PubSub.broadcast(
-          Kollective.PubSub,
-          # "feed:public",
-          "timeline:global",
-          {:link_preview_ready,
-           %{
-             post_id: post_id,
-             link_title: title,
-             link_description: description,
-             link_preview_image: preview_image
-           }}
-        )
+            _ ->
+              :ok
+          end
 
-      _ ->
-        :ok
+        _ ->
+          :ok
+      end
+    rescue
+      _ -> :ok
     end
   end
 

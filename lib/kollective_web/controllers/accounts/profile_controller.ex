@@ -38,15 +38,10 @@ defmodule KollectiveWeb.ProfileController do
             _ -> "/media/#{file_key}"
           end
 
-        has_r2_credentials?() ->
-          case @s3_engine.presigned_url(s3_config(), :put, Kollective.Storage.bucket_name(), file_key,
-                 expires_in: 900,
-                 query_params: [{"Content-Type", content_type}]
-               ) do
-            {:ok, url} -> url
-            _ -> "/media/#{file_key}"
-          end
-
+        # Browser PUTs must go through the same-origin /media proxy. A direct
+        # presigned PUT to *.r2.cloudflarestorage.com fails CORS preflight (403),
+        # and that endpoint is not a public CDN for <img src>. The proxy writes
+        # to R2 server-side via MediaProxyController.upload/2.
         true ->
           "/media/#{file_key}"
       end
@@ -62,12 +57,6 @@ defmodule KollectiveWeb.ProfileController do
 
   def presign_asset(conn, _),
     do: conn |> put_status(:bad_request) |> json(%{error: "Invalid asset type parameters."})
-
-  defp has_r2_credentials? do
-    key = System.get_env("R2_ACCESS_KEY_ID") || Application.get_env(:ex_aws, :access_key_id)
-    secret = System.get_env("R2_SECRET_ACCESS_KEY") || Application.get_env(:ex_aws, :secret_access_key)
-    is_binary(key) and key != "" and is_binary(secret) and secret != ""
-  end
 
   defp s3_config do
     if @s3_engine == ExAws.S3 do

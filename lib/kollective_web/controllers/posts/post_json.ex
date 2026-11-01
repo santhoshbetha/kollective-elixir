@@ -64,6 +64,9 @@ defmodule KollectiveWeb.PostJSON do
     rich_image_objects =
       if is_list(attachments) and Ecto.assoc_loaded?(attachments) do
         Enum.map(attachments, fn att ->
+          fx = Map.get(att, :focal_x) || 0.0
+          fy = Map.get(att, :focal_y) || 0.0
+
           %{
             id: to_string(att.id),
             url: att.url,
@@ -71,7 +74,10 @@ defmodule KollectiveWeb.PostJSON do
             static_url: Map.get(att, :static_url) || att.url,
             blurhash: Map.get(att, :blurhash) || "",
             description: Map.get(att, :description) || "",
-            imageMeta: Map.get(att, :description) || post.text || "Timeline attachment asset node"
+            imageMeta: Map.get(att, :description) || post.text || "Timeline attachment asset node",
+            focal_x: fx,
+            focal_y: fy,
+            meta: %{focus: %{x: fx, y: fy}}
           }
         end)
       else
@@ -168,17 +174,27 @@ defmodule KollectiveWeb.PostJSON do
       image: List.first(rich_image_objects),
       legacy_images_fallback: legacy_image_string_urls,
       media_attachments: serialize_attachments(attachments),
-      # INTERACTIVE CARD PREVIEW OBJECT: Returns nil if no link was pasted
+      # INTERACTIVE CARD PREVIEW OBJECT: Returns nil if no link was pasted or crawler hasn't populated metadata yet
       link_preview:
-        if post.link_url do
-          %{
-            url: post.link_url,
-            title: post.link_title || "Loading Preview...",
-            description: post.link_description || "",
-            image_url: post.link_preview_image
-          }
-        else
-          nil
+        cond do
+          is_map(post) && Map.get(post, :link_preview) ->
+            Map.get(post, :link_preview)
+
+          is_map(item) && Map.get(item, :link_preview) ->
+            Map.get(item, :link_preview)
+
+          is_map(post) && Map.get(post, :link_url) &&
+              (Map.get(post, :link_title) || Map.get(post, :link_description) ||
+                 Map.get(post, :link_preview_image)) ->
+            %{
+              url: post.link_url,
+              title: post.link_title || "Link Overview",
+              description: post.link_description || "",
+              image_url: post.link_preview_image
+            }
+
+          true ->
+            nil
         end,
       poll: serialize_poll(Map.get(post, :poll)),
       user_id: (post.user_id && to_string(post.user_id)) || nil,
@@ -301,6 +317,9 @@ defmodule KollectiveWeb.PostJSON do
 
   defp serialize_attachments(attachments) do
     Enum.map(attachments, fn att ->
+      fx = Map.get(att, :focal_x) || 0.0
+      fy = Map.get(att, :focal_y) || 0.0
+
       %{
         id: to_string(att.id),
         url: att.url,
@@ -309,7 +328,15 @@ defmodule KollectiveWeb.PostJSON do
         static_url: Map.get(att, :static_url) || att.url,
         type:
           if(String.starts_with?(att.media_type || "image", "video"), do: "video", else: "image"),
-        blurhash: att.blurhash || ""
+        blurhash: att.blurhash || "",
+        focal_x: fx,
+        focal_y: fy,
+        meta: %{
+          focus: %{
+            x: fx,
+            y: fy
+          }
+        }
       }
     end)
   end

@@ -1492,24 +1492,17 @@ defmodule Kollective.Events.Events do
       relative_path = "events/#{event_id}/#{asset_type}/#{user.id}/#{unique_name}"
       s3_path = Kollective.Storage.object_key(relative_path)
 
-      config = ExAws.Config.new(:s3)
-
-      bucket = Kollective.Storage.bucket_name()
       cdn = Kollective.Storage.cdn_domain()
 
-      # Wrap the S3 call in a safe case block to handle real connectivity errors
-      case ExAws.S3.presigned_url(config, :put, bucket, s3_path, expires_in: 900) do
-        {:ok, presigned_url} ->
-          {:ok,
-           %{
-             upload_url: presigned_url,
-             final_asset_url: "#{cdn}/#{s3_path}"
-           }}
-
-        {:error, reason} ->
-          # This gives your case statement a real error path to resolve Dialyzer warnings
-          {:error, reason}
-      end
+      # Browser PUTs must go through the same-origin /media proxy. A direct
+      # presigned PUT to *.r2.cloudflarestorage.com fails CORS preflight (403),
+      # and that endpoint is not a public CDN for <img src>. The proxy writes
+      # to R2 server-side via MediaProxyController.upload/2.
+      {:ok,
+       %{
+         upload_url: "/media/#{s3_path}",
+         final_asset_url: "#{cdn}/#{s3_path}"
+       }}
     else
       {:error, :invalid_type}
     end

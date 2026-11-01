@@ -198,8 +198,6 @@ defmodule KollectiveWeb.EventCommentController do
   # Expected params: ?content_type=image/png
   def presign_image(conn, %{"content_type" => content_type}) do
     user = conn.assigns.current_user
-    config = ExAws.Config.new(:s3)
-    bucket = Kollective.Storage.bucket_name()
 
     # Determine extensions safely based on the mime type parameters
     extension =
@@ -212,19 +210,15 @@ defmodule KollectiveWeb.EventCommentController do
     # Structure folder hierarchy: comments/USER_ID/timestamp.ext
     file_key = "comments/#{user.id}/img_#{System.system_time(:second)}#{extension}"
 
-    # Generate an unauthenticated secure write ticket to R2 edge pools
-    {:ok, url} =
-      ExAws.S3.presigned_url(config, :put, bucket, file_key,
-        expires_in: 3600,
-        query_params: [{"Content-Type", content_type}]
-      )
-
+    # Browser PUTs must go through the same-origin /media proxy. A direct
+    # presigned PUT to *.r2.cloudflarestorage.com fails CORS preflight (403),
+    # and that endpoint is not a public CDN for <img src>. The proxy writes
+    # to R2 server-side via MediaProxyController.upload/2.
     conn
     |> put_status(:ok)
-    # FIX: Corrected string interpolation syntax with a leading root forward slash
     |> json(%{
       status: "success",
-      upload_url: url,
+      upload_url: "/media/#{file_key}",
       final_asset_url: "#{Kollective.Storage.cdn_domain()}/#{file_key}"
     })
   end

@@ -21,15 +21,27 @@ defmodule KollectiveWeb.MediaProxyController do
       {:ok, body, conn} ->
         File.write!(priv_path, body)
 
-        if priv_path != source_path do
-          File.write!(source_path, body)
+        try do
+          {:ok, img} = Image.open(priv_path)
+          {:ok, oriented} = Image.auto_orient(img)
+          {:ok, optimized} = Image.minimize_metadata(oriented)
+          {:ok, thumbnail} = Image.thumbnail(optimized, 2048)
+          Image.write(thumbnail, priv_path, quality: 85)
+        rescue
+          _ -> :ok
         end
 
-        maybe_upload_to_r2(clean_key, body)
+        final_body = File.read!(priv_path)
+
+        if priv_path != source_path do
+          File.write!(source_path, final_body)
+        end
+
+        maybe_upload_to_r2(clean_key, final_body)
 
         conn
         |> put_status(:ok)
-        |> json(%{status: "ok", key: key, size: byte_size(body)})
+        |> json(%{status: "ok", key: key, size: byte_size(final_body)})
 
       {:error, reason} ->
         conn

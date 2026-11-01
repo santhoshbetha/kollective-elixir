@@ -15,6 +15,8 @@ defmodule Kollective.Media.MediaAttachment do
 
     # URL for the extracted first frame
     field :static_url, :string
+    field :focal_x, :float, default: 0.0
+    field :focal_y, :float, default: 0.0
 
     belongs_to :author, Kollective.Accounts.User, foreign_key: :author_id
     belongs_to :post, Kollective.Posts.Post, foreign_key: :post_id
@@ -35,6 +37,8 @@ defmodule Kollective.Media.MediaAttachment do
       :url,
       :blurhash,
       :static_url,
+      :focal_x,
+      :focal_y,
       :author_id,
       :post_id
     ])

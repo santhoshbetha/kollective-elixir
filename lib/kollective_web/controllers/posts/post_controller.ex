@@ -71,6 +71,9 @@ defmodule KollectiveWeb.PostController do
         _ -> "world"
       end
 
+    focal_x = post_params["focal_x"] || params["focal_x"] || get_in(post_params, ["meta", "focus", "x"]) || get_in(params, ["meta", "focus", "x"])
+    focal_y = post_params["focal_y"] || params["focal_y"] || get_in(post_params, ["meta", "focus", "y"]) || get_in(params, ["meta", "focus", "y"])
+
     post_params =
       post_params
       |> Map.put("content", content_text)
@@ -81,6 +84,11 @@ defmodule KollectiveWeb.PostController do
         "visibility",
         if(raw_audience == "Followers Only", do: "private", else: "public")
       )
+      |> then(fn p -> if focal_x != nil, do: Map.put(p, "focal_x", focal_x), else: p end)
+      |> then(fn p -> if focal_y != nil, do: Map.put(p, "focal_y", focal_y), else: p end)
+      |> Map.put_new("media_attachments", params["media_attachments"])
+      |> Map.put_new("media_ids", params["media_ids"])
+      |> Map.put_new("images", params["images"])
 
     # 1. Organization / Identity Context Gateway
     org_id =
