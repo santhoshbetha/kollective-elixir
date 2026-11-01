@@ -118,17 +118,26 @@ defmodule KollectiveWeb.ProfileController do
         |> json(%{error: "not_found", message: "User profile not found."})
 
       user_profile ->
-        conn
-        |> put_status(:ok)
-        # Modern Phoenix 1.7 standard: Pass data straight to your AccountJSON
-        |> json(%{
-          status: "success",
-          data:
-            KollectiveWeb.AccountJSON.show(%{
-              user: user_profile,
-              for: current_user
-            })
-        })
+        if current_user && Accounts.blocks?(user_profile, current_user) do
+          conn
+          |> put_status(:forbidden)
+          |> json(%{
+            error: "blocked",
+            message: "You are blocked from viewing this resource."
+          })
+        else
+          conn
+          |> put_status(:ok)
+          # Modern Phoenix 1.7 standard: Pass data straight to your AccountJSON
+          |> json(%{
+            status: "success",
+            data:
+              KollectiveWeb.AccountJSON.show(%{
+                user: user_profile,
+                for: current_user
+              })
+          })
+        end
     end
   end
 
@@ -146,19 +155,28 @@ defmodule KollectiveWeb.ProfileController do
         |> json(%{error: "not_found", message: "Account profile not found."})
 
       target_user ->
-        %{entries: entries, next_cursor: next_cursor} =
-          Kollective.Posts.Posts.list_user_posts(target_user, current_user, params)
+        if current_user && Accounts.blocks?(target_user, current_user) do
+          conn
+          |> put_status(:forbidden)
+          |> json(%{
+            error: "blocked",
+            message: "You are blocked from viewing this resource."
+          })
+        else
+          %{entries: entries, next_cursor: next_cursor} =
+            Kollective.Posts.Posts.list_user_posts(target_user, current_user, params)
 
-        serialized = KollectiveWeb.PostJSON.index(%{entries: entries})
+          serialized = KollectiveWeb.PostJSON.index(%{entries: entries})
 
-        conn
-        |> put_status(:ok)
-        |> json(%{
-          status: "success",
-          data: serialized,
-          posts: serialized,
-          next_cursor: next_cursor
-        })
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            status: "success",
+            data: serialized,
+            posts: serialized,
+            next_cursor: next_cursor
+          })
+        end
     end
   end
 
@@ -176,20 +194,29 @@ defmodule KollectiveWeb.ProfileController do
         |> json(%{error: "not_found", message: "Account profile not found."})
 
       target_user ->
-        %{entries: users, next_cursor: next_cursor} =
-          Accounts.list_followers(target_user, params)
+        if current_user && Accounts.blocks?(target_user, current_user) do
+          conn
+          |> put_status(:forbidden)
+          |> json(%{
+            error: "blocked",
+            message: "You are blocked from viewing this resource."
+          })
+        else
+          %{entries: users, next_cursor: next_cursor} =
+            Accounts.list_followers(target_user, params)
 
-        serialized = KollectiveWeb.AccountJSON.index(%{users: users, for: current_user})
+          serialized = KollectiveWeb.AccountJSON.index(%{users: users, for: current_user})
 
-        conn
-        |> put_status(:ok)
-        |> json(%{
-          status: "success",
-          data: serialized,
-          accounts: serialized,
-          users: serialized,
-          next_cursor: next_cursor
-        })
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            status: "success",
+            data: serialized,
+            accounts: serialized,
+            users: serialized,
+            next_cursor: next_cursor
+          })
+        end
     end
   end
 
@@ -207,20 +234,29 @@ defmodule KollectiveWeb.ProfileController do
         |> json(%{error: "not_found", message: "Account profile not found."})
 
       target_user ->
-        %{entries: users, next_cursor: next_cursor} =
-          Accounts.list_following(target_user, params)
+        if current_user && Accounts.blocks?(target_user, current_user) do
+          conn
+          |> put_status(:forbidden)
+          |> json(%{
+            error: "blocked",
+            message: "You are blocked from viewing this resource."
+          })
+        else
+          %{entries: users, next_cursor: next_cursor} =
+            Accounts.list_following(target_user, params)
 
-        serialized = KollectiveWeb.AccountJSON.index(%{users: users, for: current_user})
+          serialized = KollectiveWeb.AccountJSON.index(%{users: users, for: current_user})
 
-        conn
-        |> put_status(:ok)
-        |> json(%{
-          status: "success",
-          data: serialized,
-          accounts: serialized,
-          users: serialized,
-          next_cursor: next_cursor
-        })
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            status: "success",
+            data: serialized,
+            accounts: serialized,
+            users: serialized,
+            next_cursor: next_cursor
+          })
+        end
     end
   end
 

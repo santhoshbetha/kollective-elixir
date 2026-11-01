@@ -181,6 +181,8 @@ defmodule KollectiveWeb.PostJSON do
           nil
         end,
       poll: serialize_poll(Map.get(post, :poll)),
+      user_id: (post.user_id && to_string(post.user_id)) || nil,
+      parent_id: (post.in_reply_to_id && to_string(post.in_reply_to_id)) || nil,
       in_reply_to_id: (post.in_reply_to_id && to_string(post.in_reply_to_id)) || nil,
       in_reply_to_account_id: (post.in_reply_to_id && to_string(post.in_reply_to_id)) || nil,
       in_reply_to_username: Map.get(post, :in_reply_to_username),

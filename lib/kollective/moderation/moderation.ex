@@ -85,39 +85,76 @@ defmodule Kollective.Moderation.Moderation do
   automatic 'mute' block against the author so their content vanishes from the reporter's feed instantly.
   """
   def create_report(user, post_id, attrs \\ %{}) do
-    author_id = attrs["author_id"] || attrs[:author_id]
-    reason = attrs["reason"] || attrs[:reason]
-    details = attrs["details"] || attrs[:details]
+    raw_author_id =
+      attrs["author_id"] || attrs[:author_id] || attrs["account_id"] || attrs[:account_id] ||
+        attrs["target_user_id"] || attrs[:target_user_id]
 
-    Multi.new()
-    # Step 1: Insert the official audit Report record
-    |> Multi.insert(:report, %Report{
-      reporter_id: user.id,
-      post_id: post_id,
-      event_id: attrs["event_id"] || attrs[:event_id],
-      reason: reason,
-      details: details,
-      # Standardized state string
-      status: "pending"
-    })
+    author_id =
+      case Ecto.ULID.cast(raw_author_id) do
+        {:ok, valid_ulid} ->
+          if Repo.get(User, valid_ulid), do: valid_ulid, else: nil
+
+        _ ->
+          nil
+      end
+
+    valid_post_id =
+      case Ecto.ULID.cast(post_id) do
+        {:ok, valid_ulid} ->
+          if Repo.get(Post, valid_ulid), do: valid_ulid, else: nil
+
+        _ ->
+          nil
+      end
+
+    category =
+      attrs["category"] || attrs[:category] || attrs["reason"] || attrs[:reason] ||
+        "content_violation"
+
+    reason = attrs["reason"] || attrs[:reason] || category
+    comment = attrs["comment"] || attrs[:comment] || attrs["details"] || attrs[:details]
+    details = attrs["details"] || attrs[:details] || comment
+
+    multi =
+      Multi.new()
+      # Step 1: Insert the official audit Report record
+      |> Multi.insert(:report, %Report{
+        reporter_id: user.id,
+        target_user_id: author_id,
+        post_id: valid_post_id,
+        event_id: attrs["event_id"] || attrs[:event_id],
+        category: category,
+        reason: reason,
+        comment: comment,
+        details: details,
+        # Standardized state string
+        status: "pending"
+      })
 
     # Step 2: AUTO-HIDE MUTE SHIELD
     # Automatically mutes the author for the reporter to clear their UI feed panels instantly
-    |> Multi.insert(
-      :auto_mute,
-      fn _changes ->
-        %UserRelationship{
-          source_id: user.id,
-          target_id: author_id,
-          type: "mute"
-        }
-      end,
-      # Prevents duplicate crashes
-      on_conflict: :nothing,
-      conflict_target: [:source_id, :target_id, :type]
-    )
+    multi =
+      if author_id && author_id != user.id do
+        Multi.insert(
+          multi,
+          :auto_mute,
+          fn _changes ->
+            %UserRelationship{
+              source_id: user.id,
+              target_id: author_id,
+              type: "mute"
+            }
+          end,
+          # Prevents duplicate crashes
+          on_conflict: :nothing,
+          conflict_target: [:source_id, :target_id, :type]
+        )
+      else
+        multi
+      end
 
     # Execute full transaction block safely
+    multi
     |> Repo.transaction()
     |> handle_report_creation_lifecycle()
   end

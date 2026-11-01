@@ -191,9 +191,21 @@ defmodule KollectiveWeb.Router do
     # Single universal button toggle route handling follow, block, and mutes uniformly
     post("/relationships/toggle", RelationshipController, :toggle)
 
-    # Explicit follow / unfollow account routes
+    # Explicit follow / unfollow / mute / block account routes
     post("/accounts/:id/follow", RelationshipController, :follow_account)
     post("/accounts/:id/unfollow", RelationshipController, :unfollow_account)
+    post("/accounts/:id/mute", RelationshipController, :mute_account)
+    post("/accounts/:id/unmute", RelationshipController, :unmute_account)
+    post("/accounts/:id/block", RelationshipController, :block_account)
+    post("/accounts/:id/unblock", RelationshipController, :unblock_account)
+    get("/blocks", RelationshipController, :blocks_index)
+    get("/mutes", RelationshipController, :mutes_index)
+    get("/privacy/blocks", RelationshipController, :privacy_blocks_index)
+    get("/privacy/mutes", RelationshipController, :privacy_mutes_index)
+    delete("/privacy/blocks/:account_id", RelationshipController, :privacy_unblock_account)
+    delete("/privacy/mutes/:account_id", RelationshipController, :privacy_unmute_account)
+    post("/privacy/blocks/:account_id", RelationshipController, :privacy_unblock_account)
+    post("/privacy/mutes/:account_id", RelationshipController, :privacy_unmute_account)
     post("/accounts/follow/toggle", UserRelationshipController, :toggle_follow)
   end
 
@@ -318,6 +330,7 @@ defmodule KollectiveWeb.Router do
     # 👤 Account Profiles & Profile Timeline Posts (Optional Auth)
     get("/accounts/:username_or_id", ProfileController, :show)
     get("/accounts/:username_or_id/posts", ProfileController, :user_posts)
+    get("/accounts/:username_or_id/statuses", ProfileController, :user_posts)
     get("/accounts/:username_or_id/followers", ProfileController, :followers)
     get("/accounts/:username_or_id/following", ProfileController, :following)
 
@@ -526,6 +539,7 @@ defmodule KollectiveWeb.Router do
     # Governance Flags & Geo-Service Handshakes
     # Regular citizens can report posts safely here
     post("/posts/:post_id/report", ReportController, :create)
+    post("/reports", ReportController, :create)
     patch("/profile/districts", UserController, :update_districts)
   end
 
@@ -853,62 +867,10 @@ defmodule KollectiveWeb.Router do
     post("/presign", StorageController, :presign)
   end
 
-  scope "/api/v1", KollectiveWeb do
-    pipe_through([:api, :api_authenticated])
-
-    post("/campaigns/apply", CandidacyAuthController, :create_application)
-    post("/campaigns/apply/vouch", CandidacyAuthController, :cast_vouch)
-    post("/campaigns/apply/approve", CandidacyAuthController, :approve_application)
-    # POST /api/v1/campaigns/pitches
-    # JSON Payload Body fields: %{"candidate" => %{"office_level" => "municipal", ...}, "video" => %{}}
-    # 🗳️ Handles all candidate registration video posts (Municipal, County, Federal)
-    post("/campaigns/declare", CampaignController, :declare_pitch)
-
-    # GET /api/v1/campaigns/pitches?level=municipal&code=austin_tx&stage=booth
-    get("/campaigns/pitches", CampaignController, :index_pitches)
-
-    # POST /api/v1/campaigns/pitches/:id/vote
-    # JSON Payload Body fields: %{"delta" => 1}  OR  %{"delta" => -1}
-    post("/campaigns/pitches/:id/vote", CampaignController, :vote_pitch)
-  end
-
-  # lib/kollective_web/router.ex
-  scope "/api/v1", KollectiveWeb do
-    pipe_through([:api, :api_authenticated])
-
-    # 🗳️ Debate Logistics & Town Hall Operations
-    get("/campaigns/debates", DebateController, :index_debates)
-    post("/campaigns/debates/shifts/:id/claim", DebateController, :claim_shift)
-  end
-
-  # lib/kollective_web/router.ex
-  scope "/api/v1", KollectiveWeb do
-    pipe_through([:api, :api_authenticated])
-
-    # ⏱️ Crowdsourced Civic Ledgers & Municipal Ballots Deadlines
-    get("/campaigns/deadlines", DeadlineController, :index_deadlines)
-    post("/campaigns/deadlines", DeadlineController, :create_deadline)
-  end
-
-  scope "/api", KollectiveWeb do
-    # Use your application's auth plug
-    pipe_through([:api, :api_authenticated])
-
-    post("/civic/update_precinct_node", CivicController, :update_precinct_node)
-  end
-
   scope "/api/v1/cities", KollectiveWeb do
     pipe_through([:api])
 
     get("/search", CityController, :search)
-  end
-
-  # ─── LOCATION RESOLUTION (GEOGRAPHY ROUTE) ───
-  # Public facing endpoint (no authentication required) to find offices via address/coordinates/PIN
-  scope "/api/v1", KollectiveWeb do
-    pipe_through(:api)
-
-    post("/resolve-offices", LocationController, :resolve_offices)
   end
 
   # District Auto-Suggest
@@ -923,6 +885,21 @@ defmodule KollectiveWeb.Router do
     pipe_through([:api, :api_authenticated])
 
     get("/districts/lookup", DistrictController, :lookup)
+  end
+
+  # ─── LOCATION RESOLUTION (GEOGRAPHY ROUTE) ───
+  # Public facing endpoint (no authentication required) to find offices via address/coordinates/PIN
+  scope "/api/v1", KollectiveWeb do
+    pipe_through(:api)
+
+    post("/resolve-offices", LocationController, :resolve_offices)
+  end
+
+  scope "/api", KollectiveWeb do
+    # Use your application's auth plug
+    pipe_through([:api, :api_authenticated])
+
+    post("/civic/update_precinct_node", CivicController, :update_precinct_node)
   end
 
   scope "/api", KollectiveWeb do
@@ -971,5 +948,42 @@ defmodule KollectiveWeb.Router do
     pipe_through([:api])
 
     options("/*path", OptionsController, :options)
+  end
+
+  scope "/api/v1", KollectiveWeb do
+    pipe_through([:api, :api_authenticated])
+
+    post("/campaigns/apply", CandidacyAuthController, :create_application)
+    post("/campaigns/apply/vouch", CandidacyAuthController, :cast_vouch)
+    post("/campaigns/apply/approve", CandidacyAuthController, :approve_application)
+    # POST /api/v1/campaigns/pitches
+    # JSON Payload Body fields: %{"candidate" => %{"office_level" => "municipal", ...}, "video" => %{}}
+    # 🗳️ Handles all candidate registration video posts (Municipal, County, Federal)
+    post("/campaigns/declare", CampaignController, :declare_pitch)
+
+    # GET /api/v1/campaigns/pitches?level=municipal&code=austin_tx&stage=booth
+    get("/campaigns/pitches", CampaignController, :index_pitches)
+
+    # POST /api/v1/campaigns/pitches/:id/vote
+    # JSON Payload Body fields: %{"delta" => 1}  OR  %{"delta" => -1}
+    post("/campaigns/pitches/:id/vote", CampaignController, :vote_pitch)
+  end
+
+  # lib/kollective_web/router.ex
+  scope "/api/v1", KollectiveWeb do
+    pipe_through([:api, :api_authenticated])
+
+    # 🗳️ Debate Logistics & Town Hall Operations
+    get("/campaigns/debates", DebateController, :index_debates)
+    post("/campaigns/debates/shifts/:id/claim", DebateController, :claim_shift)
+  end
+
+  # lib/kollective_web/router.ex
+  scope "/api/v1", KollectiveWeb do
+    pipe_through([:api, :api_authenticated])
+
+    # ⏱️ Crowdsourced Civic Ledgers & Municipal Ballots Deadlines
+    get("/campaigns/deadlines", DeadlineController, :index_deadlines)
+    post("/campaigns/deadlines", DeadlineController, :create_deadline)
   end
 end

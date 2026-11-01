@@ -43,12 +43,14 @@ defmodule Kollective.Posts.Posts do
   Returns `{:ok, post}` or `{:error, :not_found}` to allow clean pattern matching.
   """
   def get_post(id) do
-    Post
-    |> preload([:author, :organization, :attachments, :hashtags, :reblog_of, poll: :options])
-    |> Repo.get(id)
-    |> case do
-      nil -> {:error, :not_found}
-      post -> {:ok, post}
+    with {:ok, valid_id} <- Ecto.ULID.cast(id),
+         %Post{} = post <-
+           Post
+           |> preload([:author, :organization, :attachments, :hashtags, :reblog_of, poll: :options])
+           |> Repo.get(valid_id) do
+      {:ok, post}
+    else
+      _ -> {:error, :not_found}
     end
   end
 
@@ -1965,10 +1967,10 @@ defmodule Kollective.Posts.Posts do
   defp apply_bidirectional_block_masks(query, nil), do: query
 
   defp apply_bidirectional_block_masks(query, current_user_id) do
-    # Subquery tracking accounts blocked by the active user
+    # Subquery tracking accounts blocked or muted by the active user
     blocked_ids_subquery =
       from(r in Kollective.Accounts.UserRelationship,
-        where: r.source_id == ^current_user_id and r.type == "block",
+        where: r.source_id == ^current_user_id and r.type in ["block", "mute"],
         select: r.target_id
       )
 
@@ -2335,6 +2337,10 @@ defmodule Kollective.Posts.Posts do
 
     multi =
       Multi.new()
+      |> Multi.delete_all(
+        :delete_reblogs,
+        from(p in Post, where: p.reblog_of_id == ^post.id)
+      )
       |> Multi.delete(:post, post)
 
     multi =

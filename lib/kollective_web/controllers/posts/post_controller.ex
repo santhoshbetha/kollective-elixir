@@ -237,20 +237,30 @@ defmodule KollectiveWeb.PostController do
         conn |> put_status(:not_found) |> json(%{error: "Post not found"})
 
       {:ok, post} ->
-        # Enforce visibility and accessibility guards
-        if has_access_to_post?(post, current_user_id) do
-          # Pass to the O(1) batch hydration layer to color heart/bookmark icons
-          [hydrated_item] = Posts.hydrate_virtual_fields([post], current_user)
+        cond do
+          current_user && post.author && Accounts.blocks?(post.author, current_user) ->
+            conn
+            |> put_status(:forbidden)
+            |> json(%{
+              error: "blocked",
+              message: "You are blocked from viewing this resource."
+            })
 
-          conn
-          |> put_status(:ok)
-          |> json(%{
-            status: "success",
-            data: PostJSON.show(hydrated_item)
-          })
-        else
-          # Return a 404 to protect the privacy of the account holder (Stealth Defense)
-          conn |> put_status(:not_found) |> json(%{error: "Post not found"}) |> halt()
+          # Enforce visibility and accessibility guards
+          has_access_to_post?(post, current_user_id) ->
+            # Pass to the O(1) batch hydration layer to color heart/bookmark icons
+            [hydrated_item] = Posts.hydrate_virtual_fields([post], current_user)
+
+            conn
+            |> put_status(:ok)
+            |> json(%{
+              status: "success",
+              data: PostJSON.show(hydrated_item)
+            })
+
+          true ->
+            # Return a 404 to protect the privacy of the account holder (Stealth Defense)
+            conn |> put_status(:not_found) |> json(%{error: "Post not found"}) |> halt()
         end
     end
   end
@@ -266,13 +276,24 @@ defmodule KollectiveWeb.PostController do
         |> json(%{error: "Post not found"})
 
       {:ok, %{ancestors: ancestors, focus: focus, descendants: descendants}} ->
-        conn
-        |> put_status(:ok)
-        |> json(%{
-          ancestors: Enum.map(ancestors, &PostJSON.show/1),
-          focus: PostJSON.show(focus),
-          descendants: Enum.map(descendants, &PostJSON.show/1)
-        })
+        focus_author = Map.get(focus, :author) || (Map.get(focus, :post) && Map.get(focus.post, :author))
+
+        if current_user && focus_author && Accounts.blocks?(focus_author, current_user) do
+          conn
+          |> put_status(:forbidden)
+          |> json(%{
+            error: "blocked",
+            message: "You are blocked from viewing this resource."
+          })
+        else
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            ancestors: Enum.map(ancestors, &PostJSON.show/1),
+            focus: PostJSON.show(focus),
+            descendants: Enum.map(descendants, &PostJSON.show/1)
+          })
+        end
     end
   end
 
@@ -319,8 +340,23 @@ defmodule KollectiveWeb.PostController do
   end
 
   # PUT /api/v1/posts/:id
-  def update(conn, %{"id" => id, "post" => post_params}) do
+  def update(conn, %{"id" => id, "post" => raw_post_params}) when is_map(raw_post_params) do
     user = conn.assigns.current_user
+
+    post_params =
+      raw_post_params
+      |> then(fn p ->
+        cond do
+          Map.has_key?(p, "text") and not Map.has_key?(p, "content") ->
+            Map.put(p, "content", p["text"])
+
+          Map.has_key?(p, "content") and not Map.has_key?(p, "text") ->
+            Map.put(p, "text", p["content"])
+
+          true ->
+            p
+        end
+      end)
 
     case Posts.get_post(id) do
       {:error, :not_found} ->
@@ -383,6 +419,11 @@ defmodule KollectiveWeb.PostController do
           end
         end
     end
+  end
+
+  def update(conn, %{"id" => id} = params) do
+    post_params = Map.drop(params, ["id"])
+    update(conn, %{"id" => id, "post" => post_params})
   end
 
   # DELETE /api/v1/posts/:id
@@ -709,7 +750,13 @@ defmodule KollectiveWeb.PostController do
       Map.get(params, "parent_id") || Map.get(post_params, "parent_id") || route_id
 
     # 1. Locate the target parent post first to verify existence and preload assets
-    case Repo.get(Post, target_parent_id) |> Repo.preload([:author]) do
+    parent_lookup =
+      case Ecto.ULID.cast(target_parent_id) do
+        {:ok, valid_parent_id} -> Repo.get(Post, valid_parent_id) |> Repo.preload([:author])
+        :error -> nil
+      end
+
+    case parent_lookup do
       nil ->
         conn
         |> put_status(:not_found)
