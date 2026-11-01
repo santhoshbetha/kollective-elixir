@@ -368,6 +368,9 @@ defmodule KollectiveWeb.Router do
 
     # /api/v1/posts/:id/like -> Toggles the like status for the specified post on behalf of the current user
     post("/posts/:id/like", PostController, :handle_like)
+
+    # Real-Time OpenGraph Link Preview Scraper Endpoint
+    post("/preview_cards/fetch", PreviewCardController, :fetch)
   end
 
   scope "/api/v1/admin", KollectiveWeb.Admin do

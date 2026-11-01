@@ -73,6 +73,7 @@ defmodule KollectiveWeb.PostController do
 
     focal_x = post_params["focal_x"] || params["focal_x"] || get_in(post_params, ["meta", "focus", "x"]) || get_in(params, ["meta", "focus", "x"])
     focal_y = post_params["focal_y"] || params["focal_y"] || get_in(post_params, ["meta", "focus", "y"]) || get_in(params, ["meta", "focus", "y"])
+    spoiler_text = post_params["spoiler_text"] || post_params["content_warning"] || params["spoiler_text"] || params["content_warning"]
 
     post_params =
       post_params
@@ -86,9 +87,22 @@ defmodule KollectiveWeb.PostController do
       )
       |> then(fn p -> if focal_x != nil, do: Map.put(p, "focal_x", focal_x), else: p end)
       |> then(fn p -> if focal_y != nil, do: Map.put(p, "focal_y", focal_y), else: p end)
+      |> then(fn p -> if spoiler_text != nil, do: Map.put(p, "spoiler_text", spoiler_text), else: p end)
       |> Map.put_new("media_attachments", params["media_attachments"])
       |> Map.put_new("media_ids", params["media_ids"])
       |> Map.put_new("images", params["images"])
+      |> then(fn p ->
+        preview = p["preview_card"] || p["link_preview"] || params["preview_card"] || params["link_preview"]
+        if is_map(preview) do
+          p
+          |> Map.put_new("link_url", preview["url"] || preview[:url])
+          |> Map.put_new("link_title", preview["title"] || preview[:title])
+          |> Map.put_new("link_description", preview["description"] || preview[:description])
+          |> Map.put_new("link_preview_image", preview["image_url"] || preview[:image_url] || preview["image"] || preview[:image])
+        else
+          p
+        end
+      end)
 
     # 1. Organization / Identity Context Gateway
     org_id =
@@ -364,6 +378,10 @@ defmodule KollectiveWeb.PostController do
           true ->
             p
         end
+      end)
+      |> then(fn p ->
+        sp = Map.get(raw_post_params, "spoiler_text") || Map.get(raw_post_params, "content_warning")
+        if sp != nil, do: Map.put(p, "spoiler_text", sp), else: p
       end)
 
     case Posts.get_post(id) do

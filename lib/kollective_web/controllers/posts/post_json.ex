@@ -141,6 +141,9 @@ defmodule KollectiveWeb.PostJSON do
       content: post.content,
       text: post.text || post.content,
       title: Map.get(post, :summary) || Map.get(post, :spoiler_text) || nil,
+      spoiler_text: Map.get(post, :spoiler_text) || "",
+      content_warning: Map.get(post, :spoiler_text) || "",
+      content_warning: Map.get(post, :spoiler_text) || "",
       category: Map.get(post, :category),
       inserted_at: Calendar.strftime(post.inserted_at, "%Y-%m-%dT%H:%M:%SZ"),
       published_at:
@@ -206,6 +209,7 @@ defmodule KollectiveWeb.PostJSON do
       muted: Map.get(post, :muted) || Map.get(item, :muted) || false,
       sensitive: Map.get(post, :sensitive) || false,
       spoiler_text: Map.get(post, :spoiler_text) || "",
+      content_warning: Map.get(post, :spoiler_text) || "",
       mentions: serialize_mentions(Map.get(post, :mentions)),
       tags: serialize_tags(Map.get(post, :hashtags)),
       language: Map.get(post, :language) || "english",
