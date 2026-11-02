@@ -180,7 +180,7 @@ end
 # - "kubernetes": for native Kubernetes API pod discovery
 # - "gossip": for local LAN / bare-metal hardware clusters (default in dev)
 # - "none" / "disabled": disable clustering
-if config_env() != :test do
+if config_env() not in [:test, :e2e] do
   cluster_strategy =
     System.get_env("CLUSTER_STRATEGY") || if config_env() == :prod, do: "dns", else: "gossip"
 

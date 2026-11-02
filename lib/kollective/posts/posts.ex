@@ -1277,8 +1277,8 @@ defmodule Kollective.Posts.Posts do
     following_ids = Accounts.get_following_ids(user.id)
     followed_org_ids = Accounts.get_followed_org_ids(user.id)
 
-    # 2. Combine the IDs to build a comprehensive timeline pool
-    author_ids_pool = following_ids ++ followed_org_ids ++ [user.id]
+    # 2. Combine the IDs to build a comprehensive timeline pool (exclude self-posts from home feed)
+    author_ids_pool = Enum.uniq(following_ids ++ followed_org_ids)
 
     # Compile bidirectional block/mute exclusion subqueries safely
     hidden_ids_subquery =
@@ -1631,7 +1631,7 @@ defmodule Kollective.Posts.Posts do
       else
         if current_user do
           # Filters by Local, State, Country, or World based on user properties
-          filter_by_geographic_scope(base_query, current_user, params["scope"])
+          filter_by_geographic_scope(base_query, current_user, params["scope"] || params["tab"])
         else
           # For anonymous guests, filter by detected country parameter or public posts
           filter_by_guest_geographic_scope(base_query, params)
@@ -1850,7 +1850,7 @@ defmodule Kollective.Posts.Posts do
     normalized_country =
       if country, do: String.downcase(String.trim(to_string(country))), else: nil
 
-    scope = params["scope"] && String.downcase(String.trim(to_string(params["scope"])))
+    scope = (params["scope"] || params["tab"]) && String.downcase(String.trim(to_string(params["scope"] || params["tab"])))
 
     case scope do
       s when s in ["local", "state"] ->
@@ -2111,7 +2111,10 @@ defmodule Kollective.Posts.Posts do
   defp filter_by_category(query, cat) when is_binary(cat) do
     case String.downcase(String.trim(cat)) do
       val when val in ["voice", "voices"] ->
-        from(p in query, where: p.category == :voice, order_by: [desc: p.urgency_level])
+        from(p in query,
+          where: p.category == :voice or fragment("? ILIKE ?", p.content, "%#SovereignVoice%"),
+          order_by: [desc: p.urgency_level, desc: p.id]
+        )
 
       val when val in ["post", "posts"] ->
         from(p in query, where: p.category == :post)
@@ -2122,7 +2125,10 @@ defmodule Kollective.Posts.Posts do
   end
 
   defp filter_by_category(query, :voice) do
-    from(p in query, where: p.category == :voice, order_by: [desc: p.urgency_level])
+    from(p in query,
+      where: p.category == :voice or fragment("? ILIKE ?", p.content, "%#SovereignVoice%"),
+      order_by: [desc: p.urgency_level, desc: p.id]
+    )
   end
 
   defp filter_by_category(query, :post) do
@@ -2140,8 +2146,21 @@ defmodule Kollective.Posts.Posts do
   defp filter_by_mentions(query, _, _), do: query
 
   defp sort_by_strategy(query, s) when s in ["top", "popular"] do
-    # Rank by hotness score velocity, using sequential chronological fallbacks
-    from(p in query, order_by: [desc: p.trending_score, desc: p.id])
+    seven_days_ago = DateTime.utc_now() |> DateTime.add(-7, :day)
+
+    from(p in query,
+      where: p.inserted_at >= ^seven_days_ago,
+      order_by: [
+        desc:
+          fragment(
+            "((COALESCE((SELECT count(*) FROM likes WHERE likes.post_id = ?), 0) * 2) + COALESCE((SELECT count(*) FROM posts r WHERE r.reblog_of_id = ? AND r.deleted_at IS NULL), 0) + (COALESCE((SELECT count(*) FROM posts rep WHERE rep.in_reply_to_id = ? AND rep.deleted_at IS NULL), 0) * 3))",
+            p.id,
+            p.id,
+            p.id
+          ),
+        desc: p.id
+      ]
+    )
   end
 
   defp sort_by_strategy(query, _) do

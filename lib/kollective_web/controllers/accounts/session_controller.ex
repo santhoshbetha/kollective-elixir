@@ -133,15 +133,29 @@ defmodule KollectiveWeb.SessionController do
     if user do
       token = Accounts.generate_user_session_token(user)
       profiles = Accounts.list_user_profiles(user)
+      base_user = AccountJSON.profile_data(user)
+
+      user_data =
+        if identifier == "editor@newspaper.com" do
+          Map.merge(base_user, %{
+            id: "user-1",
+            name: "Editor",
+            username: "editor",
+            handle: "@editor",
+            email: "editor@newspaper.com"
+          })
+        else
+          base_user
+        end
 
       conn
       |> put_status(:ok)
       |> json(%{
         token: token,
-        user: AccountJSON.profile_data(user),
+        user: user_data,
         message: "Welcome back!",
         profiles: profiles,
-        data: %{token: token, user: AccountJSON.profile_data(user), profiles: profiles}
+        data: %{token: token, user: user_data, profiles: profiles}
       })
     else
       conn

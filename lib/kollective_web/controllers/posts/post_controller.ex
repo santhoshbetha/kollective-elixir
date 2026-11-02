@@ -24,11 +24,14 @@ defmodule KollectiveWeb.PostController do
     %{entries: entries, next_cursor: next_cursor} =
       Posts.list_posts_for_feed(current_user, params)
 
+    serialized_posts = PostJSON.index(%{entries: entries})
+
     conn
     |> put_status(:ok)
     |> json(%{
       # Modern Phoenix 1.7 standard: Pass items straight to your PostJSON collection index view
-      data: PostJSON.index(%{entries: entries}),
+      data: serialized_posts,
+      posts: serialized_posts,
       next_cursor: next_cursor
     })
   end

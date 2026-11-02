@@ -337,6 +337,7 @@ defmodule KollectiveWeb.Router do
     # GET /api/v1/posts -> Returns Home or Communities Feed (supports unauthenticated guests with ?country=US parameter)
     get("/posts", PostController, :index)
     get("/timeline", PostController, :index)
+    get("/communities", PostController, :index)
     get("/posts/:id", PostController, :show)
     get("/posts/:id/context", PostController, :context)
 

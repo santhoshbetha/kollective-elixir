@@ -47,3 +47,6 @@ config :kollective, KollectiveWeb.Endpoint,
   server: true,
   code_reloader: true,
   secret_key_base: "something_secure_and_long_at_least_64_characters..."
+
+# Disable libcluster topologies in e2e to prevent UDP port conflicts (:eaddrinuse)
+config :libcluster, topologies: []

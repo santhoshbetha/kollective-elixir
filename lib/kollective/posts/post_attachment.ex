@@ -11,6 +11,7 @@ defmodule Kollective.Posts.PostAttachment do
     field :blurhash, :string, default: ""
     field :focal_x, :float, default: 0.0
     field :focal_y, :float, default: 0.0
+    field :is_processed, :boolean, default: false
 
     belongs_to :post, Kollective.Posts.Post
     # Track ownership to lock metadata updates securely to the uploader
@@ -21,7 +22,7 @@ defmodule Kollective.Posts.PostAttachment do
 
   def changeset(attachment, attrs) do
     attachment
-    |> cast(attrs, [:url, :media_type, :description, :blurhash, :focal_x, :focal_y, :post_id, :user_id])
+    |> cast(attrs, [:url, :media_type, :description, :blurhash, :focal_x, :focal_y, :is_processed, :post_id, :user_id])
     |> validate_required([:url, :media_type, :user_id])
   end
 end
