@@ -1,8 +1,7 @@
 import Config
 
 database_url =
-  System.get_env("DATABASE_URL") ||
-    "postgres://postgres:ec9LwfROv1JEXoMRsIB7so6r@kollective-e2e-peak-hawk-pooler.sage.cloud.layerbase.dev:5432/kollective_e2e"
+  System.get_env("DATABASE_URL_E2E")
 
 config :kollective, Kollective.Repo,
   url: database_url,

@@ -2,8 +2,7 @@ import Config
 
 # Configure your database
 database_url =
-  System.get_env("DATABASE_URL") ||
-    "postgres://avnadmin:AVNS_0UTkLjKgF6SR7BBnNva@pg-1611a57f-kollective.i.aivencloud.com:16584/defaultdb"
+  System.get_env("DATABASE_URL")
 
 config :kollective, Kollective.Repo,
   url: database_url,
