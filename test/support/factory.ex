@@ -228,6 +228,16 @@ defmodule Kollective.Factory do
     }
   end
 
+  def proposal_comment_factory do
+    %Kollective.Businesses.ProposalComment{
+      id: Ecto.ULID.generate(),
+      content: "This proposal needs a bigger tool library!",
+      moderation_status: "approved",
+      user: build(:user),
+      business: build(:business_proposal)
+    }
+  end
+
   def comment_like_factory do
     %Kollective.Events.CommentLike{
       id: Ecto.ULID.generate(),

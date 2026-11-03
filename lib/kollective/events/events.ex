@@ -21,6 +21,7 @@ defmodule Kollective.Events.Events do
   alias Kollective.Accounts.Accounts
   alias Kollective.Admins.Log, as: AdminLog
   alias Kollective.Locations.Locations
+  alias Kollective.Locations.StateGate
 
   # alias Kollective.External.GeoapifyService
   # alias Kollective.External.CivicService
@@ -1698,6 +1699,33 @@ defmodule Kollective.Events.Events do
     |> Comment.changeset(attrs)
     |> Repo.insert()
   end
+
+  @doc """
+  Resolves the physical state that gates an event's discussion channel.
+
+  Events persist their jurisdiction as `origin_state` (with `region` as the
+  legacy fallback) and may also expose it through the preloaded `origin_city`.
+  """
+  def event_state_code(%Event{} = event) do
+    case StateGate.normalize(event.origin_state) do
+      nil ->
+        case StateGate.normalize(event.region) do
+          nil ->
+            case event.origin_city do
+              %Kollective.Locations.City{state: city_state} -> StateGate.normalize(city_state)
+              _ -> nil
+            end
+
+          region ->
+            region
+        end
+
+      state ->
+        state
+    end
+  end
+
+  def event_state_code(_), do: nil
 
   @doc """
   Asynchronous Mentions Processing Engine. Extracts user @mentions natively using regular

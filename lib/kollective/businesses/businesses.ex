@@ -5,10 +5,10 @@ defmodule Kollective.Businesses.Businesses do
   import Ecto.Query
   alias Ecto.Multi
   alias Kollective.Repo
-  alias Kollective.Businesses.{Business, Comment, Upvote}
+  alias Kollective.Businesses.{Business, Comment, Upvote, ProposalComment}
   alias Kollective.Accounts.User
   alias Kollective.Locations.Locations
-  alias Kollective.Locations.{City, PoliticalDistrict}
+  alias Kollective.Locations.{City, PoliticalDistrict, StateGate}
 
   @doc """
   Registers an existing local business profile inside the platform database.
@@ -743,6 +743,116 @@ defmodule Kollective.Businesses.Businesses do
       end
     end)
   end
+
+  # ─── PIPELINE 2B: PROPOSAL DISCUSSION THREAD ENGINE ───
+  @doc """
+  Inserts a threaded discussion comment attached to a business proposal.
+  Supports optional media URLs, parent threading IDs and moderation statuses.
+  """
+  def create_proposal_comment(attrs \\ %{}) do
+    %ProposalComment{}
+    |> ProposalComment.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @doc """
+  Fetches the approved top-level discussion nodes for a proposal and hydrates
+  their approved replies in a single bounded pass (no N+1 thread fan-out).
+  """
+  def list_proposal_comments(business_id, params \\ %{}) do
+    limit = parse_comment_limit(Map.get(params, "limit"))
+
+    parents =
+      from(c in ProposalComment,
+        where:
+          c.business_id == ^business_id and c.moderation_status == "approved" and
+            is_nil(c.parent_id),
+        order_by: [desc: c.id],
+        limit: ^limit,
+        preload: [:user]
+      )
+      |> Repo.all()
+
+    parent_ids = Enum.map(parents, & &1.id)
+
+    replies =
+      if parent_ids == [] do
+        []
+      else
+        from(c in ProposalComment,
+          where: c.parent_id in ^parent_ids and c.moderation_status == "approved",
+          order_by: [asc: c.id],
+          preload: [:user]
+        )
+        |> Repo.all()
+      end
+
+    Enum.map(parents, fn parent ->
+      Map.put(parent, :replies, Enum.filter(replies, &(&1.parent_id == parent.id)))
+    end)
+  end
+
+  @doc """
+  Safely fetches a single approved proposal comment with its replies preloaded.
+  """
+  def get_proposal_comment(id) do
+    with {:ok, valid_id} <- cast_comment_id(id),
+         %ProposalComment{} = comment <-
+           Repo.get(ProposalComment, valid_id)
+           |> then(fn
+             nil -> nil
+             c -> Repo.preload(c, [:user, replies: [:user]])
+           end) do
+      if comment.moderation_status == "approved" do
+        {:ok, comment}
+      else
+        {:error, :not_found}
+      end
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Resolves the physical state that gates a proposal's discussion channel.
+  Falls back to the resolved city relation when the proposal row has no state.
+  """
+  def proposal_state_code(%Business{} = proposal) do
+    case StateGate.normalize(proposal.state) do
+      nil ->
+        case proposal.city_relation do
+          %City{state: city_state} -> StateGate.normalize(city_state)
+          _ -> nil
+        end
+
+      state ->
+        state
+    end
+  end
+
+  def proposal_state_code(_), do: nil
+
+  defp cast_comment_id(id) when is_binary(id) do
+    case Ecto.ULID.cast(id) do
+      {:ok, valid} -> {:ok, valid}
+      :error -> {:error, :not_found}
+    end
+  end
+
+  defp cast_comment_id(_), do: {:error, :not_found}
+
+  defp parse_comment_limit(nil), do: 50
+
+  defp parse_comment_limit(limit) when is_integer(limit), do: min(max(limit, 1), 100)
+
+  defp parse_comment_limit(limit) when is_binary(limit) do
+    case Integer.parse(limit) do
+      {value, _} -> parse_comment_limit(value)
+      :error -> 50
+    end
+  end
+
+  defp parse_comment_limit(_), do: 50
 
   # ─── PIPELINE 2: HIGH-SPEED DISK THREAD LOOKUP ───
   @doc """

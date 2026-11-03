@@ -136,5 +136,97 @@ defmodule KollectiveWeb.BusinessJSONTest do
       assert data.owner == "community_member"
       assert data.owner_info == nil
     end
+
+    test "data/1 exposes the strategic proposal metadata strings", %{proposal: proposal} do
+      enriched = %{
+        proposal
+        | metadata:
+            Map.merge(proposal.metadata, %{
+              "implementation_strategy" => "Decentralized distribution nodes.",
+              "looking_for_text" => "Cooperative farm partners, licensed electrician",
+              "looking_for" => ["Cooperative farm partners", "licensed electrician"],
+              "project_milestones" => "Q1 Node Setup, Q2 Launch",
+              "cooperative_model" => "Equal equity share model."
+            })
+      }
+
+      data = BusinessJSON.data(enriched)
+
+      assert data.implementation_strategy == "Decentralized distribution nodes."
+      assert data.project_milestones == "Q1 Node Setup, Q2 Launch"
+      assert data.cooperative_model == "Equal equity share model."
+      assert data.looking_for_text == "Cooperative farm partners, licensed electrician"
+      assert data.looking_for == ["Cooperative farm partners", "licensed electrician"]
+    end
+
+    test "proposal_data/1 exposes the strategic proposal metadata strings", %{proposal: proposal} do
+      enriched = %{
+        proposal
+        | metadata:
+            Map.merge(proposal.metadata, %{
+              "implementation_strategy" => "Deploy three nodes.",
+              "project_milestones" => "Q1 Setup",
+              "cooperative_model" => "One member, one vote.",
+              "looking_for_text" => "Electrician"
+            })
+      }
+
+      prop = BusinessJSON.proposal_data(enriched)
+
+      assert prop.implementation_strategy == "Deploy three nodes."
+      assert prop.project_milestones == "Q1 Setup"
+      assert prop.cooperative_model == "One member, one vote."
+      assert prop.looking_for_text == "Electrician"
+    end
+
+    test "strategy metadata stays nil when the proposal never collected it", %{proposal: proposal} do
+      data = BusinessJSON.data(proposal)
+
+      assert data.implementation_strategy == nil
+      assert data.project_milestones == nil
+      assert data.cooperative_model == nil
+      assert data.looking_for_text == nil
+    end
+  end
+
+  describe "Business.normalize_proposal_attrs/1 strategic metadata intake" do
+    test "retains implementation strategy, looking for, milestones and cooperative model" do
+      attrs = %{
+        "title" => "Tool Library",
+        "description" => "A shared tool library.",
+        "category" => "Technology",
+        "implementation_strategy" => "  Decentralized distribution nodes.  ",
+        "looking_for" => "Cooperative farm partners, licensed electrician",
+        "project_milestones" => "Q1 Node Setup, Q2 Launch",
+        "cooperative_model" => "Equal equity share model."
+      }
+
+      meta = attrs |> Business.normalize_proposal_attrs() |> Map.get("metadata")
+
+      assert meta["implementation_strategy"] == "Decentralized distribution nodes."
+      assert meta["project_milestones"] == "Q1 Node Setup, Q2 Launch"
+      assert meta["cooperative_model"] == "Equal equity share model."
+      assert meta["looking_for_text"] == "Cooperative farm partners, licensed electrician"
+      assert meta["tags"] == ["Cooperative farm partners", "licensed electrician"]
+      assert meta["looking_for"] == ["Cooperative farm partners", "licensed electrician"]
+    end
+
+    test "drops empty strategic blocks instead of persisting blank strings" do
+      attrs = %{
+        "title" => "Tool Library",
+        "description" => "A shared tool library.",
+        "implementation_strategy" => "   ",
+        "project_milestones" => "",
+        "cooperative_model" => nil,
+        "looking_for" => ""
+      }
+
+      meta = attrs |> Business.normalize_proposal_attrs() |> Map.get("metadata")
+
+      refute Map.has_key?(meta, "implementation_strategy")
+      refute Map.has_key?(meta, "project_milestones")
+      refute Map.has_key?(meta, "cooperative_model")
+      refute Map.has_key?(meta, "looking_for_text")
+    end
   end
 end

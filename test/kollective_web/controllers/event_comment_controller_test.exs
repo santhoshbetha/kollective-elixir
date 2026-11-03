@@ -5,13 +5,13 @@ defmodule KollectiveWeb.EventCommentControllerTest do
 
   alias Kollective.Repo
 
-  setup :authenticate_user
-
-  setup %{conn: conn, user: user} do
-    # Create an event to comment on
+  # 🔒 Event discussions are geofenced to the event's physical state, so the
+  # authenticated actor must be a verified resident of that same state.
+  setup %{conn: conn} do
+    user = insert(:user, state: "CA")
     event = insert(:event)
 
-    {:ok, conn: conn, user: user, event: event}
+    {:ok, conn: authenticate_conn(conn, user), user: user, event: event}
   end
 
   describe "GET /api/v1/event_comments" do
@@ -228,6 +228,65 @@ defmodule KollectiveWeb.EventCommentControllerTest do
       assert response["status"] == "success"
       assert response["upload_url"]
       assert response["final_asset_url"]
+    end
+  end
+
+  describe "state geofencing" do
+    setup _context do
+      outsider = insert(:user, state: "NY")
+      {:ok, outsider_conn: authenticate_conn(build_conn(), outsider), outsider: outsider}
+    end
+
+    test "out-of-state resident cannot post into an event discussion", %{
+      outsider_conn: conn,
+      event: event
+    } do
+      response =
+        conn
+        |> post(~p"/api/v1/events_comments/#{event.id}/comment", %{
+          "comment" => %{"content" => "Cross-state intrusion attempt"}
+        })
+        |> json_response(403)
+
+      assert response["error"] == "Discussion locked to local state residents"
+    end
+
+    test "out-of-state resident cannot read an event discussion", %{
+      outsider_conn: conn,
+      event: event
+    } do
+      insert(:comment, event: event, moderation_status: "approved")
+
+      response =
+        conn
+        |> get(~p"/api/v1/event_comments", %{"event_id" => event.id})
+        |> json_response(403)
+
+      assert response["error"] == "Discussion locked to local state residents"
+    end
+
+    test "resident of the event state still succeeds", %{conn: conn, event: event} do
+      response =
+        conn
+        |> post(~p"/api/v1/events_comments/#{event.id}/comment", %{
+          "comment" => %{"content" => "Local coordination note"}
+        })
+        |> json_response(201)
+
+      assert response["status"] == "success"
+    end
+
+    test "events without a declared state remain ungated", %{outsider_conn: conn} do
+      untyped_event = insert(:event, origin_city: nil, origin_state: nil, region: nil)
+
+      response =
+        conn
+        |> post(~p"/api/v1/events_comments/#{untyped_event.id}/comment", %{
+          "comment" => %{"content" => "Nationwide channel note"}
+        })
+        |> json_response(201)
+
+      assert response["status"] == "success"
     end
   end
 end

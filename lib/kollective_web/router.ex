@@ -540,6 +540,10 @@ defmodule KollectiveWeb.Router do
     post("/events_comments/:event_id/comment", EventCommentController, :create)
     get("/event_comments/image/presign", EventCommentController, :presign_image)
 
+    # Proposal Discussion Threads & Media Presigns (state-geofenced)
+    post("/proposals_comments/:proposal_id/comment", ProposalCommentController, :create)
+    get("/proposal_comments/image/presign", ProposalCommentController, :presign_image)
+
     # Governance Flags & Geo-Service Handshakes
     # Regular citizens can report posts safely here
     post("/posts/:post_id/report", ReportController, :create)
@@ -686,6 +690,14 @@ defmodule KollectiveWeb.Router do
     get("/event_comments/:id", EventCommentController, :show)
 
     post("/event_comments/:comment_id/like", EventCommentController, :like)
+  end
+
+  scope "/api/v1", KollectiveWeb do
+    # Ensure user is logged in — proposal discussions are state-geofenced too
+    pipe_through([:api, :api_authenticated])
+
+    get("/proposal_comments", ProposalCommentController, :index)
+    get("/proposal_comments/:id", ProposalCommentController, :show)
   end
 
   scope "/api/v1", KollectiveWeb do

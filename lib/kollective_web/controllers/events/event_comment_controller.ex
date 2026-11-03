@@ -3,6 +3,7 @@ defmodule KollectiveWeb.EventCommentController do
   alias Kollective.Repo
   alias Kollective.Accounts.Accounts
   alias Kollective.Events.Events
+  alias Kollective.Locations.StateGate
   alias Kollective.Moderation.Moderation
   alias Kollective.Security.Security
   alias KollectiveWeb.{ChangesetJSON, CommentJSON}
@@ -14,19 +15,31 @@ defmodule KollectiveWeb.EventCommentController do
   def index(conn, %{"event_id" => event_id} = params) do
     current_user = conn.assigns[:current_user]
 
-    # Fetch top-level thread nodes with batch hydration counters populated instantly
-    comments = Events.list_event_comments(event_id, current_user, params)
+    case fetch_event(event_id) do
+      {:ok, event} ->
+        if state_locked?(conn, event) do
+          locked_response(conn)
+        else
+          # Fetch top-level thread nodes with batch hydration counters populated instantly
+          comments = Events.list_event_comments(event_id, current_user, params)
 
-    # Establish look-ahead cursor pagination logic for endless scroll triggers
-    next_cursor = if comments != [], do: List.last(comments).id, else: nil
+          # Establish look-ahead cursor pagination logic for endless scroll triggers
+          next_cursor = if comments != [], do: List.last(comments).id, else: nil
 
-    conn
-    |> put_status(:ok)
-    |> json(%{
-      status: "success",
-      data: CommentJSON.index(%{comments: comments}),
-      next_cursor: to_string(next_cursor)
-    })
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            status: "success",
+            data: CommentJSON.index(%{comments: comments}),
+            next_cursor: to_string(next_cursor)
+          })
+        end
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{status: "error", error: "Event not found."})
+    end
   end
 
   # GET /api/v1/event_comments/:id
@@ -54,6 +67,23 @@ defmodule KollectiveWeb.EventCommentController do
     user = conn.assigns.current_user
     ip = guest_ip(conn)
 
+    case fetch_event(event_id) do
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{status: "error", error: "Event not found."})
+
+      {:ok, event} ->
+        # 🔒 SERVER-SIDE STATE BOUNDARY: discussion is restricted to local residents.
+        if state_locked?(conn, event) do
+          locked_response(conn)
+        else
+          insert_comment(conn, event_id, user, ip, params)
+        end
+    end
+  end
+
+  defp insert_comment(conn, event_id, user, ip, params) do
     raw_params = Map.get(params, "comment") || params
     content_text = Map.get(raw_params, "content") || Map.get(raw_params, "text") || ""
     parent_id = Map.get(raw_params, "parent_id") || Map.get(raw_params, "parentId")
@@ -160,6 +190,34 @@ defmodule KollectiveWeb.EventCommentController do
   end
 
   # --- Structural Helpers ---
+  # 🔒 STATE GEOFENCE: resolves the event's physical state and compares it with
+  # the authenticated resident's profile state. Events without a declared state
+  # are ungated (there is no boundary to enforce).
+  defp fetch_event(event_id) do
+    case Events.get_event(event_id) do
+      # Preload the origin city so state resolution works even when the event
+      # row itself only carries a city relation (legacy rows without origin_state).
+      {:ok, event} -> {:ok, Repo.preload(event, :origin_city)}
+      other -> other
+    end
+  end
+
+  defp state_locked?(conn, event) do
+    actor_state =
+      case conn.assigns[:current_user] do
+        nil -> nil
+        user -> Map.get(user, :state)
+      end
+
+    StateGate.locked?(Events.event_state_code(event), actor_state)
+  end
+
+  defp locked_response(conn) do
+    conn
+    |> put_status(:forbidden)
+    |> json(%{status: "error", error: StateGate.locked_message()})
+  end
+
   defp guest_ip(conn), do: conn.remote_ip |> :inet.ntoa() |> to_string()
 
   defp enqueue_security_alert(type, uid, ip, strikes, notes) do

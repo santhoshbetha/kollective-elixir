@@ -407,6 +407,16 @@ defmodule Kollective.Businesses.Business do
 
   def normalize_proposal_attrs(attrs), do: attrs
 
+  # Strategic proposal metadata strings collected by the proposal composer.
+  # They are persisted inside the JSONB `metadata` column (no dedicated columns),
+  # so every new strategic field must be listed here to survive the changeset cast.
+  @proposal_strategy_fields ~w(implementation_strategy looking_for project_milestones cooperative_model)
+
+  @doc """
+  Returns the whitelisted strategic proposal metadata field names.
+  """
+  def proposal_strategy_fields, do: @proposal_strategy_fields
+
   defp normalize_proposal_metadata(attrs) do
     meta = attrs["metadata"] || attrs[:metadata] || %{}
 
@@ -416,6 +426,32 @@ defmodule Kollective.Businesses.Business do
     tags = attrs["tags"] || attrs[:tags] || attrs["looking_for"] || attrs[:looking_for]
     meta = if tags && is_list(tags), do: Map.put(meta, "tags", tags) |> Map.put("looking_for", tags), else: meta
 
+    # 🚀 STRATEGY METADATA: Persist the free-text strategic blocks submitted by the
+    # proposal composer. `looking_for` may arrive as a comma separated string, so we
+    # keep the raw text and additionally derive a tag list for the profile badges.
+    meta =
+      Enum.reduce(@proposal_strategy_fields, meta, fn field, acc ->
+        case normalize_strategy_value(attrs, field) do
+          nil -> acc
+          "" -> acc
+          value -> Map.put(acc, field, value)
+        end
+      end)
+
+    meta =
+      case normalize_strategy_value(attrs, "looking_for") do
+        text when is_binary(text) and text != "" ->
+          acc = Map.put(meta, "looking_for_text", text)
+
+          case split_strategy_tags(text) do
+            [] -> acc
+            split -> acc |> Map.put("tags", split) |> Map.put("looking_for", split)
+          end
+
+        _ ->
+          meta
+      end
+
     owner = attrs["owner"] || attrs[:owner]
     meta = if owner, do: Map.put(meta, "owner_handle", owner), else: meta
 
@@ -423,6 +459,32 @@ defmodule Kollective.Businesses.Business do
     meta = if avatar, do: Map.put(meta, "owner_avatar", avatar), else: meta
 
     Map.put(attrs, "metadata", meta)
+  end
+
+  defp normalize_strategy_value(attrs, field) do
+    metadata =
+      case attrs["metadata"] || attrs[:metadata] do
+        meta when is_map(meta) -> meta
+        _ -> %{}
+      end
+
+    value =
+      attrs[field] || attrs[String.to_atom(field)] || Map.get(metadata, field) ||
+        Map.get(metadata, String.to_atom(field))
+
+    cond do
+      is_nil(value) -> nil
+      is_binary(value) -> String.trim(value)
+      is_list(value) -> value |> Enum.map(&to_string/1) |> Enum.join(", ") |> String.trim()
+      true -> to_string(value)
+    end
+  end
+
+  defp split_strategy_tags(text) when is_binary(text) do
+    text
+    |> String.split([",", "\n"], trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
   end
 
   defp stringify_keys(map) when is_map(map) do

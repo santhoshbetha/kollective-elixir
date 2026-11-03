@@ -64,6 +64,10 @@ defmodule KollectiveWeb.BusinessJSON do
       is_image_processed: is_processed,
       tags: Map.get(meta, "tags") || Map.get(meta, "looking_for") || [],
       looking_for: Map.get(meta, "looking_for") || Map.get(meta, "tags") || [],
+      looking_for_text: strategy_text(meta, "looking_for_text") || strategy_text(meta, "looking_for"),
+      implementation_strategy: strategy_text(meta, "implementation_strategy"),
+      project_milestones: strategy_text(meta, "project_milestones"),
+      cooperative_model: strategy_text(meta, "cooperative_model"),
       status: Map.get(funding, "status", "New"),
       fundingGoal: money_req,
       money_required: money_req,
@@ -206,6 +210,11 @@ defmodule KollectiveWeb.BusinessJSON do
           if(item.number_of_employees, do: to_string(item.number_of_employees), else: "1-5"),
       services: Map.get(meta, "services", []),
       tags: Map.get(meta, "tags", []),
+      looking_for: Map.get(meta, "looking_for") || Map.get(meta, "tags") || [],
+      looking_for_text: strategy_text(meta, "looking_for_text") || strategy_text(meta, "looking_for"),
+      implementation_strategy: strategy_text(meta, "implementation_strategy"),
+      project_milestones: strategy_text(meta, "project_milestones"),
+      cooperative_model: strategy_text(meta, "cooperative_model"),
       address: item.address,
       city: item.city,
       state: item.state,
@@ -246,6 +255,27 @@ defmodule KollectiveWeb.BusinessJSON do
       owner_avatar: serialize_owner_avatar(item)
     }
   end
+
+  # Safely reads a strategic proposal metadata string without leaking lists/maps
+  # into the JSON payload (the frontend renders these inside <p> blocks).
+  defp strategy_text(meta, key) when is_map(meta) do
+    case Map.get(meta, key) do
+      value when is_binary(value) ->
+        trimmed = String.trim(value)
+        if trimmed == "", do: nil, else: trimmed
+
+      value when is_list(value) ->
+        case value |> Enum.map(&to_string/1) |> Enum.join(", ") |> String.trim() do
+          "" -> nil
+          joined -> joined
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp strategy_text(_meta, _key), do: nil
 
   defp contact_details(item) do
     %{
