@@ -48,12 +48,13 @@ defmodule KollectiveWeb.HashtagJSON do
   @doc """
   Formats hashtag discovery timeline payload.
   """
-  def timeline(tag_name, entries, next_cursor) do
+  def timeline(tag_name, entries, next_cursor, following \\ false) do
     %{
       status: "success",
       tag: String.downcase(String.trim(tag_name)),
       data: PostJSON.index(%{entries: entries}),
-      next_cursor: next_cursor
+      next_cursor: next_cursor,
+      following: following
     }
   end
 

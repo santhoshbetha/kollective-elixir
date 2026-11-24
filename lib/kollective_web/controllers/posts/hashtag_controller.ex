@@ -14,9 +14,11 @@ defmodule KollectiveWeb.HashtagController do
     %{entries: entries, next_cursor: next_cursor} =
       Posts.list_hashtag_timeline(current_user, tag_name, params)
 
+    is_following = Hashtags.is_following_tag?(current_user, tag_name)
+
     conn
     |> put_status(:ok)
-    |> json(HashtagJSON.timeline(tag_name, entries, next_cursor))
+    |> json(HashtagJSON.timeline(tag_name, entries, next_cursor, is_following))
   end
 
   # POST /api/v1/tags/:tag/follow
@@ -61,9 +63,11 @@ defmodule KollectiveWeb.HashtagController do
     %{entries: entries, next_cursor: next_cursor} =
       Posts.list_hashtag_timeline(current_user, tag_name, params)
 
+    is_following = Hashtags.is_following_tag?(current_user, tag_name)
+
     conn
     |> put_status(:ok)
-    |> json(HashtagJSON.timeline(tag_name, entries, next_cursor))
+    |> json(HashtagJSON.timeline(tag_name, entries, next_cursor, is_following))
   end
 
   # Fallback catch-all guard pattern matching malformed empty clicks

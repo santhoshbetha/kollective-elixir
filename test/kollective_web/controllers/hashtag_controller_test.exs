@@ -61,4 +61,31 @@ defmodule KollectiveWeb.HashtagControllerTest do
       assert response["message"] =~ "You must provide a valid 'tag' parameter"
     end
   end
+
+  describe "follow/2 and unfollow/2 (POST /api/v1/tags/:tag/follow and unfollow)" do
+    test "successfully follows and unfollows a hashtag by tag name", %{conn: conn} do
+      follow_res =
+        conn
+        |> post(~p"/api/v1/tags/elixir/follow")
+        |> json_response(200)
+
+      assert follow_res["name"] == "elixir"
+      assert follow_res["following"] == true
+
+      tags_res =
+        conn
+        |> get(~p"/api/v1/followed_tags")
+        |> json_response(200)
+
+      assert Enum.any?(tags_res, fn t -> t["name"] == "elixir" end)
+
+      unfollow_res =
+        conn
+        |> post(~p"/api/v1/tags/elixir/unfollow")
+        |> json_response(200)
+
+      assert unfollow_res["name"] == "elixir"
+      assert unfollow_res["following"] == false
+    end
+  end
 end

@@ -14,12 +14,21 @@ defmodule Kollective.Hashtags.Hashtags do
   Normalizes tag name by removing leading '#' and downcasing.
   If the identifier is a tag ID (ULID), looks up the Hashtag record.
   """
+  def normalize_tag_identifier(%Hashtag{name: name}), do: String.downcase(name)
+  def normalize_tag_identifier(nil), do: ""
+
   def normalize_tag_identifier(tag_identifier) when is_binary(tag_identifier) do
     cleaned = String.replace(tag_identifier, ~r/^#/, "") |> String.trim() |> String.downcase()
 
-    case Repo.get(Hashtag, cleaned) do
-      %Hashtag{name: name} -> name
-      nil -> cleaned
+    case Ecto.ULID.cast(cleaned) do
+      {:ok, ulid} ->
+        case Repo.get(Hashtag, ulid) do
+          %Hashtag{name: name} -> name
+          nil -> cleaned
+        end
+
+      :error ->
+        cleaned
     end
   end
 
